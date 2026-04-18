@@ -1,186 +1,288 @@
-# 🧠 AI Memory Gateway
+# 🥝 kiwi-mem
 
-**让你的 AI 拥有长期记忆。**
+**AI 伴侣记忆系统 — 让你的 AI 拥有长期记忆，真正参与你的生活。**
 
-一个轻量级转发网关，在你和 LLM 之间加一层记忆系统。支持任何 OpenAI 兼容客户端（Kelivo、ChatBox、NextChat 等）和任何 LLM 服务商（OpenRouter、OpenAI、本地 Ollama 等）。
-
-Give your AI long-term memory. A lightweight proxy gateway that adds a memory layer between you and any LLM.
+[English Version →](README_EN.md)
 
 ---
 
-## ✨ 功能
+## 这是什么
 
-- **自定义人设** — 把你的 system prompt 写在 `system_prompt.txt`，每次对话自动注入
-- **长期记忆** — 自动从对话中提取关键信息，下次聊天时自动回忆相关内容
-- **预置记忆** — 把你想让 AI "一开始就知道"的事情批量导入
-- **兼容性强** — 支持所有 OpenAI 格式的客户端和 API 服务商
-- **零成本起步** — 可部署在 Zeabur 等平台的免费额度内
+kiwi-mem 是一个为 **AI 生活伴侣场景**设计的记忆后端。
 
-## 🏗️ 架构
+大多数 AI 记忆项目在做的事情是"存记忆、搜记忆"——向量存储加 RAG 检索。kiwi-mem 不一样。它模拟的是人类记忆的运转方式：不常提起的事会慢慢淡忘，反复聊到的事越记越牢，睡一觉醒来会把碎片整理成更高层的理解，去年的事只记得个大概，昨天的事记得很清楚。
 
+它是一个轻量级转发网关，插在你和大模型之间，兼容任何 OpenAI 格式的客户端和 LLM 服务商。你可以用它配合任何聊天前端（自建的、ChatBox、NextChat、SillyTavern……），让你的 AI 从"每次醒来都忘了你是谁"变成"记得你所有重要的事"。
+
+它不只是技术工具，它是一整套**让 AI 住进你日常生活**的基础设施——从起床到入睡，从聊天到记账，从读书到看病，AI 都在场、都记得、都理解。
+
+**技术栈**：Python / FastAPI · PostgreSQL + pgvector · Docker 一键部署 · MIT 开源
+
+![功能全景](docs/feature-overview.png)
+
+---
+
+## 为什么不一样
+
+| 能力 | kiwi-mem | 典型 RAG 记忆方案 |
+|---|---|---|
+| 记忆衰减与升温 | ✅ 热度系统（时间衰减 + 召回频率 + 情绪强度） | ❌ 存了就永远在 |
+| 睡眠整合 | ✅ Dream 三层（整理 → 固化 → 前瞻推断） | ❌ 无 |
+| 时间层级压缩 | ✅ 日 → 周 → 月 → 季 → 年 俄罗斯套娃 | ❌ 全部平铺 |
+| 矛盾检测 | ✅ 新旧记忆冲突时自动失效旧的 | ❌ 无 |
+| 记忆锁定 | ✅ 重要记忆永不衰减、永不自动删除 | ❌ 无 |
+| 用户画像 | ✅ 每日自动更新的四板块结构化画像 | ❌ 无 |
+| Prompt Caching | ✅ 静态区在前命中缓存，省 90% 输入费用 | ❌ 无 |
+| 中文优化 | ✅ jieba 分词 + 同义词扩展 | ❌ 通常只有英文 |
+
+---
+
+## 功能全景
+
+### 🧠 记忆提取与检索
+- **RRF 混合检索**：向量搜索 + 关键词搜索并行执行，Reciprocal Rank Fusion 合并排序
+- **自动提取**：每 N 轮对话自动用小模型提取记忆碎片
+- **jieba 中文分词**：自定义领域词汇，避免中文被错误切分
+- **同义词扩展**：搜"吃药"能找到"用药""服药"
+- **语义去重**：相似记忆自动检测，不重复存储
+
+### 🔥 记忆热度系统
+- **时间衰减**：记忆热度按半衰期自然衰减
+- **召回加热**：被搜索命中的记忆热度回升
+- **查询多样性**：被不同话题提及的记忆热度更高
+- **情绪权重**：高情绪时刻的记忆衰减更慢
+- **热度分层注入**：高热度全文、中热度摘要、低热度不注入
+- **自动锁定**：频繁被召回的记忆自动升级为永久记忆
+
+### 🌙 Dream 睡眠整合
+模拟人脑睡眠时的记忆整合过程：
+- **整理层**：清除过时、重复、矛盾的碎片
+- **固化层**：将相关碎片融合为 MemScene（记忆场景）
+- **生长层**：产生 Foresight（前瞻推断），发现碎片间的隐含关联
+- 触发方式：手动 / 犯困提醒 / 24h 无活动自动触发
+
+### 📅 日历层级摘要
+- **日页面**：从当天聊天记录自动生成
+- **层级压缩**：日 → 周 → 月 → 季 → 年，逐级浓缩
+- **俄罗斯套娃注入**：近期注入日页面，远期注入月/年总结
+- **用户画像**：四板块结构，每日自动更新
+
+### ⚡ System Prompt 智能注入
 ```
-你的客户端（Kelivo / ChatBox / ...）
-        ↓
-   AI Memory Gateway（本项目）
-   ├── 注入 system prompt（人设）
-   ├── 搜索相关记忆 → 注入上下文
-   ├── 转发请求 → LLM API
-   └── 后台提取新记忆 → 存入数据库
-        ↓
-   LLM API（OpenRouter / OpenAI / Ollama / ...）
+静态区（命中缓存）           动态区（每轮变化）
+人设 → 画像 → 锁定记忆 → 日历 → 搜索碎片 → 犯困提示
+```
+- 无缝对话衔接：新对话自动注入上个对话的上下文
+- 模板变量：`{cur_datetime}`、`{user_name}`、`{assistant_name}` 等
+
+### 🔌 多供应商 LLM 路由
+- 多供应商并行配置，按模型名自动选择
+- 余额查询、模型分组
+- 兼容任何 OpenAI 格式 API
+
+### 🔧 工具与扩展
+- MCP Server（20+ 工具）+ MCP Client
+- 7 引擎联网搜索
+- 上下文压缩、文件解析、思维链展示
+
+### 🛡️ 部署与管理
+- Web 管理面板（`/admin`）
+- 云端同步、数据备份/恢复
+- 提醒系统、Admin 认证、Docker 部署
+
+---
+
+## 快速开始
+
+### 前置要求
+- Docker & Docker Compose（推荐），或 Python 3.12+
+- PostgreSQL（需要 pgvector 扩展）
+- 一个 LLM API Key
+
+### 三步启动
+
+```bash
+# 1. 克隆
+git clone https://github.com/LucieEveille/kiwi-mem.git
+cd kiwi-mem
+
+# 2. 配置
+cp .env.example .env
+# 编辑 .env，填入 API_KEY 和 DATABASE_URL
+
+# 3. 启动
+docker compose up -d
 ```
 
-## 🚀 快速开始
+访问 `http://localhost:8080` 看到 `{"status":"running"}` 就成功了。
 
-### 第一阶段：纯转发网关（不需要数据库）
+### 分阶段上手
 
-最简单的起步方式——先跑通网关，确认你的客户端能通过网关和 AI 对话。
+**第一步：纯转发**（不需要数据库）
+```
+API_KEY=sk-your-key
+API_BASE_URL=https://openrouter.ai/api/v1/chat/completions
+```
+连接你的客户端，API 地址填 `http://localhost:8080/v1`。
 
-**1. 准备文件**
+**第二步：开记忆**（加 PostgreSQL）
+```
+DATABASE_URL=postgresql://user:pass@host:5432/db
+MEMORY_ENABLED=true
+```
 
-你只需要这几个文件：
-- `main.py` — 网关主程序
-- `system_prompt.txt` — 你的 AI 人设（可选）
-- `requirements.txt` — Python 依赖
-- `Dockerfile` — 容器配置
+**第三步：管理面板**
+访问 `/admin`，在浏览器里配置一切。
 
-**2. 修改人设**
+---
 
-编辑 `system_prompt.txt`，写入你想要的 AI 性格设定。
+## 环境变量
 
-**3. 部署到 Zeabur（推荐）**
+### 必填
 
-1. Fork 或上传代码到你的 GitHub 私有仓库
-2. 注册 [Zeabur](https://zeabur.com)（每月 $5 免费额度，够用）
-3. 创建项目 → 添加服务 → 连接 GitHub 仓库
-4. 设置环境变量：
-
-| 环境变量 | 说明 | 示例 |
-|---------|------|------|
-| `API_KEY` | 你的 LLM API Key | `sk-or-v1-xxxx`（OpenRouter）|
+| 变量 | 说明 | 示例 |
+|---|---|---|
+| `API_KEY` | LLM API Key | `sk-or-v1-xxxx` |
 | `API_BASE_URL` | LLM API 地址 | `https://openrouter.ai/api/v1/chat/completions` |
-| `DEFAULT_MODEL` | 默认模型 | `anthropic/claude-sonnet-4` |
+| `DATABASE_URL` | PostgreSQL 连接串 | `postgresql://user:pass@host:5432/db` |
+
+### 可选
+
+| 变量 | 说明 | 默认值 |
+|---|---|---|
+| `MEMORY_ENABLED` | 记忆系统开关 | `false` |
+| `DEFAULT_MODEL` | 默认聊天模型 | `anthropic/claude-sonnet-4` |
 | `PORT` | 端口 | `8080` |
+| `ACCESS_TOKEN` | 管理面板密码 | 空（不设则无需密码） |
+| `MAX_MEMORIES_INJECT` | 每次注入最大记忆条数 | `15` |
+| `MEMORY_EXTRACT_INTERVAL` | 提取间隔（轮） | `3` |
+| `CORS_ORIGINS` | 前端域名白名单，逗号分隔 | `http://localhost:5173` |
+| `JIEBA_CUSTOM_WORDS` | jieba 自定义词汇，逗号分隔 | 空 |
 
-5. 部署，访问你的网关地址看到 `{"status":"running"}` 就成功了
-
-**4. 连接客户端**
-
-以 Kelivo 为例：
-- API 地址填：`https://你的网关地址.zeabur.app/v1`
-- API Key 填：随便填一个（网关会用自己的 key）
-- 模型填：你在 `DEFAULT_MODEL` 里设的模型
-
-### 第二阶段：加上记忆系统
-
-在第一阶段基础上，加一个 PostgreSQL 数据库就能开启记忆功能。
-
-**1. 创建数据库**
-
-在 Zeabur 中：添加服务 → Marketplace → PostgreSQL
-
-**2. 添加环境变量**
-
-| 环境变量 | 说明 | 示例 |
-|---------|------|------|
-| `DATABASE_URL` | PostgreSQL 连接字符串 | `postgresql://user:pass@host:port/db` |
-| `MEMORY_ENABLED` | 开启记忆 | `true` |
-| `MEMORY_MODEL` | 提取记忆用的模型（推荐便宜的小模型） | `anthropic/claude-haiku-4` |
-| `MAX_MEMORIES_INJECT` | 每次注入的最大记忆条数 | `15` |
-
-**3. 重新部署**
-
-部署后访问 `https://你的网关地址.zeabur.app/debug/memories`，看到 `"total_memories": 0` 就说明数据库连接成功。
-
-**4. 导入预置记忆（可选）**
-
-1. 复制 `seed_memories_example.py` 为 `seed_memories.py`
-2. 修改里面的记忆条目，写入你想让 AI 一开始就知道的信息
-3. 部署后访问 `https://你的网关地址.zeabur.app/import/seed-memories`，看到 `"status": "done"` 就导入成功了
-
-### 第三阶段：关闭记忆（应急）
-
-如果记忆系统出问题，把环境变量 `MEMORY_ENABLED` 改回 `false` 即可退回纯转发模式。不需要改代码。
-
-## 📁 文件说明
-
-```
-ai-memory-gateway/
-├── main.py                    # 网关主程序
-├── database.py                # 数据库操作（PostgreSQL）
-├── config.py                  # 环境变量配置的读写，配置读取有三层优先级：数据库 > 环境变量 > 代码默认值。
-├── memory_extractor.py        # AI 记忆提取
-├── system_prompt.txt          # 你的 AI 人设（自行编辑）
-├── seed_memories_example.py   # 预置记忆示例
-├── requirements.txt           # Python 依赖
-├── Dockerfile                 # 容器配置
-├── LICENSE                    # MIT 许可证
-└── README.md                  # 本文件
-```
-
-## 🔧 API 接口
-
-| 路径 | 方法 | 说明 |
-|------|------|------|
-| `/` | GET | 健康检查，查看网关状态 |
-| `/v1/chat/completions` | POST | 核心转发接口（OpenAI 兼容） |
-| `/v1/models` | GET | 模型列表 |
-| `/debug/memories` | GET | 查看所有记忆 |
-| `/debug/memories?q=关键词` | GET | 搜索记忆 |
-| `/import/seed-memories` | GET | 导入预置记忆 |
-
-## 🌐 支持的 LLM 服务商
-
-只要兼容 OpenAI 聊天格式就行。改 `API_BASE_URL` 环境变量即可切换：
-
-| 服务商 | API_BASE_URL |
-|--------|-------------|
-| OpenRouter | `https://openrouter.ai/api/v1/chat/completions` |
-| OpenAI | `https://api.openai.com/v1/chat/completions` |
-| Ollama（本地） | `http://localhost:11434/v1/chat/completions` |
-| 其他兼容服务 | 查阅对应文档 |
-
-> ⚠️ 部分 Gemini preview 模型（如 `gemini-3-flash-preview`）可能存在流式输出兼容性问题导致空回复，建议使用正式版模型（如 `gemini-2.5-flash`）。
-
-## 💡 记忆系统原理
-
-1. **你发消息** → 网关从数据库搜索相关记忆
-2. **记忆注入** → 相关记忆拼接到 system prompt 后面
-3. **AI 回复** → 网关边转发边捕获完整回复
-4. **后台提取** → 用小模型（如 Haiku）从对话中提取关键信息
-5. **存入数据库** → 下次对话时可以检索到
-
-提取记忆的成本很低——Haiku 每次只处理几十个 token，可以忽略不计。
-
-> **关于向量搜索：** 当前版本使用关键词匹配（中文 bigram 分词 + ILIKE），适合记忆量在几百条以内的场景。如果记忆量增长到上千条且需要语义搜索（比如说"过年"能搜到"春节"），可以加装 pgvector 扩展做 embedding 向量检索。`database.py` 的 `search_memories` 函数预留了权重配置，加一路向量分数即可。
-
-## ❓ 常见问题
-
-**Q: 部署后访问显示 502？**
-A: 检查端口设置。Zeabur 默认用 8080，确保环境变量 `PORT=8080`。
-
-**Q: 数据库连接失败？**
-A: Zeabur 的 PostgreSQL 需要 SSL。在连接字符串末尾加 `?sslmode=require`。
-
-**Q: 记忆会越来越多影响性能吗？**
-A: 每次最多注入 15 条记忆（可调），不会无限增长地消耗 token。
-
-**Q: 能用免费额度跑吗？**
-A: Zeabur 每月 $5 免费额度，网关 + PostgreSQL 的资源消耗很低，够用。LLM API 费用另算（推荐 OpenRouter，按量付费）。
-
-**Q: 不会写代码能搞吗？**
-A: 能。这个项目的第一个部署者就是不会写代码的——代码是 AI 写的，部署是她自己看文档搞定的。
-
-## 📄 许可证
-
-[MIT License](LICENSE) — 随便用，改了也不用告诉我。
-
-## 🙏 致谢
-
-这个项目诞生于一个简单的需求：**让 AI 不要每次醒来都忘了我是谁。**
-
-> "记忆库不是数据库，是家。"
+> 💡 另有 80+ 参数可在管理面板动态修改，无需重启。
 
 ---
+
+## API 端点速查
+
+<details>
+<summary>点击展开完整端点列表（60+）</summary>
+
+### 核心
+| 路径 | 方法 | 说明 |
+|---|---|---|
+| `/` | GET | 健康检查 |
+| `/v1/chat/completions` | POST | 聊天转发 |
+| `/v1/models` | GET | 模型列表 |
+
+### 记忆
+| 路径 | 方法 | 说明 |
+|---|---|---|
+| `/debug/memories` | GET | 列表 / 搜索（`?q=`） |
+| `/debug/memories` | POST | 创建 |
+| `/debug/memories/{id}` | PUT / DELETE | 更新 / 删除 |
+| `/debug/memories/{id}/toggle-permanent` | POST | 锁定切换 |
+| `/debug/memories/batch-delete` | POST | 批量删除 |
+| `/debug/memories/batch-update` | POST | 批量更新 |
+| `/debug/memory-heat` | GET | 热度统计 |
+
+### Dream
+| 路径 | 方法 | 说明 |
+|---|---|---|
+| `/dream/start` | POST | 开始 |
+| `/dream/stop` | POST | 中止 |
+| `/dream/status` | GET | 状态 |
+| `/dream/history` | GET | 历史 |
+| `/dream/scenes` | GET | MemScene 列表 |
+
+### 日历
+| 路径 | 方法 | 说明 |
+|---|---|---|
+| `/calendar/{date}` | GET | 按日期查询 |
+| `/calendar` | GET | 按范围查询 |
+| `/admin/day-page` | GET | 生成日页面 |
+| `/admin/week-summary` | GET | 周总结 |
+| `/admin/month-summary` | GET | 月总结 |
+| `/admin/daily-digest` | GET | 每日整理 |
+
+### 供应商
+| 路径 | 方法 | 说明 |
+|---|---|---|
+| `/admin/providers` | GET / POST | 列表 / 添加 |
+| `/admin/providers/{id}` | PUT / DELETE | 更新 / 删除 |
+| `/admin/credits` | GET | 余额查询 |
+
+### 配置
+| 路径 | 方法 | 说明 |
+|---|---|---|
+| `/admin` | GET | 管理面板 |
+| `/admin/config` | GET | 所有配置 |
+| `/admin/config/{key}` | PUT | 修改配置 |
+| `/admin/system-prompt` | GET / PUT | 人设读写 |
+| `/admin/extract-now` | POST | 手动提取 |
+
+### 数据
+| 路径 | 方法 | 说明 |
+|---|---|---|
+| `/sync/export` | GET | 导出备份 |
+| `/sync/import-backup` | POST | 导入备份 |
+| `/sync/conversations` | GET | 对话列表 |
+| `/sync/projects` | GET | 项目列表 |
+
+### MCP
+| 端点 | 说明 |
+|---|---|
+| `/memory/mcp` | 记忆系统工具（6 个） |
+| `/calendar/mcp` | 日历系统工具（4+ 个） |
+
+</details>
+
+---
+
+## 文件结构
+
+```
+kiwi-mem/
+├── main.py                  # 网关核心
+├── database.py              # 数据库（记忆 CRUD、RRF 检索、热度）
+├── config.py                # 动态配置（80+ 参数）
+├── memory_extractor.py      # 记忆提取
+├── daily_digest.py          # 每日整理 + 日历层级
+├── dream.py                 # Dream 睡眠整合
+├── mcp_server.py            # MCP Server
+├── mcp_client.py            # MCP Client
+├── web_search.py            # 联网搜索
+├── admin-panel/index.html   # Web 管理面板
+├── system_prompt.txt        # 默认人设
+├── seed_memories_example.py # 预置记忆示例
+├── Dockerfile
+└── LICENSE                  # MIT
+```
+
+---
+
+## 常见问题
+
+**Q: 不会写代码能用吗？**
+A: 能。Docker 一键启动，管理面板里点点就能配。这个项目的创建者自己就不写代码。
+
+**Q: 支持哪些 LLM？**
+A: 任何兼容 OpenAI 格式的都行——OpenRouter、OpenAI、Claude API、DeepSeek、Ollama……
+
+**Q: 记忆会无限增长吗？**
+A: 不会。热度系统自然淘汰冷记忆，Dream 会整合碎片，每次注入有上限。
+
+**Q: Dream 要花多少钱？**
+A: 用 Claude Haiku 大约 ¥0.01-0.03 一次。
+
+---
+
+## 许可证
+
+[MIT License](LICENSE)
+
+---
+
+> *"记忆库不是数据库，是家。"*
 
 *Built with love, for anyone who wants their AI to remember.*
