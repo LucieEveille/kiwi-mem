@@ -380,6 +380,20 @@ async def init_tables():
             );
         """)
 
+        # dream_logs 表扩展 — 新增列自动迁移
+        for col_name, col_def in [
+            ("links_created", "INTEGER DEFAULT 0"),
+        ]:
+            has_col = await conn.fetchval("""
+                SELECT EXISTS (
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_name = 'dream_logs' AND column_name = $1
+                )
+            """, col_name)
+            if not has_col:
+                await conn.execute(f"ALTER TABLE dream_logs ADD COLUMN {col_name} {col_def}")
+                print(f"✅ dream_logs 表已添加 {col_name} 列")
+
         # v5.1：memories 表扩展 — Dream 相关字段
         for col_name, col_def in [
             ("is_permanent", "BOOLEAN DEFAULT FALSE"),

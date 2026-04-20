@@ -2342,6 +2342,20 @@ async def api_dream_stop():
     return await stop_dream()
 
 
+@app.post("/admin/dream/force-stop")
+async def api_dream_force_stop():
+    """强制清理卡住的 Dream（直接更新数据库状态）"""
+    from database import get_pool
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        result = await conn.execute("""
+            UPDATE dream_logs SET status = 'interrupted', finished_at = NOW(),
+                dream_narrative = COALESCE(dream_narrative, '') || '\n[手动强制中断]'
+            WHERE status = 'running'
+        """)
+    return {"status": "ok", "message": "已强制中断所有 running 状态的 Dream", "result": str(result)}
+
+
 @app.get("/dream/status")
 async def api_dream_status():
     """获取当前 Dream 状态"""
