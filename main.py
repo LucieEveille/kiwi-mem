@@ -121,6 +121,18 @@ EXTRA_TITLE = os.getenv("EXTRA_TITLE", "AI Memory Gateway")
 _conversation_counter = 0
 _counter_lock = asyncio.Lock()
 
+# 后台任务集合：保持强引用，防止 asyncio.create_task 创建的任务被 GC 提前回收
+# 参考 https://docs.python.org/3/library/asyncio-task.html#asyncio.create_task
+_background_tasks: set = set()
+
+
+def _spawn_background_task(coro):
+    """启动后台任务并保留引用，避免在执行中被 GC 回收。"""
+    task = asyncio.create_task(coro)
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
+    return task
+
 
 # ============================================================
 # 人设加载
@@ -595,7 +607,7 @@ async def process_memories_background(session_id: str, user_msg: str, assistant_
                             print(f"   🌙 Dream 完成: {event['data']}")
                 except Exception as e:
                     print(f"   🌙 Dream 异常: {e}")
-            asyncio.create_task(_silent_dream())
+            _spawn_background_task(_silent_dream())
 
         # 检测用户是否主动要求记忆
         force_extract = any(kw in user_msg for kw in MEMORY_TRIGGER_WORDS)
@@ -769,8 +781,10 @@ async def root_status():
     return {
         "status": "running",
         "gateway": "AI Memory Gateway v3.1 (动态配置)",
+        "version": "AI Memory Gateway v3.1",
         "memory_enabled": mem_enabled,
         "memory_count": memory_count,
+        "memories": memory_count,
         "max_inject": await get_max_inject(),
         "default_model": DEFAULT_MODEL,
         "extract_interval": await get_extract_interval(),
@@ -1296,7 +1310,7 @@ async def chat_completions(request: Request):
                 
                 if mem_enabled and user_message and assistant_msg:
                     _emo = merge_emotion_levels(detect_emotion_from_user_msg(user_message), detect_emotion_from_response(assistant_msg))
-                    asyncio.create_task(
+                    _spawn_background_task(
                         process_memories_background(session_id, user_message, assistant_msg, model, emotion_level=_emo)
                     )
                 
@@ -1747,6 +1761,9 @@ async def debug_memories(q: str = "", limit: int = 20, offset: int = 0, sort: st
                 memories.sort(key=lambda m: m.get("created_at", ""))
             elif sort == "importance":
                 memories.sort(key=lambda m: m.get("importance", 0), reverse=True)
+            elif sort == "heat":
+                memories.sort(key=lambda m: m.get("heat", 0) or 0, reverse=True)
+            # sort == "newest" / "recent" / 其他 → 走 get_recent_memories 默认顺序
             memories = memories[offset:offset + limit]
         
         total = await get_all_memories_count()
@@ -2129,9 +2146,10 @@ async def api_extract_now():
                 title=mem.get("title", ""),
                 category_id=cat_id,
                 source="manual_extracted",
+                emotional_weight=mem.get("emotional_weight", 0),
             )
             saved_count += 1
-        
+
         total = await get_all_memories_count()
         return {"status": "ok", "action": "extract", "saved": saved_count, "extracted": saved_count, "skipped": skipped_count, "total": total}
     except Exception as e:
