@@ -102,6 +102,7 @@ tailwind.config = {
     <div class="bg-panel-card border border-panel-border rounded-lg p-5 mb-4">
       <p class="section-title">系统状态</p>
       <div id="sys-status" class="text-sm text-gray-400">加载中…</div>
+      <div id="embed-status" class="text-sm mt-3 hidden"></div>
     </div>
 
     <div class="bg-panel-card border border-panel-border rounded-lg p-5">
@@ -346,6 +347,21 @@ async function loadDashboard() {
           ${m.is_permanent ? '<span class="badge imp-high ml-1">🔒</span>' : ''}
         </div>`
       ).join('');
+    }
+  } catch(e) {}
+
+  // Embedding 覆盖率
+  try {
+    const embed = await apiJson('/admin/embedding-stats');
+    const el = document.getElementById('embed-status');
+    if (embed && !embed.error && embed.total_memories > 0) {
+      el.classList.remove('hidden');
+      if (embed.without_embedding > 0) {
+        el.innerHTML = `<span style="color:#fb923c">⚠️ 向量覆盖 ${embed.coverage} — ${embed.without_embedding} 条记忆缺少 embedding，语义搜索可能不完整。</span>
+          <br><span class="text-gray-500 text-xs">前往「配置管理 → 默认模型」设置 embedding 模型，然后在「工具」页面点击「向量迁移」。</span>`;
+      } else {
+        el.innerHTML = `<span style="color:#4ade80">✅ 向量覆盖 ${embed.coverage} — 所有记忆已嵌入</span>`;
+      }
     }
   } catch(e) {}
 }

@@ -1,0 +1,50 @@
+# kiwi-mem Docker Compose
+# 使用方法：cp .env.example .env → 编辑 .env → docker compose up -d
+
+services:
+  # PostgreSQL + pgvector（记忆系统必需）
+  db:
+    image: pgvector/pgvector:pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: kiwi
+      POSTGRES_PASSWORD: kiwi_secret_change_me
+      POSTGRES_DB: kiwi_mem
+    volumes:
+      - kiwi-pg-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U kiwi -d kiwi_mem"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # kiwi-mem 记忆网关
+  kiwi-mem:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "${PORT:-8080}:${PORT:-8080}"
+    environment:
+      # ---- 必填：LLM API ----
+      API_KEY: ${API_KEY}
+      API_BASE_URL: ${API_BASE_URL:-https://openrouter.ai/api/v1/chat/completions}
+      # ---- 数据库（指向上面的 db 服务）----
+      DATABASE_URL: postgresql://kiwi:kiwi_secret_change_me@db:5432/kiwi_mem
+      # ---- 记忆系统 ----
+      MEMORY_ENABLED: ${MEMORY_ENABLED:-true}
+      DEFAULT_MODEL: ${DEFAULT_MODEL:-anthropic/claude-sonnet-4}
+      PORT: ${PORT:-8080}
+      # ---- 可选 ----
+      ACCESS_TOKEN: ${ACCESS_TOKEN:-}
+      MAX_MEMORIES_INJECT: ${MAX_MEMORIES_INJECT:-15}
+      MEMORY_EXTRACT_INTERVAL: ${MEMORY_EXTRACT_INTERVAL:-3}
+      CORS_ORIGINS: ${CORS_ORIGINS:-*}
+      JIEBA_CUSTOM_WORDS: ${JIEBA_CUSTOM_WORDS:-}
+      EXTRA_REFERER: ${EXTRA_REFERER:-https://kiwi-mem.local}
+      EXTRA_TITLE: ${EXTRA_TITLE:-kiwi-mem}
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  kiwi-pg-data:

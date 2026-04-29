@@ -1095,7 +1095,11 @@ async def chat_completions(request: Request):
     
     # ---------- 供应商路由 ----------
     # 根据 model_id 查找已配置的供应商，找不到就用全局环境变量
-    provider_info = await resolve_provider_for_model(model)
+    # 如果数据库不可用（DATABASE_URL 未设置），也降级到环境变量
+    try:
+        provider_info = await resolve_provider_for_model(model)
+    except Exception:
+        provider_info = None
     if provider_info:
         chat_api_key = provider_info["api_key"]
         # 确保 URL 以 /chat/completions 结尾

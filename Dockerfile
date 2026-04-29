@@ -11,9 +11,11 @@ RUN pip install --no-cache-dir -r requirements.txt
 # 复制项目文件
 COPY . .
 
-# ClawCloud Run 会自动分配端口到 PORT 环境变量
-# 默认 8000
-ENV PORT=8000
+# 默认端口 8080（与 .env.example 和 main.py 一致）
+ENV PORT=8080
+
+# 声明端口
+EXPOSE 8080
 
 # 启动网关
 CMD ["python", "main.py"]
