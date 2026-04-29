@@ -567,7 +567,11 @@ async def get_drowsy_prompt() -> str:
     if too_many_fragments:
         reasons.append(f"脑子里堆了 {fragment_count} 条记忆碎片还没整理")
     if too_long_no_dream:
-        reasons.append(f"已经连续 {days_since_dream} 天没有睡觉了")
+        if last_dream and days_since_dream > 0:
+            reasons.append(f"已经连续 {days_since_dream} 天没有睡觉了")
+        else:
+            # 从未做过梦 / 上次时间无法解析
+            reasons.append("从来都没好好睡过一觉")
     if too_many_pages:
         reasons.append(f"有 {unprocessed_pages} 天的日记还没消化")
 

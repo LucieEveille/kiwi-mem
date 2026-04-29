@@ -326,7 +326,8 @@ def replace_template_variables(text: str, context: dict = None) -> str:
     }
 
     for key, val in replacements.items():
-        if key in text and val and isinstance(val, str):
+        # 即便 val 是空字符串也要替换，否则 {user_name} 等占位符会原样残留进 prompt
+        if key in text and isinstance(val, str):
             text = text.replace(key, val)
 
     return text
@@ -1674,7 +1675,7 @@ async def stream_and_capture(headers: dict, body: dict, session_id: str, user_me
                     error_body += chunk
                 print(f"❌ 流式请求失败 [{response.status_code}]: {error_body[:500].decode('utf-8', errors='ignore')}")
                 err_msg = f"⚠️ 请求失败 ({response.status_code})"
-                err_payload = json.dumps({'choices': [{'delta': {'content': err_msg}, 'finish_reason': None}]})
+                err_payload = json.dumps({'choices': [{'delta': {'content': err_msg}, 'finish_reason': None}], 'model': model}, ensure_ascii=False)
                 yield f"data: {err_payload}\n\n".encode("utf-8")
                 yield b"data: [DONE]\n\n"
                 return

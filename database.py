@@ -991,14 +991,19 @@ async def search_memories(query: str, limit: int = 10, track_recall: bool = True
                         )
                     WHERE id = ANY($1::int[])
                 """, ids, json.dumps([query_hash]))
-            except Exception:
+            except Exception as e:
                 # 降级：如果合并语句失败（如 access_query_hashes 列不存在），只更新 access_count
-                await conn.execute("""
-                    UPDATE memories 
-                    SET last_accessed = NOW(),
-                        access_count = COALESCE(access_count, 0) + 1
-                    WHERE id = ANY($1::int[])
-                """, ids)
+                # 打日志便于排查 schema 缺失或 jsonb 操作不兼容等情况，不再 silent 吞掉
+                print(f"   ⚠️ 召回追踪合并 UPDATE 失败，降级为只更新 access_count: {type(e).__name__}: {e}")
+                try:
+                    await conn.execute("""
+                        UPDATE memories
+                        SET last_accessed = NOW(),
+                            access_count = COALESCE(access_count, 0) + 1
+                        WHERE id = ANY($1::int[])
+                    """, ids)
+                except Exception as e2:
+                    print(f"   ❌ 召回追踪降级 UPDATE 也失败: {type(e2).__name__}: {e2}")
         
         # v5.4：自动锁定检测
         try:
@@ -2505,7 +2510,13 @@ async def get_calendar_for_injection(lookback_days: int = 365):
 
 
 async def get_chat_messages_for_date(date_str: str):
-    """读取指定日期的所有聊天消息（用于生成日页面）"""
+    """读取指定日期的所有聊天消息（用于生成日页面）
+
+    注：time 字段是 TIMESTAMPTZ，直接 ::date 会按 PostgreSQL 服务器时区
+    （多数云数据库默认 UTC）转换，导致东八区凌晨 0:00-7:59 的消息被
+    归到前一天。这里强制按 Asia/Shanghai 算 date，与代码中其他位置
+    使用的 TZ_CST = UTC+8 保持一致。
+    """
     from datetime import date as date_cls
     pool = await get_pool()
     d = date_cls.fromisoformat(date_str)
@@ -2513,7 +2524,7 @@ async def get_chat_messages_for_date(date_str: str):
         rows = await conn.fetch("""
             SELECT role, content, time, conversation_id
             FROM chat_messages
-            WHERE time::date = $1
+            WHERE (time AT TIME ZONE 'Asia/Shanghai')::date = $1
               AND role IN ('user', 'assistant')
               AND content != ''
             ORDER BY time ASC

@@ -74,10 +74,16 @@ async def run_daily_digest(target_date: str = None, model_override: str = None, 
         prompt_override: 覆盖默认整理提示词
     """
     from database import get_pool, save_memory, get_embedding, get_all_categories, match_category_by_name
-    
+    from datetime import date as date_cls
+
     now_cst = datetime.now(TZ_CST)
 
     if target_date:
+        # 校验格式，避免后续 fromisoformat 直接抛 ValueError 让接口 500
+        try:
+            date_cls.fromisoformat(target_date)
+        except (ValueError, TypeError):
+            return {"error": f"无效日期格式: {target_date!r}，需要 YYYY-MM-DD"}
         date_str = target_date
     else:
         yesterday = now_cst - timedelta(days=1)
@@ -120,9 +126,9 @@ async def _run_daily_digest_impl(date_str: str, now_cst, model_override: str = N
     async with pool.acquire() as conn:
         fragments = await conn.fetch("""
             SELECT id, title, content, importance, created_at
-            FROM memories 
+            FROM memories
             WHERE COALESCE(memory_type, 'fragment') = 'fragment'
-              AND created_at::date = $1
+              AND (created_at AT TIME ZONE 'Asia/Shanghai')::date = $1
             ORDER BY created_at ASC
         """, target_date_obj)
     
@@ -477,20 +483,24 @@ async def daily_digest_scheduler():
     while True:
         try:
             now = datetime.now(TZ_CST)
-            
+
             # 计算下一个 0:05
             tomorrow = now.replace(hour=0, minute=5, second=0, microsecond=0)
             if now >= tomorrow:
                 tomorrow += timedelta(days=1)
-            
+
+            # 在 sleep 前就锁定要整理的日期，避免 sleep 因 OS 挂起或时钟跳变后
+            # 用 datetime.now() 重算时落到错误的"昨天"
+            target_date_str = (tomorrow - timedelta(days=1)).strftime("%Y-%m-%d")
+
             wait_seconds = (tomorrow - now).total_seconds()
             hours = int(wait_seconds // 3600)
             mins = int((wait_seconds % 3600) // 60)
-            print(f"🕐 下次整理：{tomorrow.strftime('%Y-%m-%d %H:%M')}（{hours}小时{mins}分钟后）")
-            
+            print(f"🕐 下次整理：{tomorrow.strftime('%Y-%m-%d %H:%M')}（{hours}小时{mins}分钟后），目标日期 {target_date_str}")
+
             await asyncio.sleep(wait_seconds)
-            
-            yesterday = (datetime.now(TZ_CST) - timedelta(days=1)).strftime("%Y-%m-%d")
+
+            yesterday = target_date_str
             
             # 1. 日页面生成（从碎片生成详细日页面）
             try:
@@ -552,7 +562,7 @@ async def cleanup_expired_fragments():
               AND COALESCE(is_permanent, FALSE) = FALSE
               AND importance < 8
               AND created_at < NOW() - INTERVAL '7 days'
-              AND EXISTS (SELECT 1 FROM calendar_pages WHERE date = memories.created_at::date AND type = 'day')
+              AND EXISTS (SELECT 1 FROM calendar_pages WHERE date = (memories.created_at AT TIME ZONE 'Asia/Shanghai')::date AND type = 'day')
               AND dream_processed_at IS NOT NULL
         """)
         try:
@@ -567,7 +577,7 @@ async def cleanup_expired_fragments():
               AND COALESCE(is_permanent, FALSE) = FALSE
               AND importance >= 8
               AND created_at < NOW() - INTERVAL '30 days'
-              AND EXISTS (SELECT 1 FROM calendar_pages WHERE date = memories.created_at::date AND type = 'day')
+              AND EXISTS (SELECT 1 FROM calendar_pages WHERE date = (memories.created_at AT TIME ZONE 'Asia/Shanghai')::date AND type = 'day')
               AND dream_processed_at IS NOT NULL
         """)
         try:
@@ -673,9 +683,14 @@ async def generate_day_page(target_date: str = None, model_override: str = None)
     """
     from database import get_pool, get_chat_messages_for_date, save_calendar_page
     from config import get_config
+    from datetime import date as date_cls
 
     now_cst = datetime.now(TZ_CST)
     if target_date:
+        try:
+            date_cls.fromisoformat(target_date)
+        except (ValueError, TypeError):
+            return {"error": f"无效日期格式: {target_date!r}，需要 YYYY-MM-DD"}
         date_str = target_date
     else:
         yesterday = now_cst - timedelta(days=1)
@@ -728,7 +743,7 @@ async def generate_day_page(target_date: str = None, model_override: str = None)
     async with pool.acquire() as conn:
         fragments = await conn.fetch("""
             SELECT title, content FROM memories
-            WHERE created_at::date = $1
+            WHERE (created_at AT TIME ZONE 'Asia/Shanghai')::date = $1
               AND memory_type = 'fragment'
             ORDER BY created_at ASC
         """, target_date_obj)
