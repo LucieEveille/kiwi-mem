@@ -118,13 +118,16 @@ async def run_dream(trigger_type: str = "manual", model_override: str = None):
     yields: dict with type = "narrative" | "action" | "progress" | "complete" | "error"
     """
     global _dream_cancelled
-    _dream_cancelled = False
 
     if _dream_lock.locked():
+        # 注意：不要在这里重置 _dream_cancelled，否则会误清掉
+        # 用户对当前正在运行的那个 Dream 发出的 stop 信号。
         yield {"type": "error", "data": "AI 已经在睡觉了，不能同时做两个梦"}
         return
 
     async with _dream_lock:
+        # 拿到锁后再重置取消标记，确保只影响本次 Dream
+        _dream_cancelled = False
         from database import (
             get_unprocessed_memories, get_active_scenes, get_permanent_memories,
             create_dream_log, update_dream_log, mark_memories_dreamed,
