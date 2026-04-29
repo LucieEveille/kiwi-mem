@@ -311,9 +311,9 @@ async function loadDashboard() {
     document.getElementById('stat-mem-enabled').className = `text-2xl font-bold ${status.memory_enabled ? 'text-kiwi-400' : 'text-red-400'}`;
 
     const statusLines = [
-      `版本：${status.version || '-'}`,
-      `默认模型：${status.default_model || '-'}`,
-      `记忆提取间隔：每 ${status.extract_interval || '-'} 轮`,
+      `版本：${escHtml(status.version || '-')}`,
+      `默认模型：${escHtml(status.default_model || '-')}`,
+      `记忆提取间隔：每 ${escHtml(String(status.extract_interval ?? '-'))} 轮`,
     ];
     document.getElementById('sys-status').innerHTML = statusLines.map(l => `<p class="py-1">${l}</p>`).join('');
   } catch(e) {

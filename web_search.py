@@ -108,8 +108,21 @@ async def web_search(
         else:
             print(f"⚠️ 未知搜索引擎: {engine}")
             return []
+    except httpx.TimeoutException as e:
+        print(f"⏰ 搜索超时 [{engine}]: {e}")
+        return []
+    except httpx.HTTPStatusError as e:
+        print(f"❌ 搜索 HTTP 错误 [{engine}] status={e.response.status_code}: {e}")
+        return []
+    except httpx.RequestError as e:
+        print(f"❌ 搜索网络错误 [{engine}]: {e}")
+        return []
+    except (KeyError, AttributeError, TypeError, ValueError) as e:
+        # 通常是引擎返回 schema 变化导致的解析失败
+        print(f"❌ 搜索结果解析失败 [{engine}] (可能是 API schema 变化): {type(e).__name__}: {e}")
+        return []
     except Exception as e:
-        print(f"❌ 搜索失败 [{engine}]: {e}")
+        print(f"❌ 搜索失败 [{engine}] {type(e).__name__}: {e}")
         return []
 
 
@@ -193,13 +206,22 @@ async def _search_bocha(query: str, api_key: str, max_results: int) -> list[Sear
         data = resp.json()
     
     results = []
-    web_pages = data.get("data", {}).get("webPages", {}).get("value", [])
-    for item in web_pages[:max_results]:
-        results.append(SearchResult(
-            title=item.get("name", ""),
-            url=item.get("url", ""),
-            snippet=item.get("snippet", "")[:300],
-        ))
+    # 防御：上游可能返回 {"data": null} 或 {"data": {"webPages": null}}，链式 .get 会 AttributeError
+    data_field = data.get("data") or {}
+    web_pages_field = data_field.get("webPages") if isinstance(data_field, dict) else None
+    web_pages = (web_pages_field or {}).get("value", []) if isinstance(web_pages_field, dict) else []
+    for item in (web_pages or [])[:max_results]:
+        if not isinstance(item, dict):
+            continue
+        try:
+            results.append(SearchResult(
+                title=item.get("name", "") or "",
+                url=item.get("url", "") or "",
+                snippet=(item.get("snippet", "") or "")[:300],
+            ))
+        except Exception as e:
+            print(f"   ⚠️ Bocha 单条结果解析失败，跳过: {e}")
+            continue
     return results
 
 
