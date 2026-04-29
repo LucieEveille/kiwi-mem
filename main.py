@@ -1128,13 +1128,18 @@ async def chat_completions(request: Request):
     
     # ---------- Prompt 缓存（v5.5）----------
     # 只对 Claude 模型加 cache_control，其他模型（OpenAI/DeepSeek/Gemini）自动缓存不需要
+    # cache_control 必须加在 system message 上，加在 body 顶级无效
+    # OpenRouter 转发 Claude 时支持此格式，其他供应商会忽略未知字段
     try:
         cache_enabled = await get_config("prompt_cache_enabled")
         if cache_enabled is None or str(cache_enabled).lower() != 'false':
             _model_for_cache = body.get("model", "").lower()
             if "claude" in _model_for_cache or "anthropic" in _model_for_cache:
-                body["cache_control"] = {"type": "ephemeral"}
-                print(f"💾 Prompt 缓存已启用（Claude 模型）")
+                for msg in messages:
+                    if msg.get("role") == "system":
+                        msg["cache_control"] = {"type": "ephemeral"}
+                        break
+                print(f"💾 Prompt 缓存已启用（Claude 模型，system message 标记）")
     except Exception:
         pass
 

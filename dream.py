@@ -25,7 +25,7 @@ _RAW_BASE_URL = os.getenv("MEMORY_API_BASE_URL", "") or os.getenv("API_BASE_URL"
 MEMORY_API_BASE_URL = _RAW_BASE_URL if _RAW_BASE_URL.rstrip("/").endswith("/chat/completions") else f"{_RAW_BASE_URL.rstrip('/')}/chat/completions"
 DIGEST_MODEL = os.getenv("MEMORY_MODEL", "anthropic/claude-haiku-4")
 
-TZ_TAIPEI = timezone(timedelta(hours=8))
+TZ_CST = timezone(timedelta(hours=8))
 
 # Dream 状态锁 — 同一时间只允许一个 Dream
 _dream_lock = asyncio.Lock()
@@ -152,19 +152,19 @@ async def run_dream(trigger_type: str = "manual", model_override: str = None):
         # 主要素材：上次Dream以来的日页面
         from database import get_calendar_range
         last_dream_date = await get_config("last_dream_date") or "2020-01-01"
-        today_str = datetime.now(TZ_TAIPEI).strftime("%Y-%m-%d")
+        today_str = datetime.now(TZ_CST).strftime("%Y-%m-%d")
         day_pages = await get_calendar_range(last_dream_date, today_str, "day")
 
         # 辅助素材：未处理碎片（用于清理标记）
         unprocessed = await get_unprocessed_memories()
 
         if not day_pages and not unprocessed:
-            await update_dream_log(dream_id, status="completed", finished_at=datetime.now(TZ_TAIPEI),
+            await update_dream_log(dream_id, status="completed", finished_at=datetime.now(TZ_CST),
                                     dream_narrative="没有新的内容需要整理，继续睡……")
             yield {"type": "narrative", "data": "没有新的内容需要整理……继续睡……"}
             yield {"type": "complete", "data": {"dream_id": dream_id, "memories_processed": 0}}
             # 即使没处理也更新 last_dream_date，防止反复犯困
-            await set_config("last_dream_date", datetime.now(TZ_TAIPEI).strftime("%Y-%m-%d"))
+            await set_config("last_dream_date", datetime.now(TZ_CST).strftime("%Y-%m-%d"))
             return
 
         # v5.4：素材太少不值得做梦（省 API 费用）
@@ -173,12 +173,12 @@ async def run_dream(trigger_type: str = "manual", model_override: str = None):
             processed_ids = [m["id"] for m in unprocessed]
             if processed_ids:
                 await mark_memories_dreamed(processed_ids)
-            await update_dream_log(dream_id, status="completed", finished_at=datetime.now(TZ_TAIPEI),
+            await update_dream_log(dream_id, status="completed", finished_at=datetime.now(TZ_CST),
                                     dream_narrative=f"只有 {len(unprocessed)} 条碎片，打了个盹就醒了……",
                                     memories_processed=len(unprocessed))
             yield {"type": "narrative", "data": f"嗯……只有 {len(unprocessed)} 条碎片，打了个盹就好了……"}
             yield {"type": "complete", "data": {"dream_id": dream_id, "memories_processed": len(unprocessed)}}
-            await set_config("last_dream_date", datetime.now(TZ_TAIPEI).strftime("%Y-%m-%d"))
+            await set_config("last_dream_date", datetime.now(TZ_CST).strftime("%Y-%m-%d"))
             return
 
         scenes = await get_active_scenes()
@@ -273,7 +273,7 @@ async def run_dream(trigger_type: str = "manual", model_override: str = None):
 
                 if response.status_code != 200:
                     error_msg = f"模型请求失败: HTTP {response.status_code}"
-                    await update_dream_log(dream_id, status="error", finished_at=datetime.now(TZ_TAIPEI),
+                    await update_dream_log(dream_id, status="error", finished_at=datetime.now(TZ_CST),
                                             dream_narrative=error_msg)
                     yield {"type": "error", "data": error_msg}
                     return
@@ -283,7 +283,7 @@ async def run_dream(trigger_type: str = "manual", model_override: str = None):
 
         except Exception as e:
             error_msg = f"模型调用出错: {str(e)}"
-            await update_dream_log(dream_id, status="error", finished_at=datetime.now(TZ_TAIPEI),
+            await update_dream_log(dream_id, status="error", finished_at=datetime.now(TZ_CST),
                                     dream_narrative=error_msg)
             yield {"type": "error", "data": error_msg}
             return
@@ -295,7 +295,7 @@ async def run_dream(trigger_type: str = "manual", model_override: str = None):
         for line in lines:
             if _dream_cancelled:
                 await update_dream_log(dream_id, status="interrupted",
-                                        finished_at=datetime.now(TZ_TAIPEI),
+                                        finished_at=datetime.now(TZ_CST),
                                         dream_narrative=full_narrative, **stats)
                 yield {"type": "narrative", "data": "嗯……？怎么了……"}
                 yield {"type": "complete", "data": {"dream_id": dream_id, "interrupted": True, **stats}}
@@ -342,7 +342,7 @@ async def run_dream(trigger_type: str = "manual", model_override: str = None):
         await mark_memories_dreamed(processed_memory_ids)
 
         # 7. 完成
-        now = datetime.now(TZ_TAIPEI)
+        now = datetime.now(TZ_CST)
         await update_dream_log(dream_id, status="completed", finished_at=now,
                                 dream_narrative=full_narrative, **stats)
         await set_config("last_dream_date", now.strftime("%Y-%m-%d"))
@@ -527,7 +527,7 @@ async def get_drowsy_prompt() -> str:
         try:
             from datetime import date as date_cls
             last = date_cls.fromisoformat(last_dream)
-            today = datetime.now(TZ_TAIPEI).date()
+            today = datetime.now(TZ_CST).date()
             days_since_dream = (today - last).days
             too_long_no_dream = days_since_dream >= 7
         except Exception:
@@ -593,7 +593,7 @@ async def auto_dream_check():
     from database import get_pool, get_unprocessed_memories
 
     # 跳过 0:00-1:00 时段，避免与 daily_digest_scheduler（0:05）竞争
-    now_hour = datetime.now(TZ_TAIPEI).hour
+    now_hour = datetime.now(TZ_CST).hour
     if now_hour == 0:
         return False
 
@@ -607,9 +607,9 @@ async def auto_dream_check():
     if not last_msg:
         return False
 
-    now = datetime.now(TZ_TAIPEI)
+    now = datetime.now(TZ_CST)
     if hasattr(last_msg, "astimezone"):
-        last_msg = last_msg.astimezone(TZ_TAIPEI)
+        last_msg = last_msg.astimezone(TZ_CST)
 
     hours_since = (now - last_msg).total_seconds() / 3600
 

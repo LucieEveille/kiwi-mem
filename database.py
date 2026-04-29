@@ -973,30 +973,32 @@ async def search_memories(query: str, limit: int = 10, track_recall: bool = True
         ids = [r["id"] for r in results]
         pool = await get_pool()
         async with pool.acquire() as conn:
-            await conn.execute("""
-                UPDATE memories 
-                SET last_accessed = NOW(),
-                    access_count = COALESCE(access_count, 0) + 1
-                WHERE id = ANY($1::int[])
-            """, ids)
-            
+            # 单条 UPDATE 合并 access_count + query_hashes，保证原子性
             try:
                 await conn.execute("""
-                    UPDATE memories
-                    SET access_query_hashes = (
-                        SELECT jsonb_agg(elem)
-                        FROM (
-                            SELECT DISTINCT elem
-                            FROM jsonb_array_elements(
-                                COALESCE(access_query_hashes, '[]'::jsonb) || $2::jsonb
-                            ) AS elem
-                            LIMIT 50
-                        ) sub
-                    )
+                    UPDATE memories 
+                    SET last_accessed = NOW(),
+                        access_count = COALESCE(access_count, 0) + 1,
+                        access_query_hashes = (
+                            SELECT jsonb_agg(elem)
+                            FROM (
+                                SELECT DISTINCT elem
+                                FROM jsonb_array_elements(
+                                    COALESCE(access_query_hashes, '[]'::jsonb) || $2::jsonb
+                                ) AS elem
+                                LIMIT 50
+                            ) sub
+                        )
                     WHERE id = ANY($1::int[])
                 """, ids, json.dumps([query_hash]))
             except Exception:
-                pass
+                # 降级：如果合并语句失败（如 access_query_hashes 列不存在），只更新 access_count
+                await conn.execute("""
+                    UPDATE memories 
+                    SET last_accessed = NOW(),
+                        access_count = COALESCE(access_count, 0) + 1
+                    WHERE id = ANY($1::int[])
+                """, ids)
         
         # v5.4：自动锁定检测
         try:

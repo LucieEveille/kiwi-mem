@@ -26,8 +26,8 @@ MEMORY_API_BASE_URL = _RAW_BASE_URL if _RAW_BASE_URL.rstrip("/").endswith("/chat
 
 DIGEST_MODEL = os.getenv("MEMORY_MODEL", "anthropic/claude-haiku-4")
 
-# 东八区（台北）
-TZ_TAIPEI = timezone(timedelta(hours=8))
+# 东八区（北京 / 上海 / 台北）
+TZ_CST = timezone(timedelta(hours=8))
 
 # ============================================================
 # 整理 Prompt
@@ -75,12 +75,12 @@ async def run_daily_digest(target_date: str = None, model_override: str = None, 
     """
     from database import get_pool, save_memory, get_embedding, get_all_categories, match_category_by_name
     
-    now_taipei = datetime.now(TZ_TAIPEI)
+    now_cst = datetime.now(TZ_CST)
 
     if target_date:
         date_str = target_date
     else:
-        yesterday = now_taipei - timedelta(days=1)
+        yesterday = now_cst - timedelta(days=1)
         date_str = yesterday.strftime("%Y-%m-%d")
 
     # 防止同一日期被并发整理（定时器 + 手动触发可能同时进来）
@@ -90,17 +90,17 @@ async def run_daily_digest(target_date: str = None, model_override: str = None, 
             return {"date": date_str, "fragments": 0, "digests": 0, "skipped": "already running"}
         _digest_running.add(date_str)
     try:
-        return await _run_daily_digest_impl(date_str, now_taipei, model_override, prompt_override)
+        return await _run_daily_digest_impl(date_str, now_cst, model_override, prompt_override)
     finally:
         _digest_running.discard(date_str)
 
 
-async def _run_daily_digest_impl(date_str: str, now_taipei, model_override: str = None, prompt_override: str = None):
+async def _run_daily_digest_impl(date_str: str, now_cst, model_override: str = None, prompt_override: str = None):
     """实际执行每日整理（由 run_daily_digest 调用，已有并发保护）"""
     from database import get_pool, save_memory, get_embedding, get_all_categories, match_category_by_name
 
     print(f"\n🌙 开始每日记忆整理：{date_str}")
-    print(f"   当前时间（东八区）：{now_taipei.strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"   当前时间（东八区）：{now_cst.strftime('%Y-%m-%d %H:%M:%S')}")
     
     # 将日期字符串转为 date 对象（asyncpg 需要 date 对象而非字符串）
     from datetime import date as date_cls
@@ -476,7 +476,7 @@ async def daily_digest_scheduler():
     
     while True:
         try:
-            now = datetime.now(TZ_TAIPEI)
+            now = datetime.now(TZ_CST)
             
             # 计算下一个 0:05
             tomorrow = now.replace(hour=0, minute=5, second=0, microsecond=0)
@@ -490,7 +490,7 @@ async def daily_digest_scheduler():
             
             await asyncio.sleep(wait_seconds)
             
-            yesterday = (datetime.now(TZ_TAIPEI) - timedelta(days=1)).strftime("%Y-%m-%d")
+            yesterday = (datetime.now(TZ_CST) - timedelta(days=1)).strftime("%Y-%m-%d")
             
             # 1. 日页面生成（从碎片生成详细日页面）
             try:
@@ -674,11 +674,11 @@ async def generate_day_page(target_date: str = None, model_override: str = None)
     from database import get_pool, get_chat_messages_for_date, save_calendar_page
     from config import get_config
 
-    now_taipei = datetime.now(TZ_TAIPEI)
+    now_cst = datetime.now(TZ_CST)
     if target_date:
         date_str = target_date
     else:
-        yesterday = now_taipei - timedelta(days=1)
+        yesterday = now_cst - timedelta(days=1)
         date_str = yesterday.strftime("%Y-%m-%d")
 
     print(f"\n📅 开始生成日页面：{date_str}")
@@ -703,7 +703,7 @@ async def generate_day_page(target_date: str = None, model_override: str = None)
             try:
                 t = m["time"]
                 if hasattr(t, "astimezone"):
-                    t = t.astimezone(TZ_TAIPEI)
+                    t = t.astimezone(TZ_CST)
                 time_str = f"[{t.strftime('%H:%M')}] "
             except Exception:
                 pass
@@ -872,7 +872,7 @@ async def check_and_generate_summaries():
     from datetime import date as date_cls
     import calendar as cal_mod
 
-    now = datetime.now(TZ_TAIPEI)
+    now = datetime.now(TZ_CST)
     today = now.date()
 
     # ── 周总结：检查最近4周 ──
