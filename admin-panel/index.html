@@ -256,10 +256,17 @@ async function api(path, opts = {}) {
     localStorage.setItem('kiwi_admin_token', TOKEN);
     return api(path, opts);
   }
+  if (res.status >= 500) {
+    throw new Error(`服务器错误 (${res.status})，请检查后端日志`);
+  }
   return res;
 }
 
-async function apiJson(path, opts) { return (await api(path, opts)).json(); }
+async function apiJson(path, opts) {
+  const res = await api(path, opts);
+  const data = await res.json();
+  return data;
+}
 
 // ============================================================
 // Toast
@@ -680,8 +687,12 @@ async function triggerExtract() {
   toast('🧩 正在提取…');
   try {
     const data = await apiJson('/admin/extract-now', { method: 'POST' });
-    toast(`✅ 提取完成：${data.extracted || 0} 条新记忆`);
-  } catch(e) { toast('❌ 提取失败', false); }
+    if (data.error) {
+      toast(`❌ 提取失败：${data.error}`, false);
+    } else {
+      toast(`✅ 提取完成：+${data.extracted || data.saved || 0} 条，跳过 ${data.skipped || 0} 条`);
+    }
+  } catch(e) { toast('❌ 提取失败：' + e.message, false); }
 }
 
 async function triggerSeed() {

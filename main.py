@@ -1721,8 +1721,8 @@ async def stream_and_capture(headers: dict, body: dict, session_id: str, user_me
 # ============================================================
 
 @app.get("/debug/memories")
-async def debug_memories(q: str = "", limit: int = 20, category_id: int = None):
-    """查看和搜索记忆（支持分类筛选）"""
+async def debug_memories(q: str = "", limit: int = 20, offset: int = 0, sort: str = "newest", category_id: int = None, min_importance: int = None):
+    """查看和搜索记忆（支持分类筛选、分页、排序、重要度过滤）"""
     if not await get_memory_enabled():
         return {"error": "记忆系统未启用（设置 MEMORY_ENABLED=true 开启）"}
 
@@ -1731,24 +1731,37 @@ async def debug_memories(q: str = "", limit: int = 20, category_id: int = None):
 
     try:
         if q:
-            memories = await search_memories(q, limit=limit, track_recall=False)
+            memories = await search_memories(q, limit=limit + offset, track_recall=False)
             # 搜索结果如需按分类筛选
             if category_id is not None:
                 memories = [m for m in memories if m.get("category_id") == category_id]
+            if min_importance is not None:
+                memories = [m for m in memories if m.get("importance", 0) >= min_importance]
+            memories = memories[offset:offset + limit]
         else:
-            memories = await get_recent_memories(limit=limit, category_id=category_id)
+            memories = await get_recent_memories(limit=limit + offset, category_id=category_id)
+            if min_importance is not None:
+                memories = [m for m in memories if m.get("importance", 0) >= min_importance]
+            # 排序
+            if sort == "oldest":
+                memories.sort(key=lambda m: m.get("created_at", ""))
+            elif sort == "importance":
+                memories.sort(key=lambda m: m.get("importance", 0), reverse=True)
+            memories = memories[offset:offset + limit]
         
         total = await get_all_memories_count()
         
         return {
             "total_memories": total,
             "query": q or "(最近记忆)",
-            "results": [
+            "memories": [
                 {
                     "id": m["id"],
                     "title": m.get("title", ""),
                     "content": m["content"],
                     "importance": m["importance"],
+                    "is_permanent": m.get("is_permanent", False),
+                    "heat": m.get("heat", 0),
                     "created_at": str(m["created_at"]),
                     "memory_type": m.get("memory_type", "fragment"),
                     "category_id": m.get("category_id"),
@@ -2120,7 +2133,7 @@ async def api_extract_now():
             saved_count += 1
         
         total = await get_all_memories_count()
-        return {"status": "ok", "action": "extract", "saved": saved_count, "skipped": skipped_count, "total": total}
+        return {"status": "ok", "action": "extract", "saved": saved_count, "extracted": saved_count, "skipped": skipped_count, "total": total}
     except Exception as e:
         return {"error": str(e)}
 
