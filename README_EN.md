@@ -95,9 +95,10 @@ Persona → Profile → Locked → Calendar → Search results → Drowsy hint
 ## Quick start
 
 ### Prerequisites
-- Docker & Docker Compose (recommended), or Python 3.12+
-- PostgreSQL (with pgvector extension)
-- An LLM API key
+- Docker & Docker Compose (recommended, includes PostgreSQL + pgvector)
+- An LLM API key (OpenRouter / OpenAI / DeepSeek / any OpenAI-compatible provider)
+
+> 💡 No Docker? You can deploy manually with Python 3.12+ and your own PostgreSQL (pgvector extension required).
 
 ### Three steps
 
@@ -108,7 +109,7 @@ cd kiwi-mem
 
 # 2. Configure
 cp .env.example .env
-# Edit .env with your API_KEY and DATABASE_URL
+# Edit .env with your API_KEY (other settings have defaults)
 
 # 3. Launch
 docker compose up -d
@@ -125,11 +126,13 @@ API_BASE_URL=https://openrouter.ai/api/v1/chat/completions
 ```
 Point your client to `http://localhost:8080/v1`.
 
-**Step 2: Enable memory** (add PostgreSQL)
+**Step 2: Enable memory**
+
+If using Docker Compose, the database is already configured. Just set in `.env`:
 ```
-DATABASE_URL=postgresql://user:pass@host:5432/db
 MEMORY_ENABLED=true
 ```
+Manual deployments need to configure `DATABASE_URL` separately.
 
 **Step 3: Admin panel**
 Visit `/admin` to configure everything in your browser.
@@ -144,13 +147,13 @@ Visit `/admin` to configure everything in your browser.
 |---|---|---|
 | `API_KEY` | LLM API key | `sk-or-v1-xxxx` |
 | `API_BASE_URL` | LLM API endpoint | `https://openrouter.ai/api/v1/chat/completions` |
-| `DATABASE_URL` | PostgreSQL connection string | `postgresql://user:pass@host:5432/db` |
 
 ### Optional
 
 | Variable | Description | Default |
 |---|---|---|
-| `MEMORY_ENABLED` | Enable memory system | `false` |
+| `DATABASE_URL` | PostgreSQL connection string (auto-configured by Docker Compose; required for manual deployment) | — |
+| `MEMORY_ENABLED` | Enable memory system | `true` |
 | `DEFAULT_MODEL` | Default chat model | `anthropic/claude-sonnet-4` |
 | `PORT` | Gateway port | `8080` |
 | `ACCESS_TOKEN` | Admin panel password | empty (no auth) |

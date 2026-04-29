@@ -95,9 +95,10 @@ kiwi-mem 是一个为 **AI 生活伴侣场景**设计的记忆后端。
 ## 快速开始
 
 ### 前置要求
-- Docker & Docker Compose（推荐），或 Python 3.12+
-- PostgreSQL（需要 pgvector 扩展）
-- 一个 LLM API Key
+- Docker & Docker Compose（推荐，自带 PostgreSQL + pgvector）
+- 一个 LLM API Key（OpenRouter / OpenAI / DeepSeek / 其他 OpenAI 格式兼容服务商）
+
+> 💡 不用 Docker？也可以手动部署：需要 Python 3.12+ 和自己搭建的 PostgreSQL（需要 pgvector 扩展）。
 
 ### 三步启动
 
@@ -108,7 +109,7 @@ cd kiwi-mem
 
 # 2. 配置
 cp .env.example .env
-# 编辑 .env，填入 API_KEY 和 DATABASE_URL
+# 编辑 .env，填入你的 API_KEY（其他配置都有默认值）
 
 # 3. 启动
 docker compose up -d
@@ -119,17 +120,22 @@ docker compose up -d
 ### 分阶段上手
 
 **第一步：纯转发**（不需要数据库）
+
+在 `.env` 里只填 API_KEY 和 API_BASE_URL，设置 `MEMORY_ENABLED=false`：
 ```
 API_KEY=sk-your-key
 API_BASE_URL=https://openrouter.ai/api/v1/chat/completions
+MEMORY_ENABLED=false
 ```
 连接你的客户端，API 地址填 `http://localhost:8080/v1`。
 
-**第二步：开记忆**（加 PostgreSQL）
+**第二步：开记忆**
+
+如果用 Docker Compose 启动，数据库已经自动配好了，只需在 `.env` 里设置：
 ```
-DATABASE_URL=postgresql://user:pass@host:5432/db
 MEMORY_ENABLED=true
 ```
+手动部署的用户需要额外配置 `DATABASE_URL`。
 
 **第三步：管理面板**
 访问 `/admin`，在浏览器里配置一切。
@@ -144,13 +150,13 @@ MEMORY_ENABLED=true
 |---|---|---|
 | `API_KEY` | LLM API Key | `sk-or-v1-xxxx` |
 | `API_BASE_URL` | LLM API 地址 | `https://openrouter.ai/api/v1/chat/completions` |
-| `DATABASE_URL` | PostgreSQL 连接串 | `postgresql://user:pass@host:5432/db` |
 
 ### 可选
 
 | 变量 | 说明 | 默认值 |
 |---|---|---|
-| `MEMORY_ENABLED` | 记忆系统开关 | `false` |
+| `DATABASE_URL` | PostgreSQL 连接串（Docker Compose 自动配置，手动部署时必填） | 无 |
+| `MEMORY_ENABLED` | 记忆系统开关 | `true` |
 | `DEFAULT_MODEL` | 默认聊天模型 | `anthropic/claude-sonnet-4` |
 | `PORT` | 端口 | `8080` |
 | `ACCESS_TOKEN` | 管理面板密码 | 空（不设则无需密码） |
