@@ -247,7 +247,7 @@ app = FastAPI(title="AI Memory Gateway", version="3.1.0", lifespan=lifespan)
 class AdminAuthMiddleware(BaseHTTPMiddleware):
     """当设置了 ACCESS_TOKEN 时，/admin/* 和 /debug/* 端点需要认证"""
     
-    PROTECTED_PREFIXES = ("/admin/", "/debug/")
+    PROTECTED_PREFIXES = ("/admin/", "/debug/", "/sync/")
     
     async def dispatch(self, request: Request, call_next):
         path = request.url.path
@@ -705,11 +705,11 @@ async def process_memories_background(session_id: str, user_msg: str, assistant_
         # ===== v2.4 改进：组合式获取已有记忆 =====
         # 用当前对话内容搜索相关记忆（能覆盖到种子记忆）
         # track_recall=False: 这里是去重对比，不是用户聊天，不应该增加召回计数
-        related = await search_memories(user_msg, limit=50, track_recall=False)
+        related = await search_memories(user_msg, limit=50, track_recall=False, project_id=project_id)
         related_contents = [r["content"] for r in related]
         
         # 再补充最近的记忆（防止遗漏新存的）
-        recent = await get_recent_memories(limit=30)
+        recent = await get_recent_memories(limit=30, project_id=project_id)
         recent_contents = [r["content"] for r in recent]
         
         # 合并去重

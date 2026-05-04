@@ -1610,12 +1610,17 @@ async def _keyword_search(query: str, limit: int = 10, heat_params: dict = None,
 # 常用查询
 # ============================================================
 
-async def get_recent_memories(limit: int = 20, category_id: int = None):
+async def get_recent_memories(limit: int = 20, category_id: int = None, project_id: str = None):
     pool = await get_pool()
     async with pool.acquire() as conn:
+        # 构建 project_id 过滤条件
+        proj_clause = ""
+        if project_id:
+            proj_clause = f"AND m.project_id = '{project_id}'"
+        
         if category_id is not None:
             return await conn.fetch(
-                """SELECT m.id, m.content, m.importance, m.created_at, 
+                f"""SELECT m.id, m.content, m.importance, m.created_at, 
                           COALESCE(m.title, '') as title, COALESCE(m.memory_type, 'fragment') as memory_type,
                           m.category_id, COALESCE(c.name, '') as category_name, COALESCE(c.color, '') as category_color,
                           COALESCE(m.source, 'ai_extracted') as source,
@@ -1624,12 +1629,13 @@ async def get_recent_memories(limit: int = 20, category_id: int = None):
                    WHERE COALESCE(m.memory_type, 'fragment') NOT IN ('digested', 'dream_deleted')
                      AND (m.valid_until IS NULL OR m.valid_until > NOW())
                      AND m.category_id = $1
+                     {proj_clause}
                    ORDER BY m.created_at DESC LIMIT $2""",
                 category_id, limit,
             )
         else:
             return await conn.fetch(
-                """SELECT m.id, m.content, m.importance, m.created_at, 
+                f"""SELECT m.id, m.content, m.importance, m.created_at, 
                           COALESCE(m.title, '') as title, COALESCE(m.memory_type, 'fragment') as memory_type,
                           m.category_id, COALESCE(c.name, '') as category_name, COALESCE(c.color, '') as category_color,
                           COALESCE(m.source, 'ai_extracted') as source,
@@ -1637,6 +1643,7 @@ async def get_recent_memories(limit: int = 20, category_id: int = None):
                    FROM memories m LEFT JOIN memory_categories c ON m.category_id = c.id
                    WHERE COALESCE(m.memory_type, 'fragment') NOT IN ('digested', 'dream_deleted')
                      AND (m.valid_until IS NULL OR m.valid_until > NOW())
+                     {proj_clause}
                    ORDER BY m.created_at DESC LIMIT $1""",
                 limit,
             )
@@ -2894,7 +2901,7 @@ async def get_aging_memories(min_age_days: int = 5, limit: int = 20):
               AND COALESCE(is_permanent, false) = FALSE
               AND COALESCE(memory_type, 'fragment') IN ('fragment', 'daily_digest')
               AND (valid_until IS NULL OR valid_until > NOW())
-              AND COALESCE(resolution, 1.0) > 0.3
+              AND COALESCE(resolution, 1.0) >= 1.0
               AND importance < 8
               AND created_at < NOW() - $1 * INTERVAL '1 day'
             ORDER BY created_at ASC

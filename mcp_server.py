@@ -553,17 +553,23 @@ async def trigger_dream() -> str:
     通常在碎片堆积较多或长时间未整理时使用。
     """
     try:
-        async with httpx.AsyncClient(timeout=10, headers=GATEWAY_HEADERS) as client:
+        # /dream/start 返回 SSE 流，不能当 JSON 解析
+        # 只需要触发启动，不等待完成（Dream 可能跑几分钟）
+        async with httpx.AsyncClient(timeout=30, headers=GATEWAY_HEADERS) as client:
             resp = await client.post(
                 f"{GATEWAY_BASE}/dream/start",
                 json={"trigger_type": "manual"},
             )
-            data = resp.json()
 
-        if "error" in data:
-            return f"Dream 启动失败：{data['error']}"
-
-        return f"🌙 Dream 已启动：{json.dumps(data, ensure_ascii=False)}"
+        if resp.status_code == 200:
+            return "🌙 Dream 已启动，可以用 get_dream_status 查看进度。"
+        else:
+            # 尝试读取错误信息
+            try:
+                data = resp.json()
+                return f"Dream 启动失败：{data.get('error', resp.text)}"
+            except Exception:
+                return f"Dream 启动失败（HTTP {resp.status_code}）：{resp.text[:200]}"
 
     except Exception as e:
         return f"启动出错：{str(e)}"
