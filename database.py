@@ -262,6 +262,7 @@ async def init_tables():
                 thinking        TEXT,
                 tool_events     JSONB,
                 memory_result   JSONB,
+                memory_event    JSONB,
                 web_search_results JSONB,
                 versions        JSONB,
                 version_index   INTEGER DEFAULT 0,
@@ -383,6 +384,7 @@ async def init_tables():
         # dream_logs 表扩展 — 新增列自动迁移
         for col_name, col_def in [
             ("links_created", "INTEGER DEFAULT 0"),
+            ("memories_softened", "INTEGER DEFAULT 0"),
         ]:
             has_col = await conn.fetchval("""
                 SELECT EXISTS (
@@ -437,6 +439,17 @@ async def init_tables():
             await conn.execute("ALTER TABLE chat_messages ADD COLUMN emotion_flag TEXT DEFAULT 'normal'")
             print("✅ chat_messages 表已添加 emotion_flag 列")
 
+        # v5.2.1：chat_messages 表扩展 — 记忆事件持久化
+        has_memory_event = await conn.fetchval("""
+            SELECT EXISTS (
+                SELECT 1 FROM information_schema.columns
+                WHERE table_name = 'chat_messages' AND column_name = 'memory_event'
+            )
+        """)
+        if not has_memory_event:
+            await conn.execute("ALTER TABLE chat_messages ADD COLUMN memory_event JSONB")
+            print("✅ chat_messages 表已添加 memory_event 列")
+
         # v5.3：时间有效期窗口（MemPalace 启发）
         for col_name, col_def in [
             ("valid_from", "TIMESTAMPTZ DEFAULT NOW()"),
@@ -474,6 +487,17 @@ async def init_tables():
             await conn.execute("ALTER TABLE calendar_pages ADD COLUMN digest TEXT DEFAULT ''")
             print("✅ calendar_pages 表已添加 digest 列（模型注入概要）")
 
+        # v6.0：日历页面添加 title 字段（用户可编辑的标题）
+        has_cal_title = await conn.fetchval("""
+            SELECT EXISTS (
+                SELECT 1 FROM information_schema.columns
+                WHERE table_name = 'calendar_pages' AND column_name = 'title'
+            )
+        """)
+        if not has_cal_title:
+            await conn.execute("ALTER TABLE calendar_pages ADD COLUMN title TEXT DEFAULT ''")
+            print("✅ calendar_pages 表已添加 title 列（页面标题）")
+
         # v5.2：记忆关系标注表（typed edge）
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS memory_edges (
@@ -489,7 +513,46 @@ async def init_tables():
             );
         """)
 
-    print("✅ 数据库表结构已就绪（v5.3 时间有效期 + 矛盾检测）")
+        # v5.8：记忆表添加 project_id 列（项目级记忆）
+        has_mem_project_id = await conn.fetchval("""
+            SELECT EXISTS (
+                SELECT 1 FROM information_schema.columns 
+                WHERE table_name = 'memories' AND column_name = 'project_id'
+            )
+        """)
+        if not has_mem_project_id:
+            await conn.execute("ALTER TABLE memories ADD COLUMN project_id TEXT")
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_memories_project ON memories (project_id) WHERE project_id IS NOT NULL")
+            print("✅ memories 表已添加 project_id 列")
+
+        # v5.8：项目文件块表（分块 + 向量搜索）
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS project_file_chunks (
+                id              SERIAL PRIMARY KEY,
+                project_id      TEXT NOT NULL,
+                file_id         TEXT NOT NULL,
+                file_name       TEXT DEFAULT '',
+                chunk_index     INTEGER DEFAULT 0,
+                content         TEXT NOT NULL,
+                embedding       TEXT,
+                created_at      TIMESTAMPTZ DEFAULT NOW()
+            );
+        """)
+        await conn.execute("CREATE INDEX IF NOT EXISTS idx_pfc_project ON project_file_chunks (project_id)")
+        await conn.execute("CREATE INDEX IF NOT EXISTS idx_pfc_file ON project_file_chunks (project_id, file_id)")
+
+        # v5.9：记忆软化系统 — resolution 字段
+        has_resolution = await conn.fetchval("""
+            SELECT EXISTS (
+                SELECT 1 FROM information_schema.columns
+                WHERE table_name = 'memories' AND column_name = 'resolution'
+            )
+        """)
+        if not has_resolution:
+            await conn.execute("ALTER TABLE memories ADD COLUMN resolution FLOAT DEFAULT 1.0")
+            print("✅ memories 表已添加 resolution 列（记忆软化系统）")
+
+    print("✅ 数据库表结构已就绪（v5.9 记忆软化）")
 
 
 # ============================================================
@@ -787,7 +850,7 @@ async def get_handoff_messages(limit: int = 6):
 # 记忆操作
 # ============================================================
 
-async def save_memory(content: str, importance: int = 5, source_session: str = "", title: str = "", category_id: int = None, source: str = "ai_extracted", emotional_weight: int = 0) -> int:
+async def save_memory(content: str, importance: int = 5, source_session: str = "", title: str = "", category_id: int = None, source: str = "ai_extracted", emotional_weight: int = 0, project_id: str = None) -> int:
     """
     存储新记忆，自动生成 embedding 向量
     如果 embedding 生成失败，记忆仍会存储（只是没有向量，降级为关键词搜索）
@@ -799,6 +862,7 @@ async def save_memory(content: str, importance: int = 5, source_session: str = "
     - 'seed_import': 种子记忆导入
     
     emotional_weight: 情绪浓度 0-10，0=普通，越高越浓
+    project_id: 项目ID，非空时为项目级记忆，空为全局记忆
     
     返回：新记忆的 ID（v5.3）
     """
@@ -810,16 +874,17 @@ async def save_memory(content: str, importance: int = 5, source_session: str = "
     pool = await get_pool()
     async with pool.acquire() as conn:
         new_id = await conn.fetchval(
-            "INSERT INTO memories (content, importance, source_session, embedding, title, category_id, source, emotional_weight) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id",
-            content, importance, source_session, embedding_json, title, category_id, source, emotional_weight,
+            "INSERT INTO memories (content, importance, source_session, embedding, title, category_id, source, emotional_weight, project_id) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id",
+            content, importance, source_session, embedding_json, title, category_id, source, emotional_weight, project_id,
         )
     
     title_tag = f"[{title}] " if title else ""
     emo_tag = f" 🩷emo={emotional_weight}" if emotional_weight > 0 else ""
+    proj_tag = f" 📂proj={project_id}" if project_id else ""
     if embedding:
-        print(f"💎 记忆已存储 #{new_id}（含向量，{len(embedding)}维{emo_tag}）: {title_tag}{content[:50]}...")
+        print(f"💎 记忆已存储 #{new_id}（含向量，{len(embedding)}维{emo_tag}{proj_tag}）: {title_tag}{content[:50]}...")
     else:
-        print(f"📝 记忆已存储 #{new_id}（无向量{emo_tag}）: {title_tag}{content[:50]}...")
+        print(f"📝 记忆已存储 #{new_id}（无向量{emo_tag}{proj_tag}）: {title_tag}{content[:50]}...")
     
     return new_id
 
@@ -907,7 +972,7 @@ async def update_memory(memory_id: int, content: str = None, importance: int = N
 # 记忆搜索（v3.0 向量语义搜索）
 # ============================================================
 
-async def search_memories(query: str, limit: int = 10, track_recall: bool = True):
+async def search_memories(query: str, limit: int = 10, track_recall: bool = True, project_id: str = None):
     """
     搜索相关记忆 —— RRF 混合检索（v5.7）
     
@@ -920,6 +985,7 @@ async def search_memories(query: str, limit: int = 10, track_recall: bool = True
     
     参数：
         track_recall: 是否记录召回追踪数据。聊天注入时=True，去重对比时=False
+        project_id: 项目ID。提供时搜索全局记忆+该项目记忆；不提供时只搜全局记忆
     
     降级：如果 embedding 生成失败，只用关键词搜索
     """
@@ -934,11 +1000,11 @@ async def search_memories(query: str, limit: int = 10, track_recall: bool = True
     if query_embedding is None:
         # embedding 失败，只用关键词搜索
         print("⚠️  向量搜索不可用 → 仅关键词搜索")
-        results = await _keyword_search(query, limit, heat_params)
+        results = await _keyword_search(query, limit, heat_params, project_id=project_id)
     else:
         # 第二步：并行执行两路搜索
-        vec_task = _vector_search(query_embedding, expanded_limit, heat_params)
-        kw_task = _keyword_search(query, expanded_limit, heat_params)
+        vec_task = _vector_search(query_embedding, expanded_limit, heat_params, project_id=project_id)
+        kw_task = _keyword_search(query, expanded_limit, heat_params, project_id=project_id)
         vec_results, kw_results = await asyncio.gather(vec_task, kw_task)
         
         # 第三步：RRF 合并
@@ -993,7 +1059,6 @@ async def search_memories(query: str, limit: int = 10, track_recall: bool = True
                 """, ids, json.dumps([query_hash]))
             except Exception as e:
                 # 降级：如果合并语句失败（如 access_query_hashes 列不存在），只更新 access_count
-                # 打日志便于排查 schema 缺失或 jsonb 操作不兼容等情况，不再 silent 吞掉
                 print(f"   ⚠️ 召回追踪合并 UPDATE 失败，降级为只更新 access_count: {type(e).__name__}: {e}")
                 try:
                     await conn.execute("""
@@ -1014,26 +1079,50 @@ async def search_memories(query: str, limit: int = 10, track_recall: bool = True
     return results
 
 
-async def _vector_search(query_embedding: list, limit: int, heat_params: dict) -> list:
+async def _vector_search(query_embedding: list, limit: int, heat_params: dict, project_id: str = None) -> list:
     """
     纯向量语义搜索 —— 不做召回追踪，仅返回评分结果。
+    project_id: 提供时搜全局(NULL)+该项目；不提供时只搜全局(NULL)
     """
     pool = await get_pool()
     async with pool.acquire() as conn:
-        rows = await conn.fetch(
-            """SELECT m.id, m.content, m.importance, m.created_at, m.embedding, 
-                      COALESCE(m.title, '') as title, COALESCE(m.memory_type, 'fragment') as memory_type,
-                      m.category_id, COALESCE(c.name, '') as category_name, COALESCE(c.color, '') as category_color,
-                      COALESCE(m.source, 'ai_extracted') as source,
-                      COALESCE(m.emotional_weight, 0) as emotional_weight,
-                      COALESCE(m.access_count, 0) as access_count,
-                      COALESCE(m.access_query_hashes, '[]'::jsonb) as access_query_hashes,
-                      COALESCE(m.is_permanent, false) as is_permanent,
-                      m.valid_until
-               FROM memories m LEFT JOIN memory_categories c ON m.category_id = c.id
-               WHERE COALESCE(m.memory_type, 'fragment') NOT IN ('digested', 'dream_deleted')
-                 AND (m.valid_until IS NULL OR m.valid_until > NOW())"""
-        )
+        # 构建项目过滤条件
+        if project_id:
+            project_filter = "AND (m.project_id IS NULL OR m.project_id = $1)"
+            rows = await conn.fetch(
+                f"""SELECT m.id, m.content, m.importance, m.created_at, m.embedding, 
+                          COALESCE(m.title, '') as title, COALESCE(m.memory_type, 'fragment') as memory_type,
+                          m.category_id, COALESCE(c.name, '') as category_name, COALESCE(c.color, '') as category_color,
+                          COALESCE(m.source, 'ai_extracted') as source,
+                          COALESCE(m.emotional_weight, 0) as emotional_weight,
+                          COALESCE(m.access_count, 0) as access_count,
+                          COALESCE(m.access_query_hashes, '[]'::jsonb) as access_query_hashes,
+                          COALESCE(m.is_permanent, false) as is_permanent,
+                          COALESCE(m.resolution, 1.0) as resolution,
+                          m.valid_until, m.project_id
+                   FROM memories m LEFT JOIN memory_categories c ON m.category_id = c.id
+                   WHERE COALESCE(m.memory_type, 'fragment') NOT IN ('digested', 'dream_deleted')
+                     AND (m.valid_until IS NULL OR m.valid_until > NOW())
+                     {project_filter}""",
+                project_id,
+            )
+        else:
+            rows = await conn.fetch(
+                """SELECT m.id, m.content, m.importance, m.created_at, m.embedding, 
+                          COALESCE(m.title, '') as title, COALESCE(m.memory_type, 'fragment') as memory_type,
+                          m.category_id, COALESCE(c.name, '') as category_name, COALESCE(c.color, '') as category_color,
+                          COALESCE(m.source, 'ai_extracted') as source,
+                          COALESCE(m.emotional_weight, 0) as emotional_weight,
+                          COALESCE(m.access_count, 0) as access_count,
+                          COALESCE(m.access_query_hashes, '[]'::jsonb) as access_query_hashes,
+                          COALESCE(m.is_permanent, false) as is_permanent,
+                          COALESCE(m.resolution, 1.0) as resolution,
+                          m.valid_until, m.project_id
+                   FROM memories m LEFT JOIN memory_categories c ON m.category_id = c.id
+                   WHERE COALESCE(m.memory_type, 'fragment') NOT IN ('digested', 'dream_deleted')
+                     AND (m.valid_until IS NULL OR m.valid_until > NOW())
+                     AND m.project_id IS NULL"""
+            )
     
     if not rows:
         return []
@@ -1084,6 +1173,7 @@ async def _vector_search(query_embedding: list, limit: int, heat_params: dict) -
             "source": row.get("source", "ai_extracted"),
             "is_permanent": row.get("is_permanent", False),
             "emotional_weight": row.get("emotional_weight", 0),
+            "resolution": row.get("resolution", 1.0),
             "heat": round(heat, 4),
             "similarity": round(sim, 4),
             "score": round(score, 4),
@@ -1221,10 +1311,77 @@ async def _check_auto_lock(memory_ids: list, heat_params: dict = None):
 
 
 # ============================================================
+# v5.9：记忆软化（模拟人脑遗忘曲线中的细节模糊化）
+# ============================================================
+
+async def soften_memory(memory_id: int, softened_content: str, target_resolution: float = 0.5, extend_days: int = 30) -> bool:
+    """
+    软化一条记忆 —— 用 LLM 压缩后的内容替换原文，降低精度但延长寿命。
+    
+    模拟人脑记忆的自然模糊化过程：
+    - 具体细节（时间、引用、数字）淡去
+    - 核心情感和关键洞察保留
+    - 原始 access_count / query_hashes 保留（召回历史仍然有效）
+    
+    参数：
+        memory_id: 要软化的碎片 ID
+        softened_content: LLM 生成的压缩内容（由 Dream 提供）
+        target_resolution: 目标精度（1.0=原文, 0.5=软化, 0.3=深度软化）
+        extend_days: 续命天数（从现在起算，设为 valid_until 的最小保底）
+    
+    返回：是否成功
+    """
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        # 检查记忆是否存在且未锁定
+        row = await conn.fetchrow(
+            "SELECT id, title, content, is_permanent, resolution FROM memories WHERE id = $1",
+            memory_id
+        )
+        if not row:
+            print(f"   ⚠️ 软化失败: #{memory_id} 不存在")
+            return False
+        
+        if row["is_permanent"]:
+            print(f"   ⚠️ 软化跳过: #{memory_id} 已锁定（锁定记忆不软化）")
+            return False
+        
+        current_resolution = row.get("resolution") or 1.0
+        if target_resolution >= current_resolution:
+            print(f"   ⚠️ 软化跳过: #{memory_id} 当前精度 {current_resolution} 已 ≤ 目标 {target_resolution}")
+            return False
+        
+        # 重新生成 embedding（内容变了，向量也要更新）
+        title = row["title"] or ""
+        embed_text = f"{title} {softened_content}" if title else softened_content
+        embedding = await get_embedding(embed_text)
+        embedding_json = json.dumps(embedding) if embedding else None
+        
+        # 更新记忆：内容 + 精度 + embedding + 续命
+        await conn.execute("""
+            UPDATE memories
+            SET content = $1,
+                resolution = $2,
+                embedding = $3,
+                valid_until = GREATEST(
+                    COALESCE(valid_until, NOW() + $4 * INTERVAL '1 day'),
+                    NOW() + $4 * INTERVAL '1 day'
+                )
+            WHERE id = $5
+        """, softened_content, target_resolution, embedding_json, extend_days, memory_id)
+        
+        title_tag = row["title"] or f"#{memory_id}"
+        old_len = len(row["content"])
+        new_len = len(softened_content)
+        print(f"   🫧 记忆软化: {title_tag}（{current_resolution:.1f} → {target_resolution:.1f}, {old_len}字 → {new_len}字, +{extend_days}天）")
+        return True
+
+
+# ============================================================
 # 关键词搜索（降级方案）
 # ============================================================
 
-# 同义词表（保留用于降级搜索，可自行扩展）
+# 同义词表（保留用于降级搜索）
 SYNONYM_GROUPS = [
     {"吃药", "用药", "药物", "服药", "药方"},
     {"名字", "叫什么", "称呼", "昵称", "小名"},
@@ -1234,10 +1391,13 @@ SYNONYM_GROUPS = [
     {"工作", "职业", "职位", "职务"},
     {"喜欢", "偏好", "爱好", "兴趣"},
     {"健康", "身体", "疾病", "病史", "生病"},
+    {"血糖", "糖尿病", "胰岛素"},
     {"情感", "感情", "情绪", "心理"},
-    {"写作", "创作", "文章", "文案"},
-    {"投资", "理财", "资产", "财务"},
+
+    {"公众号", "小红书", "写作", "创作"},
+    {"投资", "理财", "黄金", "资产"},
     # 可按需添加更多同义词组
+
 ]
 
 CJK_PATTERN = re.compile(r'[\u4e00-\u9fff\u3400-\u4dbf]')
@@ -1245,11 +1405,10 @@ EN_WORD_PATTERN = re.compile(r'[a-zA-Z0-9]+')
 NUM_PATTERN = re.compile(r'\d{2,}')
 
 # ---- jieba 初始化 ----
-# 系统内置词汇（防止被错误切分）
+# 领域专用词汇（防止被错误切分）
 _JIEBA_SYSTEM_WORDS = [
     "记忆碎片", "日页面", "用户画像",
 ]
-
 # 用户自定义词汇：通过环境变量 JIEBA_CUSTOM_WORDS 配置，逗号分隔
 # 示例：JIEBA_CUSTOM_WORDS=用户昵称,助手名字,项目名称
 _custom_words_env = os.getenv("JIEBA_CUSTOM_WORDS", "")
@@ -1345,7 +1504,7 @@ def extract_search_keywords(query: str) -> List[str]:
     return list(keywords)
 
 
-async def _keyword_search(query: str, limit: int = 10, heat_params: dict = None):
+async def _keyword_search(query: str, limit: int = 10, heat_params: dict = None, project_id: str = None):
     """
     关键词搜索（v5.7：升级为 RRF 混合检索的一路）
     
@@ -1353,6 +1512,7 @@ async def _keyword_search(query: str, limit: int = 10, heat_params: dict = None)
     - 同时搜索标题和内容（标题命中权重更高）
     - 返回格式与向量搜索完全一致（含热度字段）
     - 不做召回追踪（由 search_memories 统一处理）
+    - v5.8：project_id 过滤
     """
     keywords = extract_search_keywords(query)
     
@@ -1382,7 +1542,15 @@ async def _keyword_search(query: str, limit: int = 10, heat_params: dict = None)
         title_where = [f"COALESCE(m.title, '') ILIKE '%' || ${i+1} || '%'" for i in range(len(keywords))]
         where_clause = " OR ".join(content_where + title_where)
         
-        limit_idx = len(keywords) + 1
+        # v5.8：项目过滤
+        if project_id:
+            proj_idx = len(keywords) + 1
+            project_clause = f"AND (m.project_id IS NULL OR m.project_id = ${proj_idx})"
+            params.append(project_id)
+            limit_idx = proj_idx + 1
+        else:
+            project_clause = "AND m.project_id IS NULL"
+            limit_idx = len(keywords) + 1
         params.append(limit)
         
         sql = f"""
@@ -1395,6 +1563,7 @@ async def _keyword_search(query: str, limit: int = 10, heat_params: dict = None)
                 COALESCE(m.access_count, 0) as access_count,
                 COALESCE(m.access_query_hashes, '[]'::jsonb) as access_query_hashes,
                 COALESCE(m.is_permanent, false) as is_permanent,
+                COALESCE(m.resolution, 1.0) as resolution,
                 ({hit_count_expr}) AS hit_count,
                 (
                     0.5 * ({hit_count_expr})::float / {max_hits} +
@@ -1405,6 +1574,7 @@ async def _keyword_search(query: str, limit: int = 10, heat_params: dict = None)
             WHERE ({where_clause})
               AND COALESCE(m.memory_type, 'fragment') NOT IN ('digested', 'dream_deleted')
               AND (m.valid_until IS NULL OR m.valid_until > NOW())
+              {project_clause}
             ORDER BY score DESC, m.importance DESC, m.created_at DESC
             LIMIT ${limit_idx}
         """
@@ -1427,6 +1597,7 @@ async def _keyword_search(query: str, limit: int = 10, heat_params: dict = None)
                 "source": r["source"],
                 "is_permanent": r.get("is_permanent", False),
                 "emotional_weight": r.get("emotional_weight", 0),
+                "resolution": r.get("resolution", 1.0),
                 "heat": round(heat, 4),
                 "similarity": 0.0,
                 "score": round(float(r["score"]), 4),
@@ -1447,7 +1618,8 @@ async def get_recent_memories(limit: int = 20, category_id: int = None):
                 """SELECT m.id, m.content, m.importance, m.created_at, 
                           COALESCE(m.title, '') as title, COALESCE(m.memory_type, 'fragment') as memory_type,
                           m.category_id, COALESCE(c.name, '') as category_name, COALESCE(c.color, '') as category_color,
-                          COALESCE(m.source, 'ai_extracted') as source
+                          COALESCE(m.source, 'ai_extracted') as source,
+                          COALESCE(m.resolution, 1.0) as resolution
                    FROM memories m LEFT JOIN memory_categories c ON m.category_id = c.id
                    WHERE COALESCE(m.memory_type, 'fragment') NOT IN ('digested', 'dream_deleted')
                      AND (m.valid_until IS NULL OR m.valid_until > NOW())
@@ -1460,7 +1632,8 @@ async def get_recent_memories(limit: int = 20, category_id: int = None):
                 """SELECT m.id, m.content, m.importance, m.created_at, 
                           COALESCE(m.title, '') as title, COALESCE(m.memory_type, 'fragment') as memory_type,
                           m.category_id, COALESCE(c.name, '') as category_name, COALESCE(c.color, '') as category_color,
-                          COALESCE(m.source, 'ai_extracted') as source
+                          COALESCE(m.source, 'ai_extracted') as source,
+                          COALESCE(m.resolution, 1.0) as resolution
                    FROM memories m LEFT JOIN memory_categories c ON m.category_id = c.id
                    WHERE COALESCE(m.memory_type, 'fragment') NOT IN ('digested', 'dream_deleted')
                      AND (m.valid_until IS NULL OR m.valid_until > NOW())
@@ -2013,13 +2186,13 @@ async def sync_upsert_messages(conv_id: str, messages: list):
                     INSERT INTO chat_messages (
                         id, conversation_id, role, content, time, model,
                         streaming, error, token_info, thinking, tool_events,
-                        memory_result, web_search_results, versions, version_index,
+                        memory_result, memory_event, web_search_results, versions, version_index,
                         attachments, usage, summary, sort_order
                     ) VALUES (
                         $1, $2, $3, $4, $5, $6,
                         $7, $8, $9, $10, $11,
-                        $12, $13, $14, $15,
-                        $16, $17, $18, $19
+                        $12, $13, $14, $15, $16,
+                        $17, $18, $19, $20
                     )
                 """,
                     str(msg.get("id") or f"m-{conv_id}-{idx}"),
@@ -2034,6 +2207,7 @@ async def sync_upsert_messages(conv_id: str, messages: list):
                     msg.get("thinking") if isinstance(msg.get("thinking"), str) else None,
                     _to_json(msg.get("toolEvents") or msg.get("tool_events")),
                     _to_json(msg.get("memoryResult") or msg.get("memory_result")),
+                    _to_json(msg.get("memoryEvent") or msg.get("memory_event")),
                     _to_json(msg.get("webSearchResults") or msg.get("web_search_results")),
                     _to_json(msg.get("versions")),
                     int(msg.get("versionIndex", msg.get("version_index", 0)) or 0),
@@ -2353,8 +2527,9 @@ async def fire_reminder(rid: str, repeat_type: str, repeat_config: dict = None) 
 # ============================================================
 
 async def save_calendar_page(date_str: str, page_type: str, sections: list, diary: str = "",
-                              keywords: list = None, model_used: str = "", summary: str = "", digest: str = ""):
-    """保存或更新日历页面（upsert），v5.4 summary / v5.5 digest"""
+                              keywords: list = None, model_used: str = "", summary: str = "", digest: str = "",
+                              title: str = ""):
+    """保存或更新日历页面（upsert），v5.4 summary / v5.5 digest / v6.0 title"""
     from datetime import date as date_cls
     pool = await get_pool()
     d = date_cls.fromisoformat(date_str)
@@ -2362,8 +2537,8 @@ async def save_calendar_page(date_str: str, page_type: str, sections: list, diar
     sec = json.dumps(sections, ensure_ascii=False)
     async with pool.acquire() as conn:
         row = await conn.fetchrow("""
-            INSERT INTO calendar_pages (date, type, sections, diary, keywords, model_used, summary, digest, updated_at)
-            VALUES ($1, $2, $3::jsonb, $4, $5::jsonb, $6, $7, $8, NOW())
+            INSERT INTO calendar_pages (date, type, sections, diary, keywords, model_used, summary, digest, title, updated_at)
+            VALUES ($1, $2, $3::jsonb, $4, $5::jsonb, $6, $7, $8, $9, NOW())
             ON CONFLICT (date, type) DO UPDATE SET
                 sections = EXCLUDED.sections,
                 diary = EXCLUDED.diary,
@@ -2371,9 +2546,10 @@ async def save_calendar_page(date_str: str, page_type: str, sections: list, diar
                 model_used = EXCLUDED.model_used,
                 summary = EXCLUDED.summary,
                 digest = EXCLUDED.digest,
+                title = EXCLUDED.title,
                 updated_at = NOW()
             RETURNING id
-        """, d, page_type, sec, diary, kw, model_used, summary, digest)
+        """, d, page_type, sec, diary, kw, model_used, summary, digest, title)
     return row["id"] if row else None
 
 
@@ -2409,6 +2585,28 @@ async def get_calendar_range(start: str, end: str, page_type: str = None):
                 s, e
             )
     return [dict(r) for r in rows]
+
+
+async def delete_calendar_page(date_str: str, page_type: str = "day"):
+    """删除指定日期的日历页面（同时删除关联评论）"""
+    from datetime import date as date_cls
+    pool = await get_pool()
+    d = date_cls.fromisoformat(date_str)
+    async with pool.acquire() as conn:
+        # 先查出 page id，用于删评论
+        row = await conn.fetchrow(
+            "SELECT id FROM calendar_pages WHERE date = $1 AND type = $2", d, page_type
+        )
+        if row:
+            # 删除关联评论
+            await conn.execute(
+                "DELETE FROM comments WHERE target_type = 'calendar_page' AND target_id = $1", row['id']
+            )
+        # 删除页面
+        result = await conn.execute(
+            "DELETE FROM calendar_pages WHERE date = $1 AND type = $2", d, page_type
+        )
+    return "DELETE" in result
 
 
 async def get_calendar_for_injection(lookback_days: int = 365):
@@ -2545,13 +2743,7 @@ async def get_calendar_for_injection(lookback_days: int = 365):
 
 
 async def get_chat_messages_for_date(date_str: str):
-    """读取指定日期的所有聊天消息（用于生成日页面）
-
-    注：time 字段是 TIMESTAMPTZ，直接 ::date 会按 PostgreSQL 服务器时区
-    （多数云数据库默认 UTC）转换，导致东八区凌晨 0:00-7:59 的消息被
-    归到前一天。这里强制按 Asia/Shanghai 算 date，与代码中其他位置
-    使用的 TZ_CST = UTC+8 保持一致。
-    """
+    """读取指定日期的所有聊天消息（用于生成日页面）"""
     from datetime import date as date_cls
     pool = await get_pool()
     d = date_cls.fromisoformat(date_str)
@@ -2665,13 +2857,49 @@ async def get_unprocessed_memories():
     pool = await get_pool()
     async with pool.acquire() as conn:
         rows = await conn.fetch("""
-            SELECT id, title, content, importance, category_id, created_at
+            SELECT id, title, content, importance, category_id, created_at,
+                   COALESCE(resolution, 1.0) as resolution
             FROM memories
             WHERE dream_processed_at IS NULL
               AND memory_type IN ('fragment', 'daily_digest')
               AND (valid_until IS NULL OR valid_until > NOW())
             ORDER BY created_at ASC
         """)
+    return [dict(r) for r in rows]
+
+
+async def get_aging_memories(min_age_days: int = 5, limit: int = 20):
+    """
+    获取适合软化的老碎片（v5.9）
+    
+    条件：
+    - 已经被 Dream 处理过（不是新碎片）
+    - 未锁定
+    - 仍然活着
+    - resolution > 0.3（还有软化空间）
+    - 创建超过 min_age_days 天
+    - importance < 8（高重要性的不主动软化）
+    
+    按热度从低到高排序（最冷的优先考虑软化）
+    """
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch("""
+            SELECT id, title, content, importance, created_at,
+                   COALESCE(resolution, 1.0) as resolution,
+                   COALESCE(access_count, 0) as access_count,
+                   COALESCE(emotional_weight, 0) as emotional_weight
+            FROM memories
+            WHERE dream_processed_at IS NOT NULL
+              AND COALESCE(is_permanent, false) = FALSE
+              AND COALESCE(memory_type, 'fragment') IN ('fragment', 'daily_digest')
+              AND (valid_until IS NULL OR valid_until > NOW())
+              AND COALESCE(resolution, 1.0) > 0.3
+              AND importance < 8
+              AND created_at < NOW() - $1 * INTERVAL '1 day'
+            ORDER BY created_at ASC
+            LIMIT $2
+        """, min_age_days, limit)
     return [dict(r) for r in rows]
 
 
@@ -3002,3 +3230,285 @@ async def resolve_model_endpoint(model_id: str) -> tuple:
     api_url = _raw if _raw.rstrip("/").endswith("/chat/completions") else f"{_raw.rstrip('/')}/chat/completions"
     api_key = os.getenv("MEMORY_API_KEY", "") or os.getenv("API_KEY", "")
     return api_url, api_key
+
+
+# ============================================================
+# v5.8：项目相关函数
+# ============================================================
+
+async def get_project_by_id(project_id: str) -> dict:
+    """根据 ID 获取项目（含 instructions, memory, files）"""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT * FROM chat_projects WHERE id = $1", project_id
+        )
+        if not row:
+            return None
+        return dict(row)
+
+
+# ============================================================
+# v5.8：项目文件分块 + 向量搜索
+# ============================================================
+
+def chunk_text(text: str, chunk_size: int = 500, overlap: int = 50) -> list:
+    """
+    把长文本切成固定大小的块（带重叠防断句）。
+    返回 list[str]。
+    """
+    if not text or len(text.strip()) == 0:
+        return []
+    
+    text = text.strip()
+    chunks = []
+    start = 0
+    while start < len(text):
+        end = start + chunk_size
+        chunk = text[start:end].strip()
+        if chunk:
+            chunks.append(chunk)
+        if end >= len(text):
+            break
+        start = end - overlap
+    
+    return chunks
+
+
+async def save_file_chunks(project_id: str, file_id: str, file_name: str, text_content: str, chunk_size: int = 500, overlap: int = 50) -> int:
+    """
+    把文件文本切块 + 生成嵌入 + 存入数据库。
+    返回存储的块数。
+    """
+    chunks = chunk_text(text_content, chunk_size=chunk_size, overlap=overlap)
+    if not chunks:
+        return 0
+    
+    pool = await get_pool()
+    saved = 0
+    
+    for i, chunk in enumerate(chunks):
+        embedding = await get_embedding(chunk)
+        embedding_json = json.dumps(embedding) if embedding else None
+        
+        async with pool.acquire() as conn:
+            await conn.execute(
+                """INSERT INTO project_file_chunks (project_id, file_id, file_name, chunk_index, content, embedding)
+                   VALUES ($1, $2, $3, $4, $5, $6)""",
+                project_id, file_id, file_name, i, chunk, embedding_json,
+            )
+        saved += 1
+    
+    print(f"📄 文件 [{file_name}] 切成 {saved} 块并存储（项目 {project_id}）")
+    return saved
+
+
+async def search_file_chunks(project_id: str, query: str, limit: int = 6) -> list:
+    """
+    在项目文件块中语义搜索，返回最相关的块。
+    """
+    query_embedding = await get_embedding(query)
+    if query_embedding is None:
+        return []
+    
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT id, file_id, file_name, chunk_index, content, embedding FROM project_file_chunks WHERE project_id = $1",
+            project_id,
+        )
+    
+    if not rows:
+        return []
+    
+    scored = []
+    for row in rows:
+        if row["embedding"] is None:
+            continue
+        try:
+            chunk_emb = json.loads(row["embedding"])
+        except (json.JSONDecodeError, TypeError):
+            continue
+        
+        sim = cosine_similarity(query_embedding, chunk_emb)
+        if sim < 0.3:  # 文件块用更低的阈值（内容可能不是对话式的）
+            continue
+        
+        scored.append({
+            "id": row["id"],
+            "file_id": row["file_id"],
+            "file_name": row["file_name"],
+            "chunk_index": row["chunk_index"],
+            "content": row["content"],
+            "similarity": sim,
+        })
+    
+    scored.sort(key=lambda x: x["similarity"], reverse=True)
+    results = scored[:limit]
+    
+    if results:
+        print(f"📂 文件搜索 '{query[:30]}...' → 命中 {len(results)} 块（项目 {project_id}）")
+        for r in results[:3]:
+            print(f"   📎 [{r['file_name']}#chunk{r['chunk_index']}] sim={r['similarity']:.3f}: {r['content'][:50]}...")
+    
+    return results
+
+
+async def delete_file_chunks(project_id: str, file_id: str) -> int:
+    """删除某个文件的所有块"""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        result = await conn.execute(
+            "DELETE FROM project_file_chunks WHERE project_id = $1 AND file_id = $2",
+            project_id, file_id,
+        )
+        count = int(result.split()[-1]) if result else 0
+        if count:
+            print(f"🗑️ 删除了文件块 {count} 条（项目 {project_id}, 文件 {file_id}）")
+        return count
+
+
+async def delete_all_file_chunks(project_id: str) -> int:
+    """删除整个项目的所有文件块"""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        result = await conn.execute(
+            "DELETE FROM project_file_chunks WHERE project_id = $1",
+            project_id,
+        )
+        count = int(result.split()[-1]) if result else 0
+        if count:
+            print(f"🗑️ 删除了项目所有文件块 {count} 条（项目 {project_id}）")
+        return count
+
+
+# ============================================================
+# v5.8：对话搜索
+# ============================================================
+
+async def search_chat_messages(query: str, project_id: str = None, limit: int = 20, context_size: int = 2):
+    """
+    搜索对话消息内容 + 对话标题。
+    
+    参数：
+        query: 搜索关键词
+        project_id: 项目ID（提供时只搜该项目内的对话，'none' 表示只搜无项目的对话）
+        limit: 最多返回多少条匹配
+        context_size: 每条匹配上下各取几条消息作为上下文
+    
+    返回按对话分组的结果，每组包含对话信息和匹配消息（含上下文）。
+    """
+    if not query or not query.strip():
+        return {"title_matches": [], "message_matches": []}
+    
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        # 构建项目过滤
+        params = [f"%{query.strip()}%"]
+        
+        if project_id == 'none':
+            proj_filter = "AND c.project_id IS NULL"
+        elif project_id:
+            proj_filter = f"AND c.project_id = ${len(params) + 1}"
+            params.append(project_id)
+        else:
+            proj_filter = ""
+        
+        # 搜索消息内容（只搜 user 和 assistant 的消息）
+        params.append(limit)
+        limit_idx = len(params)
+        
+        msg_sql = f"""
+            SELECT m.id, m.conversation_id, m.role, m.content, m.time, m.sort_order,
+                   c.title as conv_title, c.project_id, c.created_at as conv_created_at
+            FROM chat_messages m
+            JOIN chat_conversations c ON c.id = m.conversation_id
+            WHERE m.content ILIKE $1
+              AND m.role IN ('user', 'assistant')
+              AND m.error = false
+              {proj_filter}
+            ORDER BY m.time DESC
+            LIMIT ${limit_idx}
+        """
+        
+        msg_rows = await conn.fetch(msg_sql, *params)
+        
+        # 搜索对话标题
+        title_params = [f"%{query.strip()}%"]
+        if project_id == 'none':
+            title_proj_filter = "AND project_id IS NULL"
+        elif project_id:
+            title_proj_filter = f"AND project_id = $2"
+            title_params.append(project_id)
+        else:
+            title_proj_filter = ""
+        
+        title_sql = f"""
+            SELECT id, title, project_id, created_at, updated_at
+            FROM chat_conversations
+            WHERE title ILIKE $1
+              {title_proj_filter}
+            ORDER BY updated_at DESC
+            LIMIT 10
+        """
+        title_rows = await conn.fetch(title_sql, *title_params)
+        
+        # 为每条匹配消息获取上下文
+        results_by_conv = {}
+        
+        for row in msg_rows:
+            conv_id = row["conversation_id"]
+            
+            if conv_id not in results_by_conv:
+                results_by_conv[conv_id] = {
+                    "conversation_id": conv_id,
+                    "title": row["conv_title"] or "新对话",
+                    "project_id": row["project_id"],
+                    "date": row["conv_created_at"].isoformat() if row["conv_created_at"] else None,
+                    "matches": [],
+                }
+            
+            # 获取该消息前后 context_size 条消息
+            ctx_rows = await conn.fetch("""
+                SELECT id, role, content, time, sort_order
+                FROM chat_messages
+                WHERE conversation_id = $1
+                  AND sort_order BETWEEN $2 AND $3
+                  AND role IN ('user', 'assistant')
+                ORDER BY sort_order ASC
+            """, conv_id, row["sort_order"] - context_size, row["sort_order"] + context_size)
+            
+            context_msgs = []
+            for cr in ctx_rows:
+                content = cr["content"] or ""
+                # 截断过长的消息
+                if len(content) > 300:
+                    content = content[:300] + "…"
+                context_msgs.append({
+                    "id": cr["id"],
+                    "role": cr["role"],
+                    "content": content,
+                    "time": cr["time"].isoformat() if cr["time"] else None,
+                    "is_match": cr["id"] == row["id"],
+                })
+            
+            results_by_conv[conv_id]["matches"].append({
+                "message_id": row["id"],
+                "sort_order": row["sort_order"],
+                "context": context_msgs,
+            })
+        
+        # 组装标题匹配结果
+        title_matches = []
+        for tr in title_rows:
+            title_matches.append({
+                "conversation_id": tr["id"],
+                "title": tr["title"],
+                "project_id": tr["project_id"],
+                "date": tr["created_at"].isoformat() if tr["created_at"] else None,
+            })
+        
+        return {
+            "title_matches": title_matches,
+            "message_matches": list(results_by_conv.values()),
+        }

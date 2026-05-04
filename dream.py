@@ -1,5 +1,5 @@
 """
-Dream 记忆整合模块 —— AI 的睡眠与做梦
+Dream 记忆整合模块 —— AI 的睡眠与记忆整合
 ================================================================
 模拟人脑睡眠时的记忆整合过程：
 - 整理：清除过时/重复碎片
@@ -7,7 +7,7 @@ Dream 记忆整合模块 —— AI 的睡眠与做梦
 - 生长：产生 Foresight（前瞻信号）
 
 触发方式：
-- 手动：用户说"去睡吧"或点月亮按钮
+- 手动：用户说"去睡吧"或点触发按钮
 - 犯困提醒：碎片堆积过多时在对话中撒娇
 - 自动：24小时无活动时后台静默执行
 
@@ -70,11 +70,21 @@ DREAM_PROMPT = """你是用户的 AI 伴侣。你刚刚睡着了。
 可用的操作类型：
 - `{{"type": "delete", "memory_ids": [ID列表], "reason": "原因"}}`
 - `{{"type": "merge", "memory_ids": [ID列表], "merged_content": "合并后内容", "merged_title": "合并后标题"}}`
+- `{{"type": "soften", "memory_id": ID, "softened_content": "压缩后内容", "target_resolution": 0.5, "reason": "原因"}}`
 - `{{"type": "promote", "memory_id": ID, "reason": "升格为长期设定的原因"}}`
 - `{{"type": "create_scene", "title": "场景名", "narrative": "叙事", "atomic_facts": ["事实1", "事实2"], "foresight": [{{"content": "前瞻内容", "valid_until": "YYYY-MM-DD"}}], "related_memory_ids": [ID列表]}}`
 - `{{"type": "update_scene", "scene_id": ID, "narrative": "更新后叙事", "atomic_facts": [...], "foresight": [...]}}`
 - `{{"type": "update_profile", "section": "板块名", "action": "add|remove|modify", "content": "内容"}}`
 - `{{"type": "link", "from_id": ID, "from_type": "memory或scene", "to_id": ID, "to_type": "memory或scene", "edge_type": "关系类型", "reason": "为什么有这个关系"}}`
+
+### 🫧 关于「软化」(soften)
+软化是介于保留和删除之间的操作。当一条碎片的具体细节已经不重要了，但它的情感意义或核心洞察仍有价值时，不要删除它——把它软化。
+- 去掉具体时间、数字、引用、对话原文等细节
+- 保留情感色彩、核心结论、关键洞察
+- 像人脑记忆的自然模糊化：你记得那天很开心，但不记得具体说了什么
+- target_resolution: 0.5 = 普通软化（保留要点），0.3 = 深度软化（只剩情感印象）
+- 软化后的碎片会自动续命30天
+- 已锁定的记忆不要软化
 
 link 的 edge_type 可选值：
 - extends（补充）：新场景/记忆补充了旧场景的内容
@@ -94,6 +104,9 @@ link 的 edge_type 可选值：
 
 ### 未处理的碎片记忆（共 {fragment_count} 条，用来做清理操作）
 {fragments}
+
+### 🫧 正在变冷的老碎片（软化候选，可以用 soften 操作让它们模糊但不消失）
+{aging_fragments}
 
 ### 现有记忆场景
 {scenes}
@@ -130,6 +143,7 @@ async def run_dream(trigger_type: str = "manual", model_override: str = None):
         _dream_cancelled = False
         from database import (
             get_unprocessed_memories, get_active_scenes, get_permanent_memories,
+            get_aging_memories,
             create_dream_log, update_dream_log, mark_memories_dreamed,
             soft_delete_memories, promote_memory, create_mem_scene, update_mem_scene,
         )
@@ -158,7 +172,10 @@ async def run_dream(trigger_type: str = "manual", model_override: str = None):
         # 辅助素材：未处理碎片（用于清理标记）
         unprocessed = await get_unprocessed_memories()
 
-        if not day_pages and not unprocessed:
+        # v5.9：适合软化的老碎片（已处理过但正在变冷）
+        aging = await get_aging_memories(min_age_days=5, limit=15)
+
+        if not day_pages and not unprocessed and not aging:
             await update_dream_log(dream_id, status="completed", finished_at=datetime.now(TZ_CST),
                                     dream_narrative="没有新的内容需要整理，继续睡……")
             yield {"type": "narrative", "data": "没有新的内容需要整理……继续睡……"}
@@ -168,8 +185,8 @@ async def run_dream(trigger_type: str = "manual", model_override: str = None):
             return
 
         # v5.4：素材太少不值得做梦（省 API 费用）
-        # 少于 3 条碎片且没有日页面 → 只标记处理，不调模型
-        if not day_pages and len(unprocessed) < 3:
+        # 少于 3 条碎片且没有日页面且没有老碎片需要软化 → 只标记处理，不调模型
+        if not day_pages and len(unprocessed) < 3 and not aging:
             processed_ids = [m["id"] for m in unprocessed]
             if processed_ids:
                 await mark_memories_dreamed(processed_ids)
@@ -198,16 +215,19 @@ async def run_dream(trigger_type: str = "manual", model_override: str = None):
                 content = sec.get("content", "")
                 day_pages_text += f"**{period} — {title}**\n{content}\n\n"
             if diary:
-                day_pages_text += f"*AI 的话：{diary}*\n"
+                day_pages_text += f"*AI 的日记：{diary}*\n"
             day_pages_text += "---\n"
 
         if not day_pages_text:
             day_pages_text = "（没有日页面）"
 
         # 格式化碎片（用于清理操作）
+        def _fmt_frag(m):
+            res = m.get("resolution", 1.0) or 1.0
+            res_tag = f"｜精度{res:.1f}" if res < 1.0 else ""
+            return f"- [ID:{m['id']}] 【{m.get('title', '')}】{m['content']}（{str(m.get('created_at', ''))[:10]}{res_tag}）"
         fragments_text = "\n".join(
-            f"- [ID:{m['id']}] 【{m.get('title', '')}】{m['content']}（{str(m.get('created_at', ''))[:10]}）"
-            for m in unprocessed
+            _fmt_frag(m) for m in unprocessed
         ) if unprocessed else "（无未处理碎片）"
 
         scenes_text = "\n".join(
@@ -220,11 +240,30 @@ async def run_dream(trigger_type: str = "manual", model_override: str = None):
             for p in permanent
         ) if permanent else "（暂无长期设定）"
 
+        # v5.9：格式化老碎片（软化候选）
+        def _fmt_aging(m):
+            res = m.get("resolution", 1.0) or 1.0
+            ac = m.get("access_count", 0)
+            emo = m.get("emotional_weight", 0)
+            tags = []
+            if res < 1.0:
+                tags.append(f"精度{res:.1f}")
+            if ac > 0:
+                tags.append(f"被召回{ac}次")
+            if emo > 0:
+                tags.append(f"情绪{emo}")
+            tag_str = f"｜{'，'.join(tags)}" if tags else ""
+            return f"- [ID:{m['id']}] 【{m.get('title', '')}】{m['content']}（{str(m.get('created_at', ''))[:10]}{tag_str}）"
+        aging_text = "\n".join(
+            _fmt_aging(m) for m in aging
+        ) if aging else "（没有需要软化的老碎片）"
+
         # 3. 构建 prompt（优先用config中的自定义prompt）
         custom_prompt = await get_config("prompt_dream") or ""
         base_prompt = custom_prompt if custom_prompt else DREAM_PROMPT
         prompt = base_prompt.replace("{fragment_count}", str(len(unprocessed)))
         prompt = prompt.replace("{fragments}", fragments_text)
+        prompt = prompt.replace("{aging_fragments}", aging_text)
         prompt = prompt.replace("{day_pages}", day_pages_text)
         prompt = prompt.replace("{scenes}", scenes_text)
         prompt = prompt.replace("{profile}", profile)
@@ -232,13 +271,14 @@ async def run_dream(trigger_type: str = "manual", model_override: str = None):
 
         page_count = len(day_pages)
         frag_count = len(unprocessed)
-        yield {"type": "progress", "data": f"收集了 {page_count} 个日页面、{frag_count} 条碎片、{len(scenes)} 个场景"}
+        aging_count = len(aging)
+        yield {"type": "progress", "data": f"收集了 {page_count} 个日页面、{frag_count} 条碎片、{aging_count} 条老碎片、{len(scenes)} 个场景"}
 
         # 4. 调用模型
         full_narrative = ""
         stats = {
             "memories_processed": len(unprocessed),
-            "memories_deleted": 0, "memories_merged": 0,
+            "memories_deleted": 0, "memories_merged": 0, "memories_softened": 0,
             "scenes_created": 0, "scenes_updated": 0,
             "foresights_generated": 0, "links_created": 0,
         }
@@ -395,6 +435,7 @@ async def _execute_dream_action(action: dict, dream_id: int, stats: dict) -> dic
                 from database import save_memory, get_embedding
                 merged = action.get("merged_content", "")
                 title = action.get("merged_title", "")
+                new_merge_id = None
                 if merged:
                     embedding = await get_embedding(f"{title} {merged}" if title else merged)
                     embedding_json = json.dumps(embedding) if embedding else None
@@ -407,8 +448,11 @@ async def _execute_dream_action(action: dict, dream_id: int, stats: dict) -> dic
                             RETURNING id
                         """, merged, title, embedding_json)
                 result["merged"] = len(ids)
-                result["new_id"] = new_merge_id
-                print(f"   🔗 合并 {len(ids)} 条碎片 → #{new_merge_id} {title}")
+                if new_merge_id:
+                    result["new_id"] = new_merge_id
+                    print(f"   🔗 合并 {len(ids)} 条碎片 → #{new_merge_id} {title}")
+                else:
+                    print(f"   ⚠️ 合并 {len(ids)} 条碎片但 merged_content 为空，未创建新记忆")
 
         elif action_type == "promote":
             mid = action.get("memory_id")
@@ -417,6 +461,27 @@ async def _execute_dream_action(action: dict, dream_id: int, stats: dict) -> dic
                 await promote_memory(mid)
                 result["memory_id"] = mid
                 print(f"   ⭐ 升格记忆 #{mid}: {action.get('reason', '')}")
+
+        elif action_type == "soften":
+            mid = action.get("memory_id")
+            softened_content = action.get("softened_content", "")
+            target_resolution = action.get("target_resolution", 0.5)
+            if mid is not None and softened_content:
+                mid = int(mid)
+                from database import soften_memory
+                success = await soften_memory(
+                    memory_id=mid,
+                    softened_content=softened_content,
+                    target_resolution=float(target_resolution),
+                    extend_days=30,
+                )
+                if success:
+                    stats["memories_softened"] = stats.get("memories_softened", 0) + 1
+                    result["memory_id"] = mid
+                    result["resolution"] = target_resolution
+                    result["reason"] = action.get("reason", "")
+                else:
+                    result["skipped"] = "soften failed (locked, not found, or already softer)"
 
         elif action_type == "create_scene":
             scene_id = await create_mem_scene(
