@@ -2489,19 +2489,54 @@ async def get_calendar_for_injection(lookback_days: int = 365):
         result.append({**p, "label": f"{m_start.year}年{m_start.month}月总结"})
 
     # 周总结：覆盖周一~周日（date 字段存的是周一）
+    week_covered_dates = set()  # 单独追踪周总结覆盖的日期
     for p in by_type.get("week", []):
         w_start = p["date"]
         for d_offset in range(7):
             d = w_start + timedelta(days=d_offset)
             if d not in covered_dates:
                 covered_dates.add(d)
+            week_covered_dates.add(d)
         w_end = w_start + timedelta(days=6)
         result.append({**p, "label": f"{w_start.strftime('%m/%d')}-{w_end.strftime('%m/%d')}周总结"})
 
-    # 日页面：只加没被覆盖的
+    # ── 日页面三级注入（v6.1）──
+    #
+    # 最近 3 天（DETAIL_DAYS）：永远注入 digest（完整版），即使被覆盖也注入
+    # 4~7 天前（SUMMARY_DAYS）：
+    #   - 被周总结覆盖 → 不注入（周总结够用）
+    #   - 没有被覆盖 → 注入 summary（短版）
+    #   - 被月/季/年覆盖但没有周总结 → 回退补偿，注入 summary（短版）
+    # 7 天以前：正常去重（只在没被任何层级覆盖时注入）
+    
+    DETAIL_DAYS = 3   # 最近 N 天永远注入详细日页面
+    SUMMARY_DAYS = 7  # 最近 N 天没有周总结时注入概要版
+
+    detail_start = today - timedelta(days=DETAIL_DAYS)
+    summary_start = today - timedelta(days=SUMMARY_DAYS)
+
     for p in by_type.get("day", []):
-        if p["date"] not in covered_dates:
-            result.append({**p, "label": f"{p['date'].strftime('%m/%d')}"})
+        d = p["date"]
+
+        if d >= detail_start:
+            # 最近 3 天：永远注入完整 digest
+            result.append({**p, "label": f"{d.strftime('%m/%d')}"})
+
+        elif d >= summary_start:
+            # 4~7 天前
+            if d in week_covered_dates:
+                # 有周总结覆盖，不注入（周总结够了）
+                pass
+            else:
+                # 没有周总结覆盖 → 注入 summary 短版（去掉 digest 让注入端自动 fallback）
+                entry = {**p, "label": f"{d.strftime('%m/%d')}（概要）"}
+                entry["digest"] = None  # 清掉 digest，main.py 会 fallback 到 summary
+                result.append(entry)
+
+        else:
+            # 7 天以前：正常去重
+            if d not in covered_dates:
+                result.append({**p, "label": f"{d.strftime('%m/%d')}"})
 
     # 按日期排序
     result.sort(key=lambda x: x["date"])
