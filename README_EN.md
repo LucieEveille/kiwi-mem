@@ -1,101 +1,74 @@
 # 🥝 kiwi-mem
 
-**AI companion memory system — give your AI long-term memory that actually works like human memory.**
+**Most AI memory systems are databases. kiwi-mem is a brain.**
 
 [中文版 →](README.md)
 
 ---
 
-## What is this
+## What it does
 
-kiwi-mem is a memory backend designed for **AI companion** use cases.
+kiwi-mem gives your AI long-term memory that works like a human brain.
 
-Most AI memory projects do "store and retrieve" — vector storage plus RAG. kiwi-mem is different. It simulates how human memory actually works: things you don't mention gradually fade, things you talk about often stick harder, a night of sleep reorganizes fragments into deeper understanding, and last year's events compress into rough outlines while yesterday stays vivid.
+Not "save chat logs and search them later" — actually human-like: things you don't mention gradually fade, things you talk about often stick harder, a night of sleep reorganizes scattered fragments into deeper understanding, last year's events compress into rough outlines while yesterday stays vivid.
 
-It's a lightweight proxy gateway that sits between you and any LLM, compatible with any OpenAI-format client and provider. Pair it with any chat frontend (custom-built, ChatBox, NextChat, SillyTavern…) and your AI goes from "forgetting who you are every session" to "remembering everything that matters."
+All of these mechanisms work together as a unified filtering system: **your AI remembers what you'd remember, and forgets what neither of you would care about.** Without blowing up the context window or burning through your API budget.
 
-It's not just a dev tool — it's the infrastructure for **an AI that lives in your daily life**, present from morning to night, remembering your conversations, your health, your habits, your growth.
+Technically, it's a lightweight proxy gateway that sits between you and any LLM, compatible with any OpenAI-format client and provider. Docker one-click deploy, browser-based admin panel.
 
-**Stack**: Python / FastAPI · PostgreSQL + pgvector · Docker deploy · MIT License
+**Stack**: Python / FastAPI · PostgreSQL + pgvector · Docker · MIT License
 
 ![Feature overview](docs/feature-overview.png)
 
 ---
 
-## What makes it different
+## How memory works like a brain
 
-| Capability | kiwi-mem | Typical RAG memory |
-|---|---|---|
-| Memory decay & heating | ✅ Heat system (time decay + recall frequency + emotional intensity) | ❌ Stored forever |
-| Sleep consolidation | ✅ Dream (cleanup → consolidation → foresight) | ❌ None |
-| Temporal compression | ✅ Day → week → month → quarter → year | ❌ Everything flat |
-| Contradiction detection | ✅ Auto-invalidates outdated memories | ❌ None |
-| Memory locking | ✅ Important memories never decay or auto-delete | ❌ None |
-| User profile | ✅ Auto-updated daily, four-section structured portrait | ❌ None |
-| Prompt caching | ✅ Static-first injection order, 90% input cost savings | ❌ None |
-| Chinese optimization | ✅ jieba segmentation + synonym expansion | ❌ Usually English only |
+The core of kiwi-mem isn't any single feature — it's multiple mechanisms working in concert to make AI memory behave like human intuition:
+
+### 🔥 Fades and strengthens
+
+Every memory has a "heat" score. Time makes it naturally decay, but if you keep bringing up the same topic, it warms back up. High-emotion memories decay slower — just like how you remember moments that moved you. Heat determines how memories enter the conversation: hot memories get injected in full, warm ones as summaries, cold ones stay quiet.
+
+### 🌙 Sleeps and wakes up smarter
+
+Dream simulates how the human brain consolidates memories during sleep. It works in three layers: first cleans up outdated and duplicate fragments, then merges related fragments into coherent "memory scenes", and finally infers things you never explicitly said but your AI should understand. You can trigger it manually, or let the system decide when it's time to sleep.
+
+### 📅 Recent is vivid, distant is hazy
+
+The calendar system auto-compresses chat history into hierarchical summaries: day → week → month → quarter → year. When injecting into conversation, recent days get full detail, last week gets abbreviated, older periods get high-level overviews. Just like how you recall the past — you know what you ate yesterday, but last month is mostly outlines.
+
+### 🧩 Contradictions update, important things stick
+
+When a new memory conflicts with an old one (you changed jobs, moved cities), the system auto-invalidates the outdated version. Memories you've explicitly marked as important, or that keep getting recalled, get locked — they never decay and never auto-delete.
+
+### ⚡ Budget and context aware
+
+All static content (persona, profile, locked memories, calendar summaries) is ordered first in the prompt to hit cache, dynamic content (search results, drowsiness hints) comes after. This injection order can save up to 90% on API input costs. Combined with calendar compression and heat-tiered injection, even months of memories won't overflow your context window.
 
 ---
 
-## Features
+## Who is it for
 
-### 🧠 Memory extraction & retrieval
-- **RRF hybrid search**: Vector + keyword search in parallel, merged via Reciprocal Rank Fusion
-- **Auto-extraction**: Every N turns, a small model extracts key info as memory fragments
-- **jieba Chinese segmentation**: Custom domain vocabulary support
-- **Synonym expansion**: Searching "medication" finds "prescription", "drugs", "medicine"
-- **Semantic deduplication**: Similar memories detected automatically
+kiwi-mem is designed to **remember a person** — your habits, preferences, emotions, experiences, growth. It's not an enterprise knowledge base, not a document retrieval system, not a knowledge graph.
 
-### 🔥 Memory heat system
-- **Time decay**: Memory heat decays by half-life
-- **Recall heating**: Memories gain heat when retrieved
-- **Query diversity**: Memories mentioned across different topics heat up more
-- **Emotional weight**: High-emotion memories decay slower
-- **Tiered injection**: Hot → full text, warm → summary, cold → skip
-- **Auto-lock**: Frequently recalled memories auto-promote to permanent
+It works best for:
 
-### 🌙 Dream consolidation
-Simulates how the human brain consolidates memories during sleep:
-- **Cleanup layer**: Remove outdated, duplicate, contradictory fragments
-- **Consolidation layer**: Merge related fragments into MemScenes
-- **Growth layer**: Generate Foresight — infer future implications from fragment connections
-- Triggers: manual / drowsiness reminder / auto after 24h inactivity
+🏠 **Life assistant** — Remembers your dietary habits, health conditions, schedule preferences. Gets better the longer you use it.
 
-### 📅 Calendar hierarchy
-- **Day pages**: Auto-generated from daily chat logs
-- **Hierarchical compression**: Day → week → month → quarter → year
-- **Matryoshka injection**: Recent days injected in detail, distant months as summaries
-- **User profile**: Four-section structure, updated daily
+🩶 **Long-term companion** — Emotional support, daily conversation, deep relationships. Your AI actually "knows you" instead of starting fresh every time.
 
-### ⚡ Smart system prompt injection
-```
-Static (cache-friendly)              Dynamic (per-turn)
-Persona → Profile → Locked → Calendar → Search results → Drowsy hint
-```
-- Seamless conversation handoff between chat windows
-- Template variables: `{cur_datetime}`, `{user_name}`, `{assistant_name}`
+📖 **Creative partner** — Serialized fiction, worldbuilding, roleplay. All settings, plot threads, and character arcs stay in memory.
 
-### 🔌 Multi-provider LLM routing
-- Multiple providers in parallel, auto-select by model name
-- Balance queries, model grouping
-- Compatible with any OpenAI-format API
-
-### 🔧 Tools & extensions
-- MCP Server (20+ tools) + MCP Client
-- Web search (7 engines)
-- Context compression, file parsing, chain-of-thought display
-
-### 🛡️ Deployment & management
-- Web admin panel at `/admin`
-- Cloud sync, data backup/restore
-- Reminder system, admin auth, Docker deploy
+🎓 **Learning tutor** — Tracks your progress, weak spots, and past questions. Tutoring gets more targeted over time.
 
 ---
 
 ## Quick start
 
 ### Prerequisites
-- Docker & Docker Compose (recommended, includes PostgreSQL + pgvector)
+
+- Docker & Docker Compose (recommended — includes PostgreSQL + pgvector)
 - An LLM API key (OpenRouter / OpenAI / DeepSeek / any OpenAI-compatible provider)
 
 > 💡 No Docker? You can deploy manually with Python 3.12+ and your own PostgreSQL (pgvector extension required).
@@ -117,29 +90,92 @@ docker compose up -d
 
 Visit `http://localhost:8080` — if you see `{"status":"running"}`, you're good.
 
-### Step by step
+### What's next
 
-**Step 1: Pure proxy** (no database needed)
-```
-API_KEY=sk-your-key
-API_BASE_URL=https://openrouter.ai/api/v1/chat/completions
-```
-Point your client to `http://localhost:8080/v1`.
+- Visit `/admin` for the browser-based admin panel
+- Point your chat client's API endpoint to `http://localhost:8080/v1`
+- Works with any OpenAI-format frontend: ChatBox, NextChat, SillyTavern, or your own
 
-**Step 2: Enable memory**
+> 💡 80+ parameters can be changed at runtime via the admin panel — no restart needed.
 
-If using Docker Compose, the database is already configured. Just set in `.env`:
-```
-MEMORY_ENABLED=true
-```
-Manual deployments need to configure `DATABASE_URL` separately.
+---
 
-**Step 3: Admin panel**
-Visit `/admin` to configure everything in your browser.
+## How it compares
+
+<details>
+<summary>Click to expand comparison table</summary>
+
+| Capability | kiwi-mem | Typical RAG memory |
+|---|---|---|
+| Memory decay & heating | ✅ Heat system (time decay + recall frequency + emotional intensity) | ❌ Stored forever |
+| Sleep consolidation | ✅ Dream (cleanup → consolidation → foresight) | ❌ None |
+| Temporal compression | ✅ Day → week → month → quarter → year | ❌ Everything flat |
+| Contradiction detection | ✅ Auto-invalidates outdated memories | ❌ None |
+| Memory locking | ✅ Important memories never decay | ❌ None |
+| User profile | ✅ Auto-updated daily, structured portrait | ❌ None |
+| Prompt caching | ✅ Static-first injection, up to 90% input cost savings | ❌ None |
+| Context control | ✅ Heat-tiered + calendar compression, no overflow | ❌ Easily exceeds limits |
+
+</details>
+
+---
+
+## Full feature list
+
+<details>
+<summary>Click to expand</summary>
+
+### 🧠 Memory extraction & retrieval
+- **RRF hybrid search**: Vector + keyword search in parallel, Reciprocal Rank Fusion merge
+- **Auto-extraction**: Every N turns, extracts key info as memory fragments
+- **jieba Chinese segmentation**: Custom domain vocabulary
+- **Synonym expansion**: "medication" finds "prescription", "drugs", "medicine"
+- **Semantic deduplication**: Similar memories auto-detected
+
+### 🔥 Memory heat system
+- Time decay (half-life) · recall heating · query diversity · emotional weight
+- Tiered injection (hot → full text / warm → summary / cold → skip)
+- Frequently recalled memories auto-promote to permanent
+
+### 🌙 Dream consolidation
+- Cleanup layer (remove outdated / duplicate / contradictory fragments)
+- Consolidation layer (fragments → MemScenes)
+- Growth layer (Foresight — infer implications)
+- Triggers: manual / drowsiness reminder / auto after 24h inactivity
+
+### 📅 Calendar hierarchy
+- Auto-generated day pages · day → week → month → quarter → year compression
+- Matryoshka injection (recent = detailed, distant = summarized)
+- User profile: four-section structure, updated daily
+
+### ⚡ Smart system prompt injection
+- Static zone (persona → profile → locked → calendar) hits cache
+- Dynamic zone (search results → drowsiness hint) per-turn
+- Auto-handoff context between chat windows
+- Template variable support
+
+### 🔌 Multi-provider LLM routing
+- Multiple providers, auto-select by model name
+- Balance queries, model grouping
+- Any OpenAI-compatible API
+
+### 🔧 Tools & extensions
+- MCP Server (20+ tools) + MCP Client
+- Web search (7 engines)
+- Context compression, file parsing, chain-of-thought display
+
+### 🛡️ Deployment & management
+- Web admin panel · cloud sync · backup/restore
+- Reminder system · admin auth · Docker deploy
+
+</details>
 
 ---
 
 ## Environment variables
+
+<details>
+<summary>Click to expand</summary>
 
 ### Required
 
@@ -152,7 +188,7 @@ Visit `/admin` to configure everything in your browser.
 
 | Variable | Description | Default |
 |---|---|---|
-| `DATABASE_URL` | PostgreSQL connection string (auto-configured by Docker Compose; required for manual deployment) | — |
+| `DATABASE_URL` | PostgreSQL connection string (auto-configured by Docker Compose) | — |
 | `MEMORY_ENABLED` | Enable memory system | `true` |
 | `DEFAULT_MODEL` | Default chat model | `anthropic/claude-sonnet-4` |
 | `PORT` | Gateway port | `8080` |
@@ -162,7 +198,7 @@ Visit `/admin` to configure everything in your browser.
 | `CORS_ORIGINS` | Frontend origins, comma-separated | `http://localhost:5173` |
 | `JIEBA_CUSTOM_WORDS` | Custom jieba words, comma-separated | empty |
 
-> 💡 80+ additional parameters can be changed at runtime via the admin panel — no restart needed.
+</details>
 
 ---
 
@@ -186,15 +222,16 @@ Visit `/admin` to configure everything in your browser.
 | `/debug/memories/{id}` | PUT / DELETE | Update / delete |
 | `/debug/memories/{id}/toggle-permanent` | POST | Toggle lock |
 | `/debug/memories/batch-delete` | POST | Batch delete |
+| `/debug/memories/batch-update` | POST | Batch update |
 | `/debug/memory-heat` | GET | Heat statistics |
 
 ### Dream
 | Path | Method | Description |
 |---|---|---|
-| `/dream/start` | POST | Start dream |
-| `/dream/stop` | POST | Stop dream |
-| `/dream/status` | GET | Dream status |
-| `/dream/history` | GET | Dream history |
+| `/dream/start` | POST | Start |
+| `/dream/stop` | POST | Stop |
+| `/dream/status` | GET | Status |
+| `/dream/history` | GET | History |
 | `/dream/scenes` | GET | MemScene list |
 
 ### Calendar
@@ -202,9 +239,10 @@ Visit `/admin` to configure everything in your browser.
 |---|---|---|
 | `/calendar/{date}` | GET | Query by date |
 | `/calendar` | GET | Query by range |
-| `/admin/daily-digest` | GET | Run daily digest |
 | `/admin/day-page` | GET | Generate day page |
-| `/admin/week-summary` | GET | Generate week summary |
+| `/admin/week-summary` | GET | Week summary |
+| `/admin/month-summary` | GET | Month summary |
+| `/admin/daily-digest` | GET | Daily digest |
 
 ### Providers
 | Path | Method | Description |
@@ -228,6 +266,7 @@ Visit `/admin` to configure everything in your browser.
 | `/sync/export` | GET | Export backup |
 | `/sync/import-backup` | POST | Import backup |
 | `/sync/conversations` | GET | Conversation list |
+| `/sync/projects` | GET | Project list |
 
 ### MCP
 | Endpoint | Description |
@@ -239,27 +278,58 @@ Visit `/admin` to configure everything in your browser.
 
 ---
 
+## File structure
+
+<details>
+<summary>Click to expand</summary>
+
+```
+kiwi-mem/
+├── main.py                  # Gateway core
+├── database.py              # Database (memory CRUD, RRF search, heat)
+├── config.py                # Dynamic config (80+ parameters)
+├── memory_extractor.py      # Memory extraction
+├── daily_digest.py          # Daily digest + calendar hierarchy
+├── dream.py                 # Dream consolidation
+├── mcp_server.py            # MCP Server
+├── mcp_client.py            # MCP Client
+├── web_search.py            # Web search
+├── admin-panel/index.html   # Web admin panel
+├── system_prompt.txt        # Default persona
+├── seed_memories_example.py # Seed memories example
+├── Dockerfile
+├── docker-compose.yml
+└── LICENSE                  # MIT
+```
+
+</details>
+
+---
+
 ## FAQ
 
 **Q: Do I need to know how to code?**
-A: No. Docker one-click deploy, admin panel for configuration. The creator of this project doesn't write code herself.
+A: No. Docker one-click deploy, admin panel for everything. The creator of this project doesn't write code herself.
 
 **Q: Which LLMs are supported?**
 A: Anything OpenAI-compatible — OpenRouter, OpenAI, Claude API, DeepSeek, Ollama, and more.
 
 **Q: Will memories grow forever?**
-A: No. The heat system naturally phases out cold memories, Dream consolidates fragments, and injection has a configurable cap.
+A: No. The heat system naturally phases out cold memories, Dream consolidates fragments, calendar compression handles long-term content, and injection has a configurable cap. These mechanisms together keep memory size manageable.
 
 **Q: How much does Dream cost?**
-A: About $0.005-0.02 per run with Claude Haiku.
+A: About $0.005–0.02 per run with Claude Haiku.
+
+**Q: Is this suitable for a work knowledge base?**
+A: Not really. kiwi-mem is designed to remember a person — their life, emotions, habits, and experiences — not to store and retrieve document knowledge. If you need enterprise knowledge management or document RAG, there are better-suited tools.
 
 ---
 
-## Credits
+## How this project came to be
 
-Every line of code in this project was written by [Claude](https://claude.ai) (Anthropic), driven by Lucie's product vision, testing, and deployment.
+kiwi-mem was born from a real need: I wanted my AI to remember me.
 
-From the first proxy gateway to Dream sleep consolidation, from RRF hybrid search to calendar hierarchy injection — every feature was born from a real need: "I want my AI to remember me like this." Designed, built, and refined across countless conversations.
+Every feature — from memory heat to Dream consolidation, from calendar compression to contradiction detection — came from a real problem encountered in daily use, then designed, built, and refined through conversation. Product direction driven by [Lucie](https://github.com/LucieEveille), code written by [Claude](https://claude.ai) (Anthropic) — a genuine human-AI collaboration from start to finish.
 
 ---
 
@@ -269,6 +339,6 @@ From the first proxy gateway to Dream sleep consolidation, from RRF hybrid searc
 
 ---
 
-> *"A memory system is not a database — it's a home."*
+> *"Memory is not storage — it's understanding."*
 
-*Built with love, for anyone who wants their AI to remember.*
+*Built with love, for anyone who wants their AI to truly remember.*
