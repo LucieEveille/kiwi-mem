@@ -553,26 +553,43 @@ async def trigger_dream() -> str:
     通常在碎片堆积较多或长时间未整理时使用。
     """
     try:
-        # /dream/start 返回 SSE 流，不能当 JSON 解析
-        # 只需要触发启动，不等待完成（Dream 可能跑几分钟）
-        async with httpx.AsyncClient(timeout=30, headers=GATEWAY_HEADERS) as client:
-            resp = await client.post(
+        # /dream/start 返回 SSE 流（StreamingResponse），Dream 实际跑 1-5 分钟。
+        # 不能用 client.post() 等响应完整 —— httpx 默认会把整个流读完才返回，
+        # timeout 设多大都可能不够；而且客户端断开会触发 FastAPI 端 generator 的
+        # CancelledError 把 Dream 中途杀掉。
+        # 正确做法：用 client.stream() 读到第一个 data: 事件就 return，
+        # 后续 Dream 在网关后台继续跑，让客户端用 get_dream_status 查进度。
+        async with httpx.AsyncClient(timeout=60, headers=GATEWAY_HEADERS) as client:
+            async with client.stream(
+                "POST",
                 f"{GATEWAY_BASE}/dream/start",
                 json={"trigger_type": "manual"},
-            )
+            ) as resp:
+                if resp.status_code != 200:
+                    body = (await resp.aread()).decode("utf-8", errors="ignore")[:300]
+                    return f"Dream 启动失败（HTTP {resp.status_code}）：{body}"
 
-        if resp.status_code == 200:
+                first_data = ""
+                async for line in resp.aiter_lines():
+                    line = (line or "").strip()
+                    if line.startswith("data:"):
+                        first_data = line[len("data:"):].strip()
+                        break
+
+        if not first_data:
             return "🌙 Dream 已启动，可以用 get_dream_status 查看进度。"
-        else:
-            # 尝试读取错误信息
-            try:
-                data = resp.json()
-                return f"Dream 启动失败：{data.get('error', resp.text)}"
-            except Exception:
-                return f"Dream 启动失败（HTTP {resp.status_code}）：{resp.text[:200]}"
 
+        # 错误事件
+        if first_data.startswith("{") and '"error"' in first_data.lower():
+            return f"Dream 启动失败：{first_data[:200]}"
+
+        return f"🌙 Dream 已启动：{first_data[:200]}\n后续可用 get_dream_status 查看进度。"
+
+    except httpx.TimeoutException:
+        # 60s 内连首个事件都没到, 但请求已发出, Dream 多半已在后台跑了
+        return "🌙 Dream 已启动（首事件超时未到，可用 get_dream_status 确认）"
     except Exception as e:
-        return f"启动出错：{str(e)}"
+        return f"启动出错：{type(e).__name__}: {e}"
 
 
 @mcp_calendar.tool()

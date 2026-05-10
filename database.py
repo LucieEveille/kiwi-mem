@@ -1611,42 +1611,34 @@ async def _keyword_search(query: str, limit: int = 10, heat_params: dict = None,
 # ============================================================
 
 async def get_recent_memories(limit: int = 20, category_id: int = None, project_id: str = None):
+    """
+    最近记忆。
+    project_id 语义（保持与本函数原有调用方一致）：
+      - 传值 → 只看该项目的记忆（m.project_id = project_id）
+      - 不传 / 空 → 不过滤项目（全部）
+    """
     pool = await get_pool()
+    base_select = """SELECT m.id, m.content, m.importance, m.created_at,
+                  COALESCE(m.title, '') as title, COALESCE(m.memory_type, 'fragment') as memory_type,
+                  m.category_id, COALESCE(c.name, '') as category_name, COALESCE(c.color, '') as category_color,
+                  COALESCE(m.source, 'ai_extracted') as source,
+                  COALESCE(m.resolution, 1.0) as resolution
+           FROM memories m LEFT JOIN memory_categories c ON m.category_id = c.id
+           WHERE COALESCE(m.memory_type, 'fragment') NOT IN ('digested', 'dream_deleted')
+             AND (m.valid_until IS NULL OR m.valid_until > NOW())"""
+    params: list = []
+    where_extra = ""
+    if category_id is not None:
+        params.append(category_id)
+        where_extra += f" AND m.category_id = ${len(params)}"
+    if project_id:
+        # 必须参数化, 否则 project_id 来自客户端 body, 直接 f-string 拼会被 SQL 注入
+        params.append(project_id)
+        where_extra += f" AND m.project_id = ${len(params)}"
+    params.append(limit)
+    sql = f"{base_select}{where_extra} ORDER BY m.created_at DESC LIMIT ${len(params)}"
     async with pool.acquire() as conn:
-        # 构建 project_id 过滤条件
-        proj_clause = ""
-        if project_id:
-            proj_clause = f"AND m.project_id = '{project_id}'"
-        
-        if category_id is not None:
-            return await conn.fetch(
-                f"""SELECT m.id, m.content, m.importance, m.created_at, 
-                          COALESCE(m.title, '') as title, COALESCE(m.memory_type, 'fragment') as memory_type,
-                          m.category_id, COALESCE(c.name, '') as category_name, COALESCE(c.color, '') as category_color,
-                          COALESCE(m.source, 'ai_extracted') as source,
-                          COALESCE(m.resolution, 1.0) as resolution
-                   FROM memories m LEFT JOIN memory_categories c ON m.category_id = c.id
-                   WHERE COALESCE(m.memory_type, 'fragment') NOT IN ('digested', 'dream_deleted')
-                     AND (m.valid_until IS NULL OR m.valid_until > NOW())
-                     AND m.category_id = $1
-                     {proj_clause}
-                   ORDER BY m.created_at DESC LIMIT $2""",
-                category_id, limit,
-            )
-        else:
-            return await conn.fetch(
-                f"""SELECT m.id, m.content, m.importance, m.created_at, 
-                          COALESCE(m.title, '') as title, COALESCE(m.memory_type, 'fragment') as memory_type,
-                          m.category_id, COALESCE(c.name, '') as category_name, COALESCE(c.color, '') as category_color,
-                          COALESCE(m.source, 'ai_extracted') as source,
-                          COALESCE(m.resolution, 1.0) as resolution
-                   FROM memories m LEFT JOIN memory_categories c ON m.category_id = c.id
-                   WHERE COALESCE(m.memory_type, 'fragment') NOT IN ('digested', 'dream_deleted')
-                     AND (m.valid_until IS NULL OR m.valid_until > NOW())
-                     {proj_clause}
-                   ORDER BY m.created_at DESC LIMIT $1""",
-                limit,
-            )
+        return await conn.fetch(sql, *params)
 
 
 async def get_all_memories_count():

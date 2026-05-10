@@ -245,9 +245,15 @@ app = FastAPI(title="AI Memory Gateway", version="3.1.0", lifespan=lifespan)
 # ============================================================
 
 class AdminAuthMiddleware(BaseHTTPMiddleware):
-    """当设置了 ACCESS_TOKEN 时，/admin/* 和 /debug/* 端点需要认证"""
-    
-    PROTECTED_PREFIXES = ("/admin/", "/debug/", "/sync/")
+    """当设置了 ACCESS_TOKEN 时，需要认证的路径前缀。
+
+    - /admin/、/debug/、/sync/：管理面板 / 调试 / 云同步导出导入
+    - /projects/：v5.8 项目文件上传与 chunk 管理（POST /projects/{id}/files/{fid}/process
+      与 DELETE /projects/{id}/files/{fid}/chunks），写操作必须保护
+    - /import/：导入种子记忆（如 /import/seed-memories），会写入数据库
+    """
+
+    PROTECTED_PREFIXES = ("/admin/", "/debug/", "/sync/", "/projects/", "/import/")
     
     async def dispatch(self, request: Request, call_next):
         path = request.url.path
@@ -2286,7 +2292,7 @@ async def api_extract_now(request: Request):
         # 获取对比用的已有记忆
         user_text = " ".join(r["content"] for r in recent_msgs if r["role"] == "user")
         related = await search_memories(user_text[:500], limit=50, track_recall=False, project_id=project_id)
-        recent = await get_recent_memories(limit=30)
+        recent = await get_recent_memories(limit=30, project_id=project_id)
         seen = set()
         existing_contents = []
         for content in [r["content"] for r in related] + [r["content"] for r in recent]:
@@ -2643,6 +2649,9 @@ async def api_dream_status():
             "status": "ok",
             **status,
             "unprocessed_count": len(unprocessed),
+            # 前端 admin-panel 读 unprocessed_fragments / is_dreaming, 这里加别名保证两套字段都能用
+            "unprocessed_fragments": len(unprocessed),
+            "is_dreaming": status.get("is_running", False),
             "drowsy_threshold": drowsy_threshold,
             "is_drowsy": len(unprocessed) >= drowsy_threshold,
             "last_dream_date": last_dream_date,
