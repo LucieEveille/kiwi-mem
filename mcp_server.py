@@ -66,7 +66,8 @@ async def search_memory(query: str, limit: int = 10) -> str:
         if "error" in data:
             return f"搜索失败：{data['error']}"
 
-        results = data.get("results", [])
+        # /debug/memories 返回字段是 memories；保留对旧版 results 的兼容
+        results = data.get("memories") or data.get("results", [])
         if not results:
             return f"没有找到与「{query}」相关的记忆。"
 
@@ -157,7 +158,8 @@ async def get_recent(limit: int = 20) -> str:
         if "error" in data:
             return f"获取失败：{data['error']}"
 
-        results = data.get("results", [])
+        # /debug/memories 返回字段是 memories；保留对旧版 results 的兼容
+        results = data.get("memories") or data.get("results", [])
         if not results:
             return "记忆库为空。"
 

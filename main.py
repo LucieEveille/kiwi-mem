@@ -862,8 +862,11 @@ async def root_status():
     return {
         "status": "running",
         "gateway": "AI Memory Gateway v3.1 (动态配置)",
+        "version": "AI Memory Gateway v3.1",
         "memory_enabled": mem_enabled,
         "memory_count": memory_count,
+        # 前端 admin-panel 读 status.memories, 加别名避免显示 '-'
+        "memories": memory_count,
         "max_inject": await get_max_inject(),
         "default_model": DEFAULT_MODEL,
         "extract_interval": await get_extract_interval(),
@@ -899,9 +902,16 @@ async def api_status():
 
 @app.get("/admin")
 async def admin_panel():
-    """重定向到记忆花园前端"""
-    from fastapi.responses import RedirectResponse
-    return {"status": "running", "service": "kiwi-mem"}
+    """返回管理面板 HTML（admin-panel/index.html）。
+
+    v1.1 重构时这里被改成了返回 JSON, 直接访问 /admin 看到 {"status": "running"}
+    而不是面板页面。改回 FileResponse, 文件不存在时降级返回 JSON。
+    """
+    from fastapi.responses import FileResponse
+    panel_path = os.path.join(os.path.dirname(__file__), "admin-panel", "index.html")
+    if os.path.exists(panel_path):
+        return FileResponse(panel_path, media_type="text/html; charset=utf-8")
+    return {"status": "running", "service": "kiwi-mem", "warning": "admin-panel/index.html not found"}
 
 
 @app.get("/v1/models")
@@ -1946,34 +1956,64 @@ async def stream_and_capture(headers: dict, body: dict, session_id: str, user_me
 # ============================================================
 
 @app.get("/debug/memories")
-async def debug_memories(q: str = "", limit: int = 20, category_id: int = None):
-    """查看和搜索记忆（支持分类筛选）"""
+async def debug_memories(
+    q: str = "",
+    limit: int = 20,
+    offset: int = 0,
+    sort: str = "newest",
+    category_id: int = None,
+    min_importance: int = None,
+):
+    """查看和搜索记忆（支持分类筛选、分页、排序、重要度过滤）。
+
+    返回字段名为 memories（前端约定），输出每条包含 is_permanent 和 heat
+    （前端用于显示锁定 🔒 和热度 🔥 badge）。
+    """
     if not await get_memory_enabled():
         return {"error": "记忆系统未启用（设置 MEMORY_ENABLED=true 开启）"}
 
     # 限制查询范围，防止过大请求消耗资源
     limit = max(1, min(limit, 200))
+    offset = max(0, offset)
 
     try:
         if q:
-            memories = await search_memories(q, limit=limit, track_recall=False)
-            # 搜索结果如需按分类筛选
+            # 搜索路径：search_memories 已经返回 is_permanent / heat
+            memories = await search_memories(q, limit=limit + offset, track_recall=False)
             if category_id is not None:
                 memories = [m for m in memories if m.get("category_id") == category_id]
+            if min_importance is not None:
+                memories = [m for m in memories if m.get("importance", 0) >= min_importance]
+            memories = memories[offset:offset + limit]
         else:
-            memories = await get_recent_memories(limit=limit, category_id=category_id)
-        
+            # 非搜索路径：get_recent_memories 不算 heat, 这里在端点层补上
+            memories = await get_recent_memories(limit=limit + offset, category_id=category_id)
+            memories = [dict(m) for m in memories]
+            if min_importance is not None:
+                memories = [m for m in memories if m.get("importance", 0) >= min_importance]
+            # 排序
+            if sort == "oldest":
+                memories.sort(key=lambda m: m.get("created_at") or "")
+            elif sort == "importance":
+                memories.sort(key=lambda m: m.get("importance", 0), reverse=True)
+            elif sort == "heat":
+                # heat 此路径不算，按 access_count 近似
+                memories.sort(key=lambda m: m.get("access_count", 0) or 0, reverse=True)
+            memories = memories[offset:offset + limit]
+
         total = await get_all_memories_count()
-        
+
         return {
             "total_memories": total,
             "query": q or "(最近记忆)",
-            "results": [
+            "memories": [
                 {
                     "id": m["id"],
                     "title": m.get("title", ""),
                     "content": m["content"],
                     "importance": m["importance"],
+                    "is_permanent": m.get("is_permanent", False),
+                    "heat": m.get("heat", 0),
                     "created_at": str(m["created_at"]),
                     "memory_type": m.get("memory_type", "fragment"),
                     "category_id": m.get("category_id"),
@@ -2898,12 +2938,26 @@ async def api_restore_prompt(key: str):
 
 @app.get("/admin/providers")
 async def api_get_providers():
-    """获取所有供应商"""
+    """获取所有供应商。
+
+    注意：必须脱敏 api_key —— 数据库里存的是 LLM 服务商的原始 key，
+    直接 dict(p) 送给前端会让任何能调到这个接口的人拿到完整 key。
+    前端 admin-panel 读的是 api_key_preview, 这里把 api_key 替换成
+    preview 字段, 原始 key 不出后端。
+    """
     try:
         providers = await get_all_providers()
         result = []
         for p in providers:
             sp = dict(p)
+            raw_key = sp.pop("api_key", "") or ""
+            if raw_key:
+                if len(raw_key) > 12:
+                    sp["api_key_preview"] = raw_key[:6] + "…" + raw_key[-4:]
+                else:
+                    sp["api_key_preview"] = "•" * min(len(raw_key), 8)
+            else:
+                sp["api_key_preview"] = ""
             if sp.get("created_at"):
                 sp["created_at"] = sp["created_at"].isoformat()
             if sp.get("updated_at"):

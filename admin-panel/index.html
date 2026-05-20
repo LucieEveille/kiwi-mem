@@ -387,8 +387,10 @@ let configData = {};
 async function loadConfig() {
   try {
     const data = await apiJson('/admin/config');
-    configData = data;
-    renderConfig(data);
+    // 后端可能返 {status, config: {...}} 也可能直接返 {key: cfg, ...}，两种都兼容
+    const config = data.config || data;
+    configData = config;
+    renderConfig(config);
   } catch(e) {
     document.getElementById('config-area').innerHTML = `<p class="text-red-400">加载失败：${e.message}</p>`;
   }

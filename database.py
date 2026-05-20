@@ -1622,7 +1622,9 @@ async def get_recent_memories(limit: int = 20, category_id: int = None, project_
                   COALESCE(m.title, '') as title, COALESCE(m.memory_type, 'fragment') as memory_type,
                   m.category_id, COALESCE(c.name, '') as category_name, COALESCE(c.color, '') as category_color,
                   COALESCE(m.source, 'ai_extracted') as source,
-                  COALESCE(m.resolution, 1.0) as resolution
+                  COALESCE(m.resolution, 1.0) as resolution,
+                  COALESCE(m.is_permanent, false) as is_permanent,
+                  COALESCE(m.access_count, 0) as access_count
            FROM memories m LEFT JOIN memory_categories c ON m.category_id = c.id
            WHERE COALESCE(m.memory_type, 'fragment') NOT IN ('digested', 'dream_deleted')
              AND (m.valid_until IS NULL OR m.valid_until > NOW())"""
