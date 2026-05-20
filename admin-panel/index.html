@@ -375,6 +375,7 @@ const CONFIG_GROUPS = {
   '热度系统': ['heat_half_life_normal','heat_half_life_important','heat_recall_extend','heat_threshold_high','heat_threshold_medium','heat_importance_line','heat_emotion_line','heat_medium_truncate'],
   '自动锁定': ['autolock_access_count','autolock_diversity','autolock_emo_access','autolock_emo_diversity'],
   'Dream 睡眠': ['dream_drowsy_threshold','last_dream_date'],
+  '用户画像': ['user_profile'],
   '对话衔接': ['handoff_enabled','handoff_msg_count','handoff_stop_rounds'],
   '日历注入': ['calendar_inject_enabled'],
   'Prompt 缓存': ['prompt_cache_enabled'],
@@ -424,12 +425,13 @@ function renderConfig(data) {
             </select>
           </div>
         </div>`;
-      } else if (key.startsWith('prompt_')) {
+      } else if (key.startsWith('prompt_') || key === 'user_profile') {
+        // 长文本类 (提示词模板、用户画像), 用弹窗编辑而不是 inline input
         html += `<div class="config-row">
           <span class="config-label">${label}</span>
           <div class="config-value">
             <button class="btn btn-sm btn-secondary" onclick="editPromptConfig('${key}', '${escAttr(label)}')">编辑</button>
-            <span class="text-xs text-gray-500 ml-2">${val ? val.slice(0,40)+'…' : '（空）'}</span>
+            <span class="text-xs text-gray-500 ml-2">${val ? escHtml(val.slice(0,40))+'…' : '（空）'}</span>
           </div>
         </div>`;
       } else {
@@ -567,6 +569,7 @@ async function deleteProvider(id) {
 // ============================================================
 let memPage = 0;
 const MEM_LIMIT = 20;
+let memCache = {};  // 缓存当前列表的记忆数据, editMemory(id) 时按 id 取出
 
 async function loadMemories() {
   const sort = document.getElementById('mem-sort').value;
@@ -594,6 +597,10 @@ async function searchMemories() {
 }
 
 function renderMemories(memories, total) {
+  // 把当前列表缓存进 memCache, editMemory(id) 时按 id 取出, 避免把整条数据塞 onclick 出注入
+  memCache = {};
+  memories.forEach(m => { memCache[m.id] = m; });
+
   if (memories.length === 0) {
     document.getElementById('memories-list').innerHTML = '<p class="text-gray-500">没有找到记忆。</p>';
     document.getElementById('mem-pagination').innerHTML = '';
@@ -602,8 +609,8 @@ function renderMemories(memories, total) {
 
   document.getElementById('memories-list').innerHTML = memories.map(m => `
     <div class="memory-card">
-      <div class="flex justify-between items-start">
-        <div class="flex-1">
+      <div class="flex justify-between items-start gap-4">
+        <div class="flex-1 min-w-0">
           ${m.title ? `<p class="font-semibold text-gray-200 mb-1">${escHtml(m.title)}</p>` : ''}
           <p class="text-gray-400 text-sm">${escHtml(m.content?.slice(0, 200) || '')}</p>
           <div class="flex gap-2 mt-2 flex-wrap">
@@ -613,7 +620,11 @@ function renderMemories(memories, total) {
             ${m.category_name ? `<span class="badge" style="background:rgba(148,163,184,0.1);color:#94a3b8">${escHtml(m.category_name)}</span>` : ''}
           </div>
         </div>
-        <button class="btn btn-sm btn-danger ml-4" onclick="deleteMemory(${m.id})">删除</button>
+        <div class="flex flex-col gap-1 shrink-0">
+          <button class="btn btn-sm btn-secondary" onclick="editMemory(${m.id})">编辑</button>
+          <button class="btn btn-sm btn-secondary" onclick="toggleLockMemory(${m.id})">${m.is_permanent ? '🔓 解锁' : '🔒 锁定'}</button>
+          <button class="btn btn-sm btn-danger" onclick="deleteMemory(${m.id})">删除</button>
+        </div>
       </div>
     </div>
   `).join('');
@@ -636,6 +647,63 @@ async function deleteMemory(id) {
   await api(`/debug/memories/${id}`, { method: 'DELETE' });
   toast('已删除');
   loadMemories();
+}
+
+// 编辑单条记忆 —— 运维场景: 修 AI 提取错的内容/重要度/标题
+function editMemory(id) {
+  const m = memCache[id];
+  if (!m) { toast('记忆数据丢失，请刷新', false); return; }
+  const modal = document.createElement('div');
+  modal.className = 'fixed inset-0 bg-black/60 flex items-center justify-center z-50';
+  modal.innerHTML = `
+    <div class="bg-panel-card border border-panel-border rounded-xl p-6 w-[600px] max-h-[80vh] flex flex-col">
+      <p class="font-semibold mb-4">编辑记忆 #${id}</p>
+      <div class="mb-3">
+        <label class="text-xs text-gray-500 block mb-1">标题</label>
+        <input type="text" id="edit-mem-title" value="${escAttr(m.title || '')}">
+      </div>
+      <div class="mb-3 flex-1 flex flex-col min-h-0">
+        <label class="text-xs text-gray-500 block mb-1">内容</label>
+        <textarea id="edit-mem-content" rows="8" class="text-sm flex-1">${escHtml(m.content || '')}</textarea>
+      </div>
+      <div class="mb-4">
+        <label class="text-xs text-gray-500 block mb-1">重要度 (1-10)</label>
+        <input type="number" id="edit-mem-importance" min="1" max="10" value="${m.importance || 5}" class="w-32">
+      </div>
+      <div class="flex gap-2 justify-end">
+        <button class="btn btn-secondary" onclick="this.closest('.fixed').remove()">取消</button>
+        <button class="btn btn-primary" onclick="saveMemoryEdit(${id})">保存</button>
+      </div>
+    </div>`;
+  document.body.appendChild(modal);
+}
+
+async function saveMemoryEdit(id) {
+  const content = document.getElementById('edit-mem-content').value;
+  if (!content.trim()) { toast('内容不能为空', false); return; }
+  const body = {
+    title: document.getElementById('edit-mem-title').value,
+    content: content,
+    importance: parseInt(document.getElementById('edit-mem-importance').value) || 5,
+  };
+  try {
+    await api(`/debug/memories/${id}`, { method: 'PUT', body: JSON.stringify(body) });
+    toast('✅ 已保存');
+    document.querySelector('.fixed.inset-0')?.remove();
+    loadMemories();
+  } catch(e) {
+    toast('保存失败：' + e.message, false);
+  }
+}
+
+// 锁定/解锁切换 —— 运维便捷, 不用再去命令行
+async function toggleLockMemory(id) {
+  try {
+    await api(`/debug/memories/${id}/toggle-permanent`, { method: 'POST' });
+    loadMemories();
+  } catch(e) {
+    toast('操作失败：' + e.message, false);
+  }
 }
 
 // ============================================================
