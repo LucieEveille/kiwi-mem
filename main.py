@@ -231,6 +231,21 @@ async def lifespan(app: FastAPI):
     async with mcp_memory.session_manager.run():
         async with mcp_calendar.session_manager.run():
             print("✅ MCP server 已启动（/memory/mcp + /calendar/mcp）")
+
+            # v6.3：仅当 tool_drawer_enabled=true 时初始化工具抽屉
+            # （默认 false，开源用户行为不变；抽屉打开后通过向量路由按需展开工具）
+            try:
+                drawer_enabled = await get_config_bool("tool_drawer_enabled", fallback=False)
+            except Exception:
+                drawer_enabled = False
+            if drawer_enabled:
+                try:
+                    from tool_drawer import init_drawer
+                    await init_drawer()
+                    print("✅ 工具抽屉已初始化")
+                except Exception as e:
+                    print(f"⚠️ 工具抽屉初始化失败: {e}（降级为传统模式）")
+
             yield
     
     if digest_task:
@@ -436,13 +451,28 @@ async def build_system_prompt_with_memories(user_message: str, user_msg_count: i
             except Exception as e:
                 print(f"⚠️  项目指令注入失败: {e}")
         
+        # ---- v6.3：工具抽屉目录（静态，仅在抽屉开启时注入）----
+        drawer_enabled_inject = await get_config_bool("tool_drawer_enabled", fallback=False)
+        if drawer_enabled_inject:
+            try:
+                from tool_drawer import get_directory_text
+                active_prompt += get_directory_text()
+            except Exception as e:
+                print(f"⚠️  工具目录注入失败: {e}")
+
         # ---- 静态/动态分隔标记（用于 Prompt Caching）----
-        # 上面的人设+画像+锁定记忆+日历是静态的（一天内不变），下面的搜索碎片/犯困/切窗是动态的
+        # 上面的人设+画像+锁定记忆+日历(+工具目录)是静态的（一天内不变），下面的搜索碎片/犯困/切窗是动态的
         active_prompt += "\n\n<!-- CACHE_BOUNDARY -->"
-        
+
         # ---- ⑤ 语义搜索碎片（动态，每轮变化）----
         inject_limit = await get_max_inject()
-        memories = await search_memories(user_message, limit=inject_limit, project_id=project_id)
+        # v6.3：抽屉开启时复用 query embedding 给抽屉路由（省一次 embedding API 调用）
+        if drawer_enabled_inject:
+            memories, _query_emb = await search_memories(user_message, limit=inject_limit, project_id=project_id, return_embedding=True)
+            if _query_emb:
+                prompt_meta["user_embedding"] = _query_emb
+        else:
+            memories = await search_memories(user_message, limit=inject_limit, project_id=project_id)
         
         # 加载热度参数（v5.4：可配置阈值）
         from database import get_heat_params
@@ -1311,12 +1341,41 @@ async def chat_completions(request: Request):
     if body.get("reasoning") or body.get("reasoning_effort") or body.get("include_reasoning"):
         print(f"🔍 [思考链参数] reasoning={body.get('reasoning')}, reasoning_effort={body.get('reasoning_effort')}, include_reasoning={body.get('include_reasoning')}")
     
-    # ========== 收集工具（MCP + 联网搜索 auto） ==========
+    # ========== 收集工具（v6.3：抽屉模式 / 传统模式 二选一） ==========
     openai_tools = []
     tool_map = {}
 
+    drawer_enabled = await get_config_bool("tool_drawer_enabled", fallback=False)
+
+    if drawer_enabled:
+        # ---- 抽屉模式：向量路由按需展开内部工具 + 外部 MCP 双轨 ----
+        try:
+            from tool_drawer import route_tools as _drawer_route
+            user_embedding = prompt_meta.get("user_embedding") if prompt_meta else None
+            drawer_tools, drawer_map = await _drawer_route(
+                user_message=user_message,
+                session_id=session_id,
+                user_embedding=user_embedding,
+                mem_enabled=mem_enabled,
+                search_enabled=bool(do_search_auto),
+                project_id=project_id,
+            )
+            openai_tools.extend(drawer_tools)
+            tool_map.update(drawer_map)
+        except Exception as e:
+            print(f"❌ 工具抽屉路由失败: {e}")
+        # 外部 MCP 仍可用：抽屉管内部工具，mcp_servers 走原路径并合并
+        if mcp_servers:
+            try:
+                mcp_tools, mcp_map = await get_tools_for_servers(mcp_servers)
+                openai_tools.extend(mcp_tools)
+                tool_map.update(mcp_map)
+            except Exception as e:
+                print(f"❌ 外部 MCP 工具获取失败: {e}")
+
+    # ---- 传统模式：原有逐项注册（drawer_enabled=False 时执行）----
     # MCP 工具
-    if mcp_servers:
+    if not drawer_enabled and mcp_servers:
         try:
             mcp_tools, mcp_map = await get_tools_for_servers(mcp_servers)
             openai_tools.extend(mcp_tools)
@@ -1325,7 +1384,7 @@ async def chat_completions(request: Request):
             print(f"❌ MCP 工具获取失败: {e}")
 
     # 联网搜索 auto 模式：注册为 function tool，让模型自行决定是否调用
-    if do_search_auto:
+    if not drawer_enabled and do_search_auto:
         search_engine = await get_config("search_engine") or ""
         if search_engine:
             openai_tools.append({
@@ -1352,7 +1411,7 @@ async def chat_completions(request: Request):
             print(f"⚠️ 联网搜索 auto 模式已请求但未配置搜索引擎")
 
     # v5.8：对话搜索工具（始终可用，让模型能主动搜索过去的对话）
-    if mem_enabled:
+    if not drawer_enabled and mem_enabled:
         openai_tools.append({
             "type": "function",
             "function": {
@@ -1389,7 +1448,7 @@ async def chat_completions(request: Request):
     ]
     _need_reminder_tools = any(kw in user_message for kw in _REMINDER_TRIGGER_KEYWORDS)
 
-    if _need_reminder_tools:
+    if not drawer_enabled and _need_reminder_tools:
         _reminder_tools = [
         {
             "type": "function",
@@ -1833,8 +1892,12 @@ async def _stream_with_tools(messages, tools, tool_map, model, temperature, tool
         for p in parsed:
             p["name"] = _resolve_tool_name(p["name"])
         
+        # v6.3：四类工具分发 — gateway / drawer / meta / mcp
+        # 抽屉模式下 tool_map 会出现 drawer 和 meta 类型，传统模式只有 gateway_builtin/MCP
         gw_parsed = [p for p in parsed if tool_map.get(p["name"], {}).get("type") == "gateway_builtin"]
-        mcp_parsed = [p for p in parsed if tool_map.get(p["name"], {}).get("type") != "gateway_builtin"]
+        drawer_parsed = [p for p in parsed if tool_map.get(p["name"], {}).get("type") == "drawer"]
+        meta_parsed = [p for p in parsed if tool_map.get(p["name"], {}).get("type") == "meta"]
+        mcp_parsed = [p for p in parsed if tool_map.get(p["name"], {}).get("type") not in ("gateway_builtin", "drawer", "meta")]
 
         tool_results = {}   # { call_id: result_text }
         tool_extras = {}    # { call_id: extra_metadata } — 并发安全，每个 call 独立
@@ -1846,10 +1909,35 @@ async def _stream_with_tools(messages, tools, tool_map, model, temperature, tool
             tool_results[p["id"]] = result_text
             tool_extras[p["id"]] = extra_meta
 
+        # 抽屉工具：调 mcp_server 函数直跑（绕开 MCP 协议），跑完通知抽屉
+        async def _run_drawer(p):
+            try:
+                from tool_drawer import execute_drawer_tool, record_tool_use
+                result_text, extra_meta = await execute_drawer_tool(p["name"], p["args"])
+                tool_results[p["id"]] = result_text
+                tool_extras[p["id"]] = extra_meta or {}
+                record_tool_use(session_id, p["name"])
+            except Exception as e:
+                tool_results[p["id"]] = f"[drawer_error] {p['name']}: {e}"
+                tool_extras[p["id"]] = {}
+
+        # Meta 工具（_drawer_request_tools / _drawer_return_tools）：单独走 handle_meta_tool
+        async def _run_meta(p):
+            try:
+                from tool_drawer import handle_meta_tool
+                result_text = await handle_meta_tool(p["name"], p["args"], session_id)
+                tool_results[p["id"]] = result_text
+                tool_extras[p["id"]] = {}
+            except Exception as e:
+                tool_results[p["id"]] = f"[meta_error] {p['name']}: {e}"
+                tool_extras[p["id"]] = {}
+
         # 构建并发任务列表
         tasks = [_run_gw(p) for p in gw_parsed]
+        tasks.extend(_run_drawer(p) for p in drawer_parsed)
+        tasks.extend(_run_meta(p) for p in meta_parsed)
 
-        # MCP 工具：同服务器复用连接，不同服务器并发
+        # 外部 MCP 工具：同服务器复用连接，不同服务器并发
         if mcp_parsed:
             async def _run_mcp():
                 r = await call_tools_batch(mcp_parsed, tool_map)

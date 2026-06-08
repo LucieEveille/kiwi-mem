@@ -85,6 +85,9 @@ CONFIG_SCHEMA = {
     "quick_phrases":         ("",                        "",     "快捷短语",          "text"),
     "mcp_switches":          ("",                        "",     "MCP开关状态",       "text"),
     "theme_preference":      ("",                        "",     "主题偏好",          "text"),
+    # v6.3：工具抽屉（向量路由按需展开工具）。默认关闭——开启后内部工具走向量路由，
+    #       外部 mcp_servers 仍走原路径并合并，对模型表现为一组完整工具
+    "tool_drawer_enabled":   ("",                        "false","工具抽屉开关",      "bool"),
 }
 
 
