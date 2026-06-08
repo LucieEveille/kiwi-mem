@@ -464,6 +464,12 @@ async def build_system_prompt_with_memories(user_message: str, user_msg_count: i
         # 上面的人设+画像+锁定记忆+日历(+工具目录)是静态的（一天内不变），下面的搜索碎片/犯困/切窗是动态的
         active_prompt += "\n\n<!-- CACHE_BOUNDARY -->"
 
+        # ---- 精确时间（动态，每轮变化）----
+        # 注意：必须放在 CACHE_BOUNDARY 之后。DeepSeek 没有显式 cache_control，
+        # 完全依赖前缀字节一致来命中自动缓存——秒级时间放在静态区会从这一行
+        # 起整段前缀失效（issue #8）。
+        active_prompt += f"\n\n当前时间：{datetime.now(TZ_CST).strftime('%Y-%m-%d %H:%M:%S')}"
+
         # ---- ⑤ 语义搜索碎片（动态，每轮变化）----
         inject_limit = await get_max_inject()
         # v6.3：抽屉开启时复用 query embedding 给抽屉路由（省一次 embedding API 调用）
