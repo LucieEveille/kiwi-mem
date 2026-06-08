@@ -404,8 +404,9 @@ async def build_system_prompt_with_memories(user_message: str, user_msg_count: i
     
     try:
         # ---- ② 锁定记忆：全量注入（静态，很少变）----
+        # 全局对话：只拿全局锁定；项目对话：拿全局 + 当前项目锁定
         from database import get_permanent_memories
-        permanent = await get_permanent_memories()
+        permanent = await get_permanent_memories(project_id=project_id)
         if permanent:
             perm_lines = []
             for mem in permanent:

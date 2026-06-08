@@ -2985,12 +2985,27 @@ async def get_aging_memories(min_age_days: int = 5, limit: int = 20):
     return [dict(r) for r in rows]
 
 
-async def get_permanent_memories():
-    """获取长期设定记忆（仅全局，排除项目锁定记忆）"""
+async def get_permanent_memories(project_id: str = None):
+    """获取长期设定记忆。
+
+    project_id:
+      - None（默认，全局对话）→ 只返回全局锁定记忆（project_id IS NULL）
+      - 传入值（项目对话）→ 返回全局锁定 + 该项目锁定（IS NULL OR = project_id）
+
+    这样既不会让项目锁定记忆泄漏到全局对话（这是 PR #10 的原始意图），
+    也不会让项目对话拿不到自己项目锁定的设定（Codex 反馈的回归 bug）。
+    """
     pool = await get_pool()
     async with pool.acquire() as conn:
         rows = await conn.fetch(
-            "SELECT id, title, content FROM memories WHERE is_permanent = TRUE AND (valid_until IS NULL OR valid_until > NOW()) AND project_id IS NULL ORDER BY created_at ASC"
+            """
+            SELECT id, title, content FROM memories
+            WHERE is_permanent = TRUE
+              AND (valid_until IS NULL OR valid_until > NOW())
+              AND (project_id IS NULL OR project_id = $1)
+            ORDER BY created_at ASC
+            """,
+            project_id,
         )
     return [dict(r) for r in rows]
 
