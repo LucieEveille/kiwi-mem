@@ -2977,6 +2977,7 @@ async def get_aging_memories(min_age_days: int = 5, limit: int = 20):
               AND (valid_until IS NULL OR valid_until > NOW())
               AND COALESCE(resolution, 1.0) >= 1.0
               AND importance < 8
+              AND project_id IS NULL
               AND created_at < NOW() - $1 * INTERVAL '1 day'
             ORDER BY created_at ASC
             LIMIT $2
