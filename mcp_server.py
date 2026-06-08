@@ -44,6 +44,8 @@ mcp_memory = FastMCP("Memory Garden", stateless_http=True)
 @mcp_memory.tool()
 async def search_memory(query: str, limit: int = 10) -> str:
     """
+    [category: memory]
+
     搜索记忆 — 用自然语言描述你想找的内容，向量语义搜索会返回最相关的记忆。
 
     参数：
@@ -94,6 +96,8 @@ async def search_memory(query: str, limit: int = 10) -> str:
 @mcp_memory.tool()
 async def save_memory(content: str, title: str = "", importance: int = 5) -> str:
     """
+    [category: memory]
+
     保存一条新记忆到记忆库。
 
     参数：
@@ -137,6 +141,8 @@ async def save_memory(content: str, title: str = "", importance: int = 5) -> str
 @mcp_memory.tool()
 async def get_recent(limit: int = 20) -> str:
     """
+    [category: memory]
+
     获取最近的记忆，按时间倒序排列。
 
     参数：
@@ -181,6 +187,8 @@ async def get_recent(limit: int = 20) -> str:
 @mcp_memory.tool()
 async def trigger_digest(date: str = "") -> str:
     """
+    [category: system_internal]
+
     手动触发每日记忆整理 — 把当天的碎片记忆合并成独立事件条目。
 
     参数：
@@ -213,6 +221,8 @@ async def trigger_digest(date: str = "") -> str:
 @mcp_memory.tool()
 async def lock_memory(memory_id: int) -> str:
     """
+    [category: memory]
+
     锁定一条记忆 — 锁定后热度永远为 1.0，不会衰减遗忘，每次聊天都会注入。
 
     参数：
@@ -240,6 +250,8 @@ async def lock_memory(memory_id: int) -> str:
 @mcp_memory.tool()
 async def unlock_memory(memory_id: int) -> str:
     """
+    [category: memory]
+
     解锁一条记忆 — 解锁后恢复正常热度衰减。
 
     参数：
@@ -276,6 +288,8 @@ mcp_calendar = FastMCP("Calendar & Dream", stateless_http=True)
 @mcp_calendar.tool()
 async def get_day_page(date: str, type: str = "day") -> str:
     """
+    [category: calendar]
+
     查看某一天的日历页面（日记/周总结/月总结等）。
 
     参数：
@@ -339,6 +353,8 @@ async def get_day_page(date: str, type: str = "day") -> str:
 @mcp_calendar.tool()
 async def get_calendar_range(start: str, end: str, type: str = "") -> str:
     """
+    [category: calendar]
+
     查看一段时间内的日历页面列表。
 
     参数：
@@ -394,6 +410,8 @@ async def get_calendar_range(start: str, end: str, type: str = "") -> str:
 @mcp_calendar.tool()
 async def save_calendar_page(date: str, content: str, title: str = "", type: str = "day") -> str:
     """
+    [category: calendar]
+
     写入或更新日历页面（日记）。
 
     参数：
@@ -436,6 +454,8 @@ async def save_calendar_page(date: str, content: str, title: str = "", type: str
 @mcp_calendar.tool()
 async def get_comments(target_type: str, target_id: int) -> str:
     """
+    [category: calendar]
+
     读取某个页面的评论列表。
 
     参数：
@@ -478,6 +498,8 @@ async def get_comments(target_type: str, target_id: int) -> str:
 @mcp_calendar.tool()
 async def add_comment(target_type: str, target_id: int, content: str, parent_id: int = 0) -> str:
     """
+    [category: calendar]
+
     在日历页面或场景下添加评论。
 
     参数：
@@ -524,6 +546,8 @@ async def add_comment(target_type: str, target_id: int, content: str, parent_id:
 @mcp_calendar.tool()
 async def get_user_profile() -> str:
     """
+    [category: profile]
+
     查看当前的用户画像 — AI 对用户的认知。
 
     画像包含四个板块：基本档案、洞察、近期重点、长期偏好。
@@ -549,6 +573,8 @@ async def get_user_profile() -> str:
 @mcp_calendar.tool()
 async def trigger_dream() -> str:
     """
+    [category: dream]
+
     让 AI 去睡觉（触发 Dream 记忆整合）。
 
     Dream 会整理碎片记忆、形成记忆场景（MemScene）、产生前瞻信号（Foresight）。
@@ -597,6 +623,8 @@ async def trigger_dream() -> str:
 @mcp_calendar.tool()
 async def stop_dream() -> str:
     """
+    [category: dream]
+
     中断正在进行的 Dream。
 
     用于在 Dream 过程中需要紧急打断时使用。
@@ -618,6 +646,8 @@ async def stop_dream() -> str:
 @mcp_calendar.tool()
 async def get_dream_status() -> str:
     """
+    [category: dream]
+
     查看 Dream 状态 — 是否正在做梦、上次做梦的结果、待处理碎片数量。
     """
     try:
@@ -660,6 +690,8 @@ async def get_dream_status() -> str:
 @mcp_calendar.tool()
 async def get_dream_history(limit: int = 10) -> str:
     """
+    [category: dream]
+
     查看 Dream 执行历史记录。
 
     参数：
@@ -712,6 +744,8 @@ async def get_dream_history(limit: int = 10) -> str:
 @mcp_calendar.tool()
 async def get_dream_scenes() -> str:
     """
+    [category: dream]
+
     查看所有活跃的记忆场景（MemScene）。
 
     记忆场景是 Dream 过程中将相关碎片记忆凝聚成的主题叙事。
