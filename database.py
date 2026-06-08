@@ -2820,18 +2820,21 @@ async def get_calendar_for_injection(lookback_days: int = 365):
 
 
 async def get_chat_messages_for_date(date_str: str):
-    """读取指定日期的所有聊天消息（用于生成日页面）"""
+    """读取指定日期的所有聊天消息（用于生成日页面，排除项目对话）"""
     from datetime import date as date_cls
     pool = await get_pool()
     d = date_cls.fromisoformat(date_str)
     async with pool.acquire() as conn:
+        # LEFT JOIN 是为了让没有 conversation_id 的旧消息也能命中（c.id 为 NULL）
         rows = await conn.fetch("""
-            SELECT role, content, time, conversation_id
-            FROM chat_messages
-            WHERE (time AT TIME ZONE 'Asia/Shanghai')::date = $1
-              AND role IN ('user', 'assistant')
-              AND content != ''
-            ORDER BY time ASC
+            SELECT m.role, m.content, m.time, m.conversation_id
+            FROM chat_messages m
+            LEFT JOIN chat_conversations c ON m.conversation_id = c.id
+            WHERE (m.time AT TIME ZONE 'Asia/Shanghai')::date = $1
+              AND m.role IN ('user', 'assistant')
+              AND m.content != ''
+              AND (c.project_id IS NULL OR c.id IS NULL)
+            ORDER BY m.time ASC
         """, d)
     return [dict(r) for r in rows]
 
@@ -2930,7 +2933,7 @@ async def get_active_scenes():
 
 
 async def get_unprocessed_memories():
-    """获取未被Dream处理过的碎片记忆"""
+    """获取未被Dream处理过的碎片记忆（仅全局，排除项目碎片）"""
     pool = await get_pool()
     async with pool.acquire() as conn:
         rows = await conn.fetch("""
@@ -2940,6 +2943,7 @@ async def get_unprocessed_memories():
             WHERE dream_processed_at IS NULL
               AND memory_type IN ('fragment', 'daily_digest')
               AND (valid_until IS NULL OR valid_until > NOW())
+              AND project_id IS NULL
             ORDER BY created_at ASC
         """)
     return [dict(r) for r in rows]
@@ -2981,11 +2985,11 @@ async def get_aging_memories(min_age_days: int = 5, limit: int = 20):
 
 
 async def get_permanent_memories():
-    """获取长期设定记忆"""
+    """获取长期设定记忆（仅全局，排除项目锁定记忆）"""
     pool = await get_pool()
     async with pool.acquire() as conn:
         rows = await conn.fetch(
-            "SELECT id, title, content FROM memories WHERE is_permanent = TRUE AND (valid_until IS NULL OR valid_until > NOW()) ORDER BY created_at ASC"
+            "SELECT id, title, content FROM memories WHERE is_permanent = TRUE AND (valid_until IS NULL OR valid_until > NOW()) AND project_id IS NULL ORDER BY created_at ASC"
         )
     return [dict(r) for r in rows]
 
