@@ -270,7 +270,15 @@ _category_embeddings = {}
 _initialized = False
 
 async def init_drawer():
+    """初始化工具抽屉（自动发现工具 + 预计算类别 embedding）。
+
+    幂等：已初始化时直接返回，重复调用零成本。这让 lifespan 启动时
+    没初始化（tool_drawer_enabled=false）、运行时改成 true 也能 lazy init，
+    无需重启进程。
+    """
     global _category_embeddings, _initialized
+    if _initialized:
+        return
     from database import get_embeddings_batch
 
     # Step 1: Auto-discover tools from mcp_server.py

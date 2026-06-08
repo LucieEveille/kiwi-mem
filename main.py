@@ -1350,6 +1350,14 @@ async def chat_completions(request: Request):
 
     if drawer_enabled:
         # ---- 抽屉模式：向量路由按需展开内部工具 + 外部 MCP 双轨 ----
+        # Lazy init：toggle 启动时为 false、运行时打开的场景下，lifespan 没跑过
+        # init_drawer，此时 CATEGORIES 为空会让 route_tools 返回 0 工具，叠加
+        # 下面的 `not drawer_enabled` 门控会让传统工具也消失。这里幂等调用兜底。
+        try:
+            from tool_drawer import init_drawer as _drawer_init
+            await _drawer_init()
+        except Exception as e:
+            print(f"⚠️ 工具抽屉 lazy init 失败: {e}")
         try:
             from tool_drawer import route_tools as _drawer_route
             user_embedding = prompt_meta.get("user_embedding") if prompt_meta else None
