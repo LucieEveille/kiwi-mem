@@ -174,6 +174,7 @@ async def init_tables():
                 api_base_url    TEXT NOT NULL,
                 api_key         TEXT DEFAULT '',
                 enabled         BOOLEAN DEFAULT TRUE,
+                api_format      TEXT DEFAULT 'openai',
                 created_at      TIMESTAMPTZ DEFAULT NOW(),
                 updated_at      TIMESTAMPTZ DEFAULT NOW()
             );
@@ -190,6 +191,7 @@ async def init_tables():
                 input_modes     TEXT DEFAULT 'text',
                 output_modes    TEXT DEFAULT 'text',
                 capabilities    TEXT DEFAULT '',
+                api_format      TEXT DEFAULT NULL,
                 created_at      TIMESTAMPTZ DEFAULT NOW(),
                 UNIQUE(provider_id, model_id)
             );
@@ -571,7 +573,29 @@ async def init_tables():
             await conn.execute("ALTER TABLE memories ADD COLUMN resolution FLOAT DEFAULT 1.0")
             print("✅ memories 表已添加 resolution 列（记忆软化系统）")
 
-    print("✅ 数据库表结构已就绪（v5.9 记忆软化）")
+        # v6.2：providers 表添加 api_format 列（openai / anthropic）
+        has_api_format = await conn.fetchval("""
+            SELECT EXISTS (
+                SELECT 1 FROM information_schema.columns
+                WHERE table_name = 'providers' AND column_name = 'api_format'
+            )
+        """)
+        if not has_api_format:
+            await conn.execute("ALTER TABLE providers ADD COLUMN api_format TEXT DEFAULT 'openai'")
+            print("✅ providers 表已添加 api_format 列（Anthropic 格式支持）")
+
+        # v6.2b：provider_models 表添加 api_format 列（模型级别覆盖供应商默认值）
+        has_model_api_format = await conn.fetchval("""
+            SELECT EXISTS (
+                SELECT 1 FROM information_schema.columns
+                WHERE table_name = 'provider_models' AND column_name = 'api_format'
+            )
+        """)
+        if not has_model_api_format:
+            await conn.execute("ALTER TABLE provider_models ADD COLUMN api_format TEXT DEFAULT NULL")
+            print("✅ provider_models 表已添加 api_format 列（模型级覆盖）")
+
+    print("✅ 数据库表结构已就绪（v6.2b 模型级 API 格式支持）")
 
 
 # ============================================================
@@ -1849,7 +1873,7 @@ async def get_all_providers():
     pool = await get_pool()
     async with pool.acquire() as conn:
         rows = await conn.fetch("""
-            SELECT id, name, api_base_url, api_key, enabled, created_at, updated_at
+            SELECT id, name, api_base_url, api_key, api_format, enabled, created_at, updated_at
             FROM providers ORDER BY created_at ASC
         """)
         return [dict(r) for r in rows]
@@ -1860,28 +1884,28 @@ async def get_provider(provider_id: int):
     pool = await get_pool()
     async with pool.acquire() as conn:
         row = await conn.fetchrow("""
-            SELECT id, name, api_base_url, api_key, enabled, created_at, updated_at
+            SELECT id, name, api_base_url, api_key, api_format, enabled, created_at, updated_at
             FROM providers WHERE id = $1
         """, provider_id)
         return dict(row) if row else None
 
 
-async def create_provider(name: str, api_base_url: str, api_key: str = '', enabled: bool = True):
+async def create_provider(name: str, api_base_url: str, api_key: str = '', enabled: bool = True, api_format: str = 'openai'):
     """创建供应商"""
     pool = await get_pool()
     async with pool.acquire() as conn:
         row = await conn.fetchrow("""
-            INSERT INTO providers (name, api_base_url, api_key, enabled)
-            VALUES ($1, $2, $3, $4)
-            RETURNING id, name, api_base_url, api_key, enabled, created_at, updated_at
-        """, name, api_base_url, api_key, enabled)
+            INSERT INTO providers (name, api_base_url, api_key, enabled, api_format)
+            VALUES ($1, $2, $3, $4, $5)
+            RETURNING id, name, api_base_url, api_key, api_format, enabled, created_at, updated_at
+        """, name, api_base_url, api_key, enabled, api_format)
         return dict(row)
 
 
 async def update_provider(provider_id: int, **kwargs):
     """更新供应商"""
     pool = await get_pool()
-    allowed = {'name', 'api_base_url', 'api_key', 'enabled'}
+    allowed = {'name', 'api_base_url', 'api_key', 'enabled', 'api_format'}
     fields = {k: v for k, v in kwargs.items() if k in allowed and v is not None}
     if not fields:
         return None
@@ -1897,7 +1921,7 @@ async def update_provider(provider_id: int, **kwargs):
     query = f"""
         UPDATE providers SET {', '.join(sets)}
         WHERE id = ${len(vals)}
-        RETURNING id, name, api_base_url, api_key, enabled, created_at, updated_at
+        RETURNING id, name, api_base_url, api_key, api_format, enabled, created_at, updated_at
     """
     async with pool.acquire() as conn:
         row = await conn.fetchrow(query, *vals)
@@ -1924,7 +1948,7 @@ async def get_provider_models(provider_id: int):
     async with pool.acquire() as conn:
         rows = await conn.fetch("""
             SELECT id, provider_id, model_id, display_name, model_type,
-                   input_modes, output_modes, capabilities, created_at
+                   input_modes, output_modes, capabilities, api_format, created_at
             FROM provider_models WHERE provider_id = $1
             ORDER BY created_at ASC
         """, provider_id)
@@ -1937,7 +1961,7 @@ async def get_all_saved_models():
     async with pool.acquire() as conn:
         rows = await conn.fetch("""
             SELECT pm.id, pm.provider_id, pm.model_id, pm.display_name, pm.model_type,
-                   pm.input_modes, pm.output_modes, pm.capabilities, pm.created_at,
+                   pm.input_modes, pm.output_modes, pm.capabilities, pm.api_format, pm.created_at,
                    p.name as provider_name
             FROM provider_models pm
             JOIN providers p ON pm.provider_id = p.id
@@ -1948,27 +1972,31 @@ async def get_all_saved_models():
 
 async def add_provider_model(provider_id: int, model_id: str, display_name: str = '',
                              model_type: str = 'chat', input_modes: str = 'text',
-                             output_modes: str = 'text', capabilities: str = ''):
+                             output_modes: str = 'text', capabilities: str = '', api_format: str = None):
     """添加模型到供应商"""
     pool = await get_pool()
     async with pool.acquire() as conn:
         row = await conn.fetchrow("""
             INSERT INTO provider_models (provider_id, model_id, display_name, model_type,
-                                         input_modes, output_modes, capabilities)
-            VALUES ($1, $2, $3, $4, $5, $6, $7)
+                                         input_modes, output_modes, capabilities, api_format)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
             ON CONFLICT (provider_id, model_id) DO NOTHING
             RETURNING id, provider_id, model_id, display_name, model_type,
-                      input_modes, output_modes, capabilities, created_at
+                      input_modes, output_modes, capabilities, api_format, created_at
         """, provider_id, model_id, display_name or model_id, model_type,
-             input_modes, output_modes, capabilities)
+             input_modes, output_modes, capabilities, api_format or None)
         return dict(row) if row else None
 
 
 async def update_provider_model(model_pk_id: int, **kwargs):
     """更新模型配置"""
     pool = await get_pool()
-    allowed = {'display_name', 'model_type', 'input_modes', 'output_modes', 'capabilities'}
-    fields = {k: v for k, v in kwargs.items() if k in allowed and v is not None}
+    allowed = {'display_name', 'model_type', 'input_modes', 'output_modes', 'capabilities', 'api_format'}
+    fields = {k: v for k, v in kwargs.items() if k in allowed}
+    # api_format 允许设为 None/空串（表示跟随供应商）
+    if 'api_format' in fields:
+        fields['api_format'] = fields['api_format'] or None
+    fields = {k: v for k, v in fields.items() if v is not None or k == 'api_format'}
     if not fields:
         return None
 
@@ -1983,7 +2011,7 @@ async def update_provider_model(model_pk_id: int, **kwargs):
         UPDATE provider_models SET {', '.join(sets)}
         WHERE id = ${len(vals)}
         RETURNING id, provider_id, model_id, display_name, model_type,
-                  input_modes, output_modes, capabilities, created_at
+                  input_modes, output_modes, capabilities, api_format, created_at
     """
     async with pool.acquire() as conn:
         row = await conn.fetchrow(query, *vals)
@@ -2001,11 +2029,16 @@ async def delete_provider_model(model_pk_id: int):
 
 
 async def resolve_provider_for_model(model_id: str):
-    """根据 model_id 查找对应的已启用供应商，返回 {api_base_url, api_key, provider_name} 或 None"""
+    """根据 model_id 查找对应的已启用供应商，返回 {api_base_url, api_key, api_format, provider_name} 或 None
+
+    api_format 优先级：模型级 > 供应商级 > 默认 'openai'
+    """
     pool = await get_pool()
     async with pool.acquire() as conn:
         row = await conn.fetchrow("""
-            SELECT p.api_base_url, p.api_key, p.name as provider_name
+            SELECT p.api_base_url, p.api_key,
+                   COALESCE(pm.api_format, p.api_format, 'openai') as api_format,
+                   p.name as provider_name
             FROM provider_models pm
             JOIN providers p ON pm.provider_id = p.id
             WHERE pm.model_id = $1 AND p.enabled = TRUE
