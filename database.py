@@ -1227,6 +1227,7 @@ async def _vector_search(query_embedding: list, limit: int, heat_params: dict, p
             "is_permanent": row.get("is_permanent", False),
             "emotional_weight": row.get("emotional_weight", 0),
             "resolution": row.get("resolution", 1.0),
+            "project_id": row.get("project_id"),
             "heat": round(heat, 4),
             "similarity": round(sim, 4),
             "score": round(score, 4),
@@ -1617,6 +1618,7 @@ async def _keyword_search(query: str, limit: int = 10, heat_params: dict = None,
                 COALESCE(m.access_query_hashes, '[]'::jsonb) as access_query_hashes,
                 COALESCE(m.is_permanent, false) as is_permanent,
                 COALESCE(m.resolution, 1.0) as resolution,
+                m.project_id,
                 ({hit_count_expr}) AS hit_count,
                 (
                     0.5 * ({hit_count_expr})::float / {max_hits} +
@@ -1651,6 +1653,7 @@ async def _keyword_search(query: str, limit: int = 10, heat_params: dict = None,
                 "is_permanent": r.get("is_permanent", False),
                 "emotional_weight": r.get("emotional_weight", 0),
                 "resolution": r.get("resolution", 1.0),
+                "project_id": r.get("project_id"),
                 "heat": round(heat, 4),
                 "similarity": 0.0,
                 "score": round(float(r["score"]), 4),
@@ -1707,38 +1710,46 @@ async def get_all_memories_count():
 # 记忆去重检测
 # ============================================================
 
-async def check_memory_duplicate(new_content: str, threshold: float = None, new_title: str = ""):
+async def check_memory_duplicate(new_content: str, threshold: float = None, new_title: str = "", project_id: str = None):
     """
     检查新记忆是否与已有记忆重复（v5.4：标题不同时不判重复）
-    
+
     三层检测：
     1. 精确匹配
     2. 包含关系
     3. 字符重叠度 + 标题保护（标题明显不同 → 不同主题 → 放行）
-    
+
+    project_id: 传入时只在该项目内去重；不传时只在全局（project_id IS NULL）去重
+
     返回：(is_duplicate: bool, similar_results: list)
-    
+
     注意：去重仍用字符级检测（而非向量），因为去重需要精确判断，
     而向量搜索更适合"模糊相关"的场景。
     """
     if threshold is None:
         threshold = DEDUP_THRESHOLD
-    
+
     pool = await get_pool()
-    
-    # 第1层：精确匹配
+
+    # 第1层：精确匹配（按作用域过滤）
     async with pool.acquire() as conn:
-        exact_count = await conn.fetchval(
-            "SELECT COUNT(*) FROM memories WHERE content = $1",
-            new_content,
-        )
+        if project_id:
+            exact_count = await conn.fetchval(
+                "SELECT COUNT(*) FROM memories WHERE content = $1 AND project_id = $2",
+                new_content, project_id,
+            )
+        else:
+            exact_count = await conn.fetchval(
+                "SELECT COUNT(*) FROM memories WHERE content = $1 AND project_id IS NULL",
+                new_content,
+            )
         if exact_count > 0:
             print(f"🔄 精确重复，跳过: {new_content[:60]}...")
             return True, []
-    
+
     # 第2层 + 第3层：先用向量搜索找候选，再做精确对比
     try:
-        similar = await search_memories(new_content, limit=15, track_recall=False)
+        similar = await search_memories(new_content, limit=15, track_recall=False, project_id=project_id)
     except Exception:
         return False, []
     

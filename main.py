@@ -693,6 +693,12 @@ async def process_memories_background(session_id: str, user_msg: str, assistant_
                     print(f"   🌙 Dream 异常: {e}")
             _spawn_background_task(_silent_dream())
 
+        # 项目对话默认不提取碎片（对话已保存，但不走记忆提取流程）
+        # 未来做"碎片进全局"开关后，这里加条件判断
+        if project_id:
+            print(f"📂 项目对话，跳过记忆提取（project_id={project_id}）")
+            return {"action": "skip_project", "project_id": project_id}
+
         # 检测用户是否主动要求记忆
         force_extract = any(kw in user_msg for kw in MEMORY_TRIGGER_WORDS)
 
@@ -792,26 +798,33 @@ async def process_memories_background(session_id: str, user_msg: str, assistant_
         saved_count = 0
         skipped_count = 0
         contradiction_count = 0
-        
+        saved_items = []  # 收集保存的记忆内容（供事件 payload 使用）
+
         for mem in filtered_memories:
-            # 去重检测（v5.4：传标题，标题不同时不误杀）
-            is_dup, similar_results = await check_memory_duplicate(mem["content"], new_title=mem.get("title", ""))
-            
+            # 去重检测（v5.4：传标题，标题不同时不误杀；v5.8：按 project_id 作用域去重）
+            is_dup, similar_results = await check_memory_duplicate(mem["content"], new_title=mem.get("title", ""), project_id=project_id)
+
             if is_dup:
                 skipped_count += 1
                 continue
-            
+
+            # 按作用域过滤矛盾候选：项目碎片只能替代同项目的旧碎片，全局只看全局
+            if project_id:
+                scoped_results = [m for m in similar_results if m.get("project_id") == project_id]
+            else:
+                scoped_results = [m for m in similar_results if m.get("project_id") is None]
+
             # 矛盾检测（v5.3：复用去重搜索结果，不额外调 embedding API）
             contradicted_ids = detect_contradictions(
-                mem.get("title", ""), mem["content"], similar_results
+                mem.get("title", ""), mem["content"], scoped_results
             )
-            
+
             # 自动匹配分类
             cat_id = None
             cat_hint = mem.get("category", "")
             if cat_hint:
                 cat_id = await match_category_by_name(cat_hint)
-            
+
             # 保存新记忆（v5.3：返回 ID，用于创建 supersedes edge）
             new_id = await save_memory(
                 content=mem["content"],
@@ -824,7 +837,8 @@ async def process_memories_background(session_id: str, user_msg: str, assistant_
                 project_id=project_id,
             )
             saved_count += 1
-            
+            saved_items.append({"title": mem.get("title", ""), "content": mem["content"][:120]})
+
             # 处理矛盾：标旧记忆失效 + 创建 supersedes edge
             if contradicted_ids and new_id:
                 for old_id in contradicted_ids:
@@ -834,15 +848,15 @@ async def process_memories_background(session_id: str, user_msg: str, assistant_
                         reason="提取时自动检测到信息更新", created_by="extractor"
                     )
                     contradiction_count += 1
-        
+
         if saved_count > 0 or skipped_count > 0:
             total = await get_all_memories_count()
             contra_msg = f"，{contradiction_count} 条旧记忆被替代" if contradiction_count > 0 else ""
             print(f"💾 提取结果：{saved_count} 条新记忆已保存，{skipped_count} 条重复已跳过{contra_msg}，总计 {total} 条")
-            return {"action": "extract", "saved": saved_count, "skipped": skipped_count, "contradictions": contradiction_count, "total": total}
+            return {"action": "extract", "saved": saved_count, "skipped": skipped_count, "contradictions": contradiction_count, "total": total, "items": saved_items}
         else:
             print(f"💭 本轮对话未产生新记忆")
-            return {"action": "extract", "saved": 0, "skipped": 0, "contradictions": 0, "total": await get_all_memories_count()}
+            return {"action": "extract", "saved": 0, "skipped": 0, "contradictions": 0, "total": await get_all_memories_count(), "items": []}
             
     except Exception as e:
         print(f"⚠️  后台记忆处理失败: {e}")
@@ -2455,7 +2469,7 @@ async def api_extract_now(request: Request):
         for mem in new_memories:
             if any(kw in mem["content"] for kw in META_BLACKLIST):
                 continue
-            is_dup, _ = await check_memory_duplicate(mem["content"], new_title=mem.get("title", ""))
+            is_dup, _ = await check_memory_duplicate(mem["content"], new_title=mem.get("title", ""), project_id=project_id)
             if is_dup:
                 skipped_count += 1
                 continue
