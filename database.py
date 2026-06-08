@@ -260,12 +260,15 @@ async def init_tables():
                 error           BOOLEAN DEFAULT FALSE,
                 token_info      JSONB,
                 thinking        TEXT,
+                status_events   JSONB,
                 tool_events     JSONB,
                 memory_result   JSONB,
                 memory_event    JSONB,
+                handoff_info    JSONB,
                 web_search_results JSONB,
                 versions        JSONB,
                 version_index   INTEGER DEFAULT 0,
+                images          JSONB,
                 attachments     JSONB,
                 usage           JSONB,
                 summary         TEXT,
@@ -449,6 +452,22 @@ async def init_tables():
         if not has_memory_event:
             await conn.execute("ALTER TABLE chat_messages ADD COLUMN memory_event JSONB")
             print("✅ chat_messages 表已添加 memory_event 列")
+
+        # v6.1：chat_messages 表扩展 — 完整前端消息状态同步
+        for col_name, col_def in [
+            ("status_events", "JSONB"),
+            ("handoff_info", "JSONB"),
+            ("images", "JSONB"),
+        ]:
+            has_col = await conn.fetchval("""
+                SELECT EXISTS (
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_name = 'chat_messages' AND column_name = $1
+                )
+            """, col_name)
+            if not has_col:
+                await conn.execute(f"ALTER TABLE chat_messages ADD COLUMN {col_name} {col_def}")
+                print(f"✅ chat_messages 表已添加 {col_name} 列（完整消息同步）")
 
         # v5.3：时间有效期窗口（MemPalace 启发）
         for col_name, col_def in [
@@ -815,23 +834,27 @@ async def get_recent_conversation(limit: int = 20):
         return list(reversed(rows))
 
 
-async def get_handoff_messages(limit: int = 6):
+async def get_handoff_messages(limit: int = 6, exclude_conversation_id: str = None):
     """
     获取最近一个有足够消息的对话的最后 N 条消息，用于无缝切窗。
     只取 user 和 assistant 角色的消息，按时间正序返回。
+
+    exclude_conversation_id: 当前正在进行的对话 ID。如果传入，会跳过它，
+    避免在同一个对话里继续聊时把自己的最后几条又当成"上一个对话"注入。
     """
     pool = await get_pool()
     async with pool.acquire() as conn:
-        # 找最近一个至少有 4 条消息（2 轮来回）的对话
+        # 找最近一个至少有 4 条消息（2 轮来回）的对话，排除当前对话本身
         conv = await conn.fetchrow("""
             SELECT c.id, c.title FROM chat_conversations c
-            WHERE (
-                SELECT COUNT(*) FROM chat_messages m 
+            WHERE ($1::text IS NULL OR c.id <> $1)
+              AND (
+                SELECT COUNT(*) FROM chat_messages m
                 WHERE m.conversation_id = c.id AND m.role IN ('user', 'assistant')
             ) >= 4
             ORDER BY c.updated_at DESC
             LIMIT 1
-        """)
+        """, exclude_conversation_id)
         if not conv:
             return [], ""
         
@@ -972,21 +995,23 @@ async def update_memory(memory_id: int, content: str = None, importance: int = N
 # 记忆搜索（v3.0 向量语义搜索）
 # ============================================================
 
-async def search_memories(query: str, limit: int = 10, track_recall: bool = True, project_id: str = None):
+async def search_memories(query: str, limit: int = 10, track_recall: bool = True, project_id: str = None, return_embedding: bool = False):
     """
     搜索相关记忆 —— RRF 混合检索（v5.7）
-    
+
     流程：
     1. 生成查询向量
     2. 并行执行向量搜索 + 关键词搜索
     3. RRF（Reciprocal Rank Fusion）合并两路结果
     4. 更新召回追踪数据（可关闭）
     5. 返回 top-K
-    
+
     参数：
         track_recall: 是否记录召回追踪数据。聊天注入时=True，去重对比时=False
         project_id: 项目ID。提供时搜索全局记忆+该项目记忆；不提供时只搜全局记忆
-    
+        return_embedding: True 时返回 (results, query_embedding) 元组，
+                          调用方可复用 embedding 避免重复计算（如工具抽屉路由）
+
     降级：如果 embedding 生成失败，只用关键词搜索
     """
     # 候选池扩大到 3 倍，给 RRF 合并留充足的候选
@@ -1075,7 +1100,11 @@ async def search_memories(query: str, limit: int = 10, track_recall: bool = True
             await _check_auto_lock(ids, heat_params)
         except Exception as e:
             print(f"   ⚠️ 自动锁定检测出错（不影响搜索）: {e}")
-    
+
+    # v6.0：可选返回 query_embedding（供工具抽屉路由复用）
+    if return_embedding:
+        return results, query_embedding
+
     return results
 
 
@@ -2186,14 +2215,14 @@ async def sync_upsert_messages(conv_id: str, messages: list):
                 await conn.execute("""
                     INSERT INTO chat_messages (
                         id, conversation_id, role, content, time, model,
-                        streaming, error, token_info, thinking, tool_events,
-                        memory_result, memory_event, web_search_results, versions, version_index,
-                        attachments, usage, summary, sort_order
+                        streaming, error, token_info, thinking, status_events, tool_events,
+                        memory_result, memory_event, handoff_info, web_search_results, versions, version_index,
+                        images, attachments, usage, summary, sort_order
                     ) VALUES (
                         $1, $2, $3, $4, $5, $6,
-                        $7, $8, $9, $10, $11,
-                        $12, $13, $14, $15, $16,
-                        $17, $18, $19, $20
+                        $7, $8, $9, $10, $11, $12,
+                        $13, $14, $15, $16, $17, $18,
+                        $19, $20, $21, $22, $23
                     )
                 """,
                     str(msg.get("id") or f"m-{conv_id}-{idx}"),
@@ -2206,12 +2235,15 @@ async def sync_upsert_messages(conv_id: str, messages: list):
                     bool(msg.get("error", False)),
                     _to_json(msg.get("tokenInfo") or msg.get("token_info")),
                     msg.get("thinking") if isinstance(msg.get("thinking"), str) else None,
+                    _to_json(msg.get("statusEvents") or msg.get("status_events")),
                     _to_json(msg.get("toolEvents") or msg.get("tool_events")),
                     _to_json(msg.get("memoryResult") or msg.get("memory_result")),
                     _to_json(msg.get("memoryEvent") or msg.get("memory_event")),
+                    _to_json(msg.get("handoffInfo") or msg.get("handoff_info")),
                     _to_json(msg.get("webSearchResults") or msg.get("web_search_results")),
                     _to_json(msg.get("versions")),
                     int(msg.get("versionIndex", msg.get("version_index", 0)) or 0),
+                    _to_json(msg.get("images")),
                     _to_json(msg.get("attachments")),
                     _to_json(msg.get("usage")),
                     msg.get("summary") if isinstance(msg.get("summary"), str) else None,
