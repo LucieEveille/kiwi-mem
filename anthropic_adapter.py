@@ -369,6 +369,48 @@ def _convert_tools_openai_to_anthropic(openai_tools: list) -> list:
     return result
 
 
+def _image_url_to_anthropic_source(url: str):
+    """OpenAI image_url.url → Anthropic image source。支持 data:base64 和 http(s) URL。"""
+    if url.startswith("data:"):
+        # 格式：data:[<media_type>][;base64],<data>
+        try:
+            header, data = url.split(",", 1)
+        except ValueError:
+            return None
+        meta = header[5:]  # 去掉 'data:'
+        media_type = meta.split(";", 1)[0] or "image/jpeg"
+        if ";base64" in meta:
+            return {"type": "base64", "media_type": media_type, "data": data}
+        return None  # 非 base64 的 data URL 很罕见，Anthropic 不支持
+    if url.startswith("http://") or url.startswith("https://"):
+        return {"type": "url", "url": url}
+    return None
+
+
+def _convert_content_blocks(content):
+    """把 OpenAI 风格的 content blocks 列表转成 Anthropic 风格。
+
+    主要处理 image_url → image；text 和已是 Anthropic 格式的块（含 cache_control）
+    原样保留。非 list 直接返回。
+    """
+    if not isinstance(content, list):
+        return content
+    out = []
+    for block in content:
+        if not isinstance(block, dict):
+            out.append({"type": "text", "text": str(block)})
+            continue
+        if block.get("type") == "image_url":
+            url = (block.get("image_url") or {}).get("url", "")
+            src = _image_url_to_anthropic_source(url) if url else None
+            if src:
+                out.append({"type": "image", "source": src})
+            # 解析失败的图片直接丢弃，避免发出 Anthropic 不认的块
+        else:
+            out.append(block)
+    return out
+
+
 def _convert_messages(openai_msgs: list) -> list:
     """将 OpenAI 格式的消息列表转换为 Anthropic 格式
     
@@ -403,7 +445,7 @@ def _convert_messages(openai_msgs: list) -> list:
             if isinstance(content, str) and content:
                 blocks.append({"type": "text", "text": content})
             elif isinstance(content, list):
-                blocks.extend(content)
+                blocks.extend(_convert_content_blocks(content))
 
             # tool_calls → tool_use blocks
             for tc in msg.get("tool_calls", []):
@@ -422,8 +464,8 @@ def _convert_messages(openai_msgs: list) -> list:
                 result.append({"role": "assistant", "content": content})
 
         else:
-            # user 等其他角色
-            result.append({"role": role, "content": content})
+            # user 等其他角色：list content 里的 image_url 需转成 Anthropic image 块
+            result.append({"role": role, "content": _convert_content_blocks(content)})
 
     return result
 
