@@ -534,7 +534,7 @@ async function loadProviders() {
     document.getElementById('providers-list').innerHTML = list.map(p => `
       <div class="bg-panel-card border border-panel-border rounded-lg p-4 mb-3 flex items-center justify-between">
         <div>
-          <p class="font-semibold">${escHtml(p.name)} <span class="badge ${p.api_format==='anthropic'?'imp-high':'imp-mid'}" style="font-size:10px;margin-left:6px">${p.api_format || 'openai'}</span></p>
+          <p class="font-semibold">${escHtml(p.name)} <span class="badge ${p.api_format==='anthropic'?'imp-high':'imp-mid'}" style="font-size:10px;margin-left:6px">${escHtml(p.api_format || 'openai')}</span></p>
           <p class="text-xs text-gray-500 mt-1">${escHtml(p.api_base_url || '')}</p>
           <p class="text-xs text-gray-500">Key: ${p.api_key_preview || '（未设置）'}</p>
         </div>

@@ -1901,8 +1901,28 @@ async def get_provider(provider_id: int):
         return dict(row) if row else None
 
 
+# api_format 的合法取值。供应商级只能是这两个；模型级额外允许 None（表示跟随供应商）。
+_VALID_API_FORMATS = {'openai', 'anthropic'}
+
+
+def _normalize_api_format(value, allow_none: bool = False):
+    """把 api_format 收敛到合法白名单。
+
+    入口处统一校验，根治脏数据/恶意值（避免前端拼进 innerHTML 时的 XSS，
+    也避免请求链路里拿到未知格式）。
+      - 合法（openai/anthropic）→ 原样返回
+      - allow_none 且为空 → None（模型级表示"跟随供应商"）
+      - 其他一律回落到 'openai'
+    """
+    v = (value or '').strip().lower()
+    if v in _VALID_API_FORMATS:
+        return v
+    return None if allow_none else 'openai'
+
+
 async def create_provider(name: str, api_base_url: str, api_key: str = '', enabled: bool = True, api_format: str = 'openai'):
     """创建供应商"""
+    api_format = _normalize_api_format(api_format)
     pool = await get_pool()
     async with pool.acquire() as conn:
         row = await conn.fetchrow("""
@@ -1918,6 +1938,8 @@ async def update_provider(provider_id: int, **kwargs):
     pool = await get_pool()
     allowed = {'name', 'api_base_url', 'api_key', 'enabled', 'api_format'}
     fields = {k: v for k, v in kwargs.items() if k in allowed and v is not None}
+    if 'api_format' in fields:
+        fields['api_format'] = _normalize_api_format(fields['api_format'])
     if not fields:
         return None
 
@@ -1985,6 +2007,7 @@ async def add_provider_model(provider_id: int, model_id: str, display_name: str 
                              model_type: str = 'chat', input_modes: str = 'text',
                              output_modes: str = 'text', capabilities: str = '', api_format: str = None):
     """添加模型到供应商"""
+    api_format = _normalize_api_format(api_format, allow_none=True)
     pool = await get_pool()
     async with pool.acquire() as conn:
         row = await conn.fetchrow("""
@@ -2004,9 +2027,9 @@ async def update_provider_model(model_pk_id: int, **kwargs):
     pool = await get_pool()
     allowed = {'display_name', 'model_type', 'input_modes', 'output_modes', 'capabilities', 'api_format'}
     fields = {k: v for k, v in kwargs.items() if k in allowed}
-    # api_format 允许设为 None/空串（表示跟随供应商）
+    # api_format 允许设为 None/空串（表示跟随供应商），非法值收敛为 None
     if 'api_format' in fields:
-        fields['api_format'] = fields['api_format'] or None
+        fields['api_format'] = _normalize_api_format(fields['api_format'], allow_none=True)
     fields = {k: v for k, v in fields.items() if v is not None or k == 'api_format'}
     if not fields:
         return None
