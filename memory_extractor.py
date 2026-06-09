@@ -103,10 +103,6 @@ async def extract_memories(messages: List[Dict[str, str]], existing_memories: Li
     返回：
         记忆列表，格式 [{"content": "...", "importance": N, "emotional_weight": N, "category": "..."}, ...]
     """
-    if not API_KEY:
-        print("⚠️  API_KEY 未设置，跳过记忆提取")
-        return []
-
     if not messages:
         return []
 
