@@ -60,6 +60,8 @@ All static content (persona, profile, locked memories, calendar summaries) is or
 
 Most AI memory solutions only work with OpenAI-format APIs. kiwi-mem also supports Anthropic's native format — if you have an Anthropic API key, you can connect directly without a relay or proxy. Just select "Anthropic native" when adding a provider in the admin panel, and kiwi-mem handles all format differences, including streaming and tool use.
 
+> ⚠️ Anthropic native format must be configured through the admin panel (select "Anthropic native" when adding a provider). Environment variable configuration only works with OpenAI-compatible providers.
+
 ### 🧰 Only the tools you need, when you need them
 
 kiwi-mem has 20+ built-in tools (memory search, calendar queries, reminders, web search, etc.). Loading all of them into every conversation wastes hundreds of tokens on tool descriptions the model won't even use.
