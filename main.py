@@ -3212,6 +3212,40 @@ async def api_delete_provider(provider_id: int):
         return {"error": str(e)}
 
 
+@app.post("/admin/test-provider/{provider_id}")
+async def api_test_provider(provider_id: int):
+    """测试供应商 API Key 是否可用（调 /models 端点验证）"""
+    try:
+        provider = await get_provider(provider_id)
+        if not provider:
+            return {"ok": False, "error": "供应商不存在"}
+        base_url = (provider.get("api_base_url") or "").rstrip("/")
+        api_key = provider.get("api_key") or ""
+        if not base_url or not api_key:
+            return {"ok": False, "error": "缺少 API Base URL 或 API Key"}
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.get(
+                f"{base_url}/models",
+                headers={"Authorization": f"Bearer {api_key}"},
+            )
+        if resp.status_code == 200:
+            data = resp.json()
+            count = len(data.get("data", []))
+            return {"ok": True, "message": f"连接成功，获取到 {count} 个模型"}
+        elif resp.status_code == 401:
+            return {"ok": False, "error": "API Key 无效（401）"}
+        elif resp.status_code == 403:
+            return {"ok": False, "error": "权限不足（403）"}
+        else:
+            return {"ok": False, "error": f"HTTP {resp.status_code}"}
+    except httpx.TimeoutException:
+        return {"ok": False, "error": "连接超时"}
+    except httpx.ConnectError:
+        return {"ok": False, "error": "无法连接到服务器"}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
 def _detect_provider_type(api_base_url: str) -> str:
     """根据供应商 URL 判断类型"""
     url = (api_base_url or '').lower()
