@@ -70,6 +70,13 @@ def to_anthropic_request(openai_body: dict) -> dict:
             body["tool_choice"] = {"type": "none"}
         elif tc == "required":
             body["tool_choice"] = {"type": "any"}
+        elif isinstance(tc, dict) and tc.get("type") == "function":
+            # OpenAI 强制指定某个函数：{"type":"function","function":{"name":"..."}}
+            # → Anthropic 强制单工具：{"type":"tool","name":"..."}
+            # 不转的话 Anthropic 会回退到自动选择，依赖 forced function call 的客户端会拿错工具
+            func_name = (tc.get("function") or {}).get("name")
+            if func_name:
+                body["tool_choice"] = {"type": "tool", "name": func_name}
 
     # ── 思考链 / extended thinking ──
     reasoning = openai_body.get("reasoning")
