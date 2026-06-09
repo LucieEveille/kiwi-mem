@@ -153,10 +153,11 @@ async def extract_memories(messages: List[Dict[str, str]], existing_memories: Li
     # v5.4：动态解析供应商端点（优先走数据库 provider，降级到环境变量）
     try:
         from database import resolve_model_endpoint
-        use_api_url, use_api_key = await resolve_model_endpoint(use_model)
+        use_api_url, use_api_key, use_api_format = await resolve_model_endpoint(use_model)
     except Exception:
         use_api_url = API_BASE_URL
         use_api_key = API_KEY
+        use_api_format = "openai"
 
     if not use_api_key:
         print("⚠️  无可用 API Key（供应商和环境变量均未配置），跳过记忆提取")
@@ -164,30 +165,28 @@ async def extract_memories(messages: List[Dict[str, str]], existing_memories: Li
 
     # 调用 LLM 提取记忆
     try:
+        from anthropic_adapter import prepare_background_request, parse_background_response
+        _body = {
+            "model": use_model,
+            "max_tokens": 1000,
+            "messages": [
+                {"role": "system", "content": prompt},
+                {"role": "user", "content": f"请从以下对话中提取新的记忆：\n\n{conversation_text}"},
+            ],
+        }
+        _headers, _send_body = prepare_background_request(
+            use_api_key, use_api_format, _body,
+            referer="https://midsummer-gateway.local",
+            title="AI Memory Gateway - Memory Extraction",
+        )
         async with httpx.AsyncClient(timeout=60) as client:
-            response = await client.post(
-                use_api_url,
-                headers={
-                    "Authorization": f"Bearer {use_api_key}",
-                    "Content-Type": "application/json",
-                    "HTTP-Referer": "https://midsummer-gateway.local",
-                    "X-Title": "AI Memory Gateway - Memory Extraction",
-                },
-                json={
-                    "model": use_model,
-                    "max_tokens": 1000,
-                    "messages": [
-                        {"role": "system", "content": prompt},
-                        {"role": "user", "content": f"请从以下对话中提取新的记忆：\n\n{conversation_text}"},
-                    ],
-                },
-            )
+            response = await client.post(use_api_url, headers=_headers, json=_send_body)
 
             if response.status_code != 200:
                 print(f"⚠️  记忆提取请求失败: {response.status_code}")
                 return []
 
-            data = response.json()
+            data = parse_background_response(response.json(), use_api_format)
             text = data.get("choices", [{}])[0].get("message", {}).get("content", "")
             
             # 日志：打印模型原始返回（方便排查）

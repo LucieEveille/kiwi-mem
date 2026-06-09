@@ -170,37 +170,36 @@ async def _run_daily_digest_impl(date_str: str, now_cst, model_override: str = N
     # v5.4：动态解析供应商端点
     try:
         from database import resolve_model_endpoint
-        use_api_url, use_api_key = await resolve_model_endpoint(use_model)
+        use_api_url, use_api_key, use_api_format = await resolve_model_endpoint(use_model)
     except Exception:
         use_api_url = MEMORY_API_BASE_URL
         use_api_key = MEMORY_API_KEY
-    
+        use_api_format = "openai"
+
     # ---- 3. 调用 Haiku ----
     try:
+        from anthropic_adapter import prepare_background_request, parse_background_response
+        _body = {
+            "model": use_model,
+            "max_tokens": 2000,
+            "messages": [
+                {"role": "system", "content": prompt},
+                {"role": "user", "content": f"请整理 {date_str} 的碎片记忆。"},
+            ],
+        }
+        _headers, _send_body = prepare_background_request(
+            use_api_key, use_api_format, _body,
+            referer="https://midsummer-gateway.local",
+            title="AI Memory Gateway - Daily Digest",
+        )
         async with httpx.AsyncClient(timeout=90) as client:
-            response = await client.post(
-                use_api_url,
-                headers={
-                    "Authorization": f"Bearer {use_api_key}",
-                    "Content-Type": "application/json",
-                    "HTTP-Referer": "https://midsummer-gateway.local",
-                    "X-Title": "AI Memory Gateway - Daily Digest",
-                },
-                json={
-                    "model": use_model,
-                    "max_tokens": 2000,
-                    "messages": [
-                        {"role": "system", "content": prompt},
-                        {"role": "user", "content": f"请整理 {date_str} 的碎片记忆。"},
-                    ],
-                },
-            )
-            
+            response = await client.post(use_api_url, headers=_headers, json=_send_body)
+
             if response.status_code != 200:
                 print(f"   ⚠️ Haiku 请求失败: {response.status_code}")
                 return {"date": date_str, "fragments": len(fragments), "digests": 0, "error": f"HTTP {response.status_code}"}
-            
-            data = response.json()
+
+            data = parse_background_response(response.json(), use_api_format)
             text = data.get("choices", [{}])[0].get("message", {}).get("content", "")
             
             # 日志
@@ -413,36 +412,34 @@ async def update_user_profile(digest_text: str = None, model_override: str = Non
     # 5. 调用模型（v5.4：走供应商路由）
     try:
         from database import resolve_model_endpoint
-        use_api_url, use_api_key = await resolve_model_endpoint(use_model)
+        use_api_url, use_api_key, use_api_format = await resolve_model_endpoint(use_model)
     except Exception:
         use_api_url = MEMORY_API_BASE_URL
         use_api_key = MEMORY_API_KEY
+        use_api_format = "openai"
 
     try:
+        from anthropic_adapter import prepare_background_request, parse_background_response
+        _body = {
+            "model": use_model,
+            "max_tokens": 2000,
+            "messages": [
+                {"role": "system", "content": prompt},
+                {"role": "user", "content": "请根据今天的日志更新用户画像。"},
+            ],
+        }
+        _headers, _send_body = prepare_background_request(
+            use_api_key, use_api_format, _body,
+            referer="https://midsummer-gateway.local", title="User Profile Update",
+        )
         async with httpx.AsyncClient(timeout=90) as client:
-            response = await client.post(
-                use_api_url,
-                headers={
-                    "Authorization": f"Bearer {use_api_key}",
-                    "Content-Type": "application/json",
-                    "HTTP-Referer": "https://midsummer-gateway.local",
-                    "X-Title": "User Profile Update",
-                },
-                json={
-                    "model": use_model,
-                    "max_tokens": 2000,
-                    "messages": [
-                        {"role": "system", "content": prompt},
-                        {"role": "user", "content": "请根据今天的日志更新用户画像。"},
-                    ],
-                },
-            )
-            
+            response = await client.post(use_api_url, headers=_headers, json=_send_body)
+
             if response.status_code != 200:
                 print(f"   ⚠️ 画像更新请求失败: {response.status_code}")
                 return {"status": "error", "error": f"HTTP {response.status_code}"}
-            
-            data = response.json()
+
+            data = parse_background_response(response.json(), use_api_format)
             new_profile = data.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
             
             if not new_profile:
@@ -774,36 +771,34 @@ async def generate_day_page(target_date: str = None, model_override: str = None)
     # 6. 调用模型（v5.4：走供应商路由）
     try:
         from database import resolve_model_endpoint
-        use_api_url, use_api_key = await resolve_model_endpoint(use_model)
+        use_api_url, use_api_key, use_api_format = await resolve_model_endpoint(use_model)
     except Exception:
         use_api_url = MEMORY_API_BASE_URL
         use_api_key = MEMORY_API_KEY
+        use_api_format = "openai"
 
     try:
+        from anthropic_adapter import prepare_background_request, parse_background_response
+        _body = {
+            "model": use_model,
+            "max_tokens": 6000,
+            "messages": [
+                {"role": "system", "content": prompt},
+                {"role": "user", "content": f"请生成 {date_str} 的日页面。"},
+            ],
+        }
+        _headers, _send_body = prepare_background_request(
+            use_api_key, use_api_format, _body,
+            referer="https://midsummer-gateway.local", title="Day Page Generation",
+        )
         async with httpx.AsyncClient(timeout=120) as client:
-            response = await client.post(
-                use_api_url,
-                headers={
-                    "Authorization": f"Bearer {use_api_key}",
-                    "Content-Type": "application/json",
-                    "HTTP-Referer": "https://midsummer-gateway.local",
-                    "X-Title": "Day Page Generation",
-                },
-                json={
-                    "model": use_model,
-                    "max_tokens": 6000,
-                    "messages": [
-                        {"role": "system", "content": prompt},
-                        {"role": "user", "content": f"请生成 {date_str} 的日页面。"},
-                    ],
-                },
-            )
+            response = await client.post(use_api_url, headers=_headers, json=_send_body)
 
             if response.status_code != 200:
                 print(f"   ⚠️ 日页面生成请求失败: {response.status_code}")
                 return {"date": date_str, "status": "error", "error": f"HTTP {response.status_code}"}
 
-            data = response.json()
+            data = parse_background_response(response.json(), use_api_format)
             text = data.get("choices", [{}])[0].get("message", {}).get("content", "")
 
             # 清理 markdown 包裹
@@ -1320,35 +1315,33 @@ async def _call_model_for_json(prompt: str, user_msg: str, model: str, max_token
     # 动态解析供应商端点
     try:
         from database import resolve_model_endpoint
-        use_api_url, use_api_key = await resolve_model_endpoint(model)
+        use_api_url, use_api_key, use_api_format = await resolve_model_endpoint(model)
     except Exception:
         use_api_url = MEMORY_API_BASE_URL
         use_api_key = MEMORY_API_KEY
+        use_api_format = "openai"
 
     try:
+        from anthropic_adapter import prepare_background_request, parse_background_response
+        _body = {
+            "model": model,
+            "max_tokens": max_tokens,
+            "messages": [
+                {"role": "system", "content": prompt},
+                {"role": "user", "content": user_msg},
+            ],
+        }
+        _headers, _send_body = prepare_background_request(
+            use_api_key, use_api_format, _body,
+            referer="https://midsummer-gateway.local", title="Memory Summary",
+        )
         async with httpx.AsyncClient(timeout=120) as client:
-            response = await client.post(
-                use_api_url,
-                headers={
-                    "Authorization": f"Bearer {use_api_key}",
-                    "Content-Type": "application/json",
-                    "HTTP-Referer": "https://midsummer-gateway.local",
-                    "X-Title": "Memory Summary",
-                },
-                json={
-                    "model": model,
-                    "max_tokens": max_tokens,
-                    "messages": [
-                        {"role": "system", "content": prompt},
-                        {"role": "user", "content": user_msg},
-                    ],
-                },
-            )
+            response = await client.post(use_api_url, headers=_headers, json=_send_body)
             if response.status_code != 200:
                 print(f"   ⚠️ 模型请求失败: {response.status_code}")
                 return None
 
-            data = response.json()
+            data = parse_background_response(response.json(), use_api_format)
             text = data.get("choices", [{}])[0].get("message", {}).get("content", "")
             text = text.strip()
             if text.startswith("```json"):

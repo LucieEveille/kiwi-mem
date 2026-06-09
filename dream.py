@@ -286,30 +286,28 @@ async def run_dream(trigger_type: str = "manual", model_override: str = None):
         # v5.4：动态解析供应商端点
         try:
             from database import resolve_model_endpoint
-            use_api_url, use_api_key = await resolve_model_endpoint(use_model)
+            use_api_url, use_api_key, use_api_format = await resolve_model_endpoint(use_model)
         except Exception:
             use_api_url = MEMORY_API_BASE_URL
             use_api_key = MEMORY_API_KEY
+            use_api_format = "openai"
 
         try:
+            from anthropic_adapter import prepare_background_request, parse_background_response
+            _body = {
+                "model": use_model,
+                "max_tokens": 6000,
+                "messages": [
+                    {"role": "system", "content": prompt},
+                    {"role": "user", "content": "开始做梦。"},
+                ],
+            }
+            _headers, _send_body = prepare_background_request(
+                use_api_key, use_api_format, _body,
+                referer="https://midsummer-gateway.local", title="Dream",
+            )
             async with httpx.AsyncClient(timeout=120) as client:
-                response = await client.post(
-                    use_api_url,
-                    headers={
-                        "Authorization": f"Bearer {use_api_key}",
-                        "Content-Type": "application/json",
-                        "HTTP-Referer": "https://midsummer-gateway.local",
-                        "X-Title": "Dream",
-                    },
-                    json={
-                        "model": use_model,
-                        "max_tokens": 6000,
-                        "messages": [
-                            {"role": "system", "content": prompt},
-                            {"role": "user", "content": "开始做梦。"},
-                        ],
-                    },
-                )
+                response = await client.post(use_api_url, headers=_headers, json=_send_body)
 
                 if response.status_code != 200:
                     error_msg = f"模型请求失败: HTTP {response.status_code}"
@@ -318,7 +316,7 @@ async def run_dream(trigger_type: str = "manual", model_override: str = None):
                     yield {"type": "error", "data": error_msg}
                     return
 
-                data = response.json()
+                data = parse_background_response(response.json(), use_api_format)
                 text = data.get("choices", [{}])[0].get("message", {}).get("content", "")
 
         except Exception as e:

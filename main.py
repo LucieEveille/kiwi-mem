@@ -3048,31 +3048,28 @@ async def _generate_handoff_summary(conv_id: str, handoff_msgs: list, prev_title
         # 解析供应商端点
         try:
             from database import resolve_model_endpoint
-            use_api_url, use_api_key = await resolve_model_endpoint(use_model)
+            use_api_url, use_api_key, use_api_format = await resolve_model_endpoint(use_model)
         except Exception:
             use_api_url = os.getenv("MEMORY_API_BASE_URL", "") or os.getenv("API_BASE_URL", "https://openrouter.ai/api/v1/chat/completions")
             if not use_api_url.rstrip("/").endswith("/chat/completions"):
                 use_api_url = f"{use_api_url.rstrip('/')}/chat/completions"
             use_api_key = os.getenv("MEMORY_API_KEY", "") or os.getenv("API_KEY", "")
-        
+            use_api_format = "openai"
+
+        from anthropic_adapter import prepare_background_request, parse_background_response
+        _body = {
+            "model": use_model,
+            "max_tokens": 500,
+            "messages": [
+                {"role": "user", "content": prompt},
+            ],
+        }
+        _headers, _send_body = prepare_background_request(use_api_key, use_api_format, _body)
         async with httpx.AsyncClient(timeout=30) as client:
-            response = await client.post(
-                use_api_url,
-                headers={
-                    "Authorization": f"Bearer {use_api_key}",
-                    "Content-Type": "application/json",
-                },
-                json={
-                    "model": use_model,
-                    "max_tokens": 500,
-                    "messages": [
-                        {"role": "user", "content": prompt},
-                    ],
-                },
-            )
-            
+            response = await client.post(use_api_url, headers=_headers, json=_send_body)
+
             if response.status_code == 200:
-                data = response.json()
+                data = parse_background_response(response.json(), use_api_format)
                 summary = data.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
                 if summary:
                     _handoff_summary_cache = {"conv_id": conv_id, "summary": summary}

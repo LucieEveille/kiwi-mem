@@ -3325,31 +3325,40 @@ def detect_contradictions(new_title: str, new_content: str, similar_results: lis
 
 async def resolve_model_endpoint(model_id: str) -> tuple:
     """
-    为后台任务（记忆提取 / Dream / 每日整理）解析模型的 API 端点。
-    
+    为后台任务（记忆提取 / Dream / 每日整理 / 切窗摘要）解析模型的 API 端点。
+
     解析顺序：
     1. 供应商数据库（模型在某个 provider 下注册了）
     2. 环境变量降级（MEMORY_API_BASE_URL / API_BASE_URL + 对应 key）
-    
-    返回：(api_url, api_key) — api_url 以 /chat/completions 结尾
+
+    返回：(api_url, api_key, api_format)
+      - api_format == 'anthropic' 时 api_url 是 Anthropic messages 端点
+      - 否则 api_url 以 /chat/completions 结尾
+    调用方配合 anthropic_adapter.prepare_background_request /
+    parse_background_response 处理请求体和响应。
     """
     if model_id:
         try:
             provider_info = await resolve_provider_for_model(model_id)
             if provider_info:
                 base = provider_info["api_base_url"].rstrip("/")
-                api_url = base if base.endswith("/chat/completions") else f"{base}/chat/completions"
                 api_key = provider_info["api_key"]
-                print(f"🔀 后台任务路由到 [{provider_info['provider_name']}]: {model_id}")
-                return api_url, api_key
+                api_format = provider_info.get("api_format", "openai") or "openai"
+                if api_format == "anthropic":
+                    from anthropic_adapter import get_anthropic_url
+                    api_url = get_anthropic_url(base)
+                else:
+                    api_url = base if base.endswith("/chat/completions") else f"{base}/chat/completions"
+                print(f"🔀 后台任务路由到 [{provider_info['provider_name']}] (format={api_format}): {model_id}")
+                return api_url, api_key, api_format
         except Exception as e:
             print(f"⚠️ 供应商路由查询失败，降级到环境变量: {e}")
 
-    # 降级：环境变量
+    # 降级：环境变量（按 OpenAI 兼容端点处理）
     _raw = os.getenv("MEMORY_API_BASE_URL", "") or os.getenv("API_BASE_URL", "https://openrouter.ai/api/v1/chat/completions")
     api_url = _raw if _raw.rstrip("/").endswith("/chat/completions") else f"{_raw.rstrip('/')}/chat/completions"
     api_key = os.getenv("MEMORY_API_KEY", "") or os.getenv("API_KEY", "")
-    return api_url, api_key
+    return api_url, api_key, "openai"
 
 
 # ============================================================

@@ -213,6 +213,36 @@ def from_anthropic_response(anthropic_data: dict, model: str = "") -> dict:
 
 
 # ============================================================
+# 后台任务便捷封装（非流式）
+# 记忆提取 / Dream / 每日整理 / 切窗摘要等都用这两个，
+# 配合 database.resolve_model_endpoint 返回的 (url, key, api_format)。
+# ============================================================
+
+def prepare_background_request(api_key: str, api_format: str, openai_body: dict,
+                               referer: str = None, title: str = None) -> tuple:
+    """根据 api_format 构造后台请求，返回 (headers, send_body)。
+
+    - anthropic：x-api-key + anthropic-version，body 转 Anthropic Messages 格式
+    - openai：Bearer，body 原样（可带 OpenRouter 的 Referer/Title 归因头）
+
+    URL 已由 resolve_model_endpoint 按 api_format 给出，调用方直接用。
+    """
+    if api_format == "anthropic":
+        return to_anthropic_headers(api_key), to_anthropic_request(openai_body)
+    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+    if referer:
+        headers["HTTP-Referer"] = referer
+    if title:
+        headers["X-Title"] = title
+    return headers, openai_body
+
+
+def parse_background_response(data: dict, api_format: str) -> dict:
+    """把后台任务的响应统一成 OpenAI chat.completion 结构。"""
+    return from_anthropic_response(data) if api_format == "anthropic" else data
+
+
+# ============================================================
 # 流式转换：Anthropic SSE → OpenAI SSE
 # ============================================================
 
