@@ -523,10 +523,14 @@ async function savePromptModal(key) {
 // ============================================================
 // Providers
 // ============================================================
+let providersCache = {};  // 按 id 缓存供应商, editProvider(id) 时查表取出, 避免把整条对象塞进 inline onclick
+
 async function loadProviders() {
   try {
     const data = await apiJson('/admin/providers');
     const list = data.providers || [];
+    providersCache = {};
+    list.forEach(p => { providersCache[p.id] = p; });
     if (list.length === 0) {
       document.getElementById('providers-list').innerHTML = '<p class="text-gray-500">还没有添加供应商。</p>';
       return;
@@ -540,7 +544,7 @@ async function loadProviders() {
         </div>
         <div class="flex gap-2">
           <button class="btn btn-sm btn-secondary" onclick="testProvider(${p.id})" id="test-btn-${p.id}">测试</button>
-          <button class="btn btn-sm btn-secondary" onclick='editProvider(${JSON.stringify(p).replace(/'/g,"&#39;")})'>编辑</button>
+          <button class="btn btn-sm btn-secondary" onclick="editProvider(${p.id})">编辑</button>
           <button class="btn btn-sm btn-danger" onclick="deleteProvider(${p.id})">删除</button>
         </div>
       </div>
@@ -560,7 +564,9 @@ function showAddProvider() {
   document.getElementById('pf-format').value = 'openai';
 }
 
-function editProvider(p) {
+function editProvider(id) {
+  const p = providersCache[id];
+  if (!p) return;
   document.getElementById('provider-form').classList.remove('hidden');
   document.getElementById('provider-form-title').textContent = '编辑供应商';
   document.getElementById('pf-id').value = p.id;

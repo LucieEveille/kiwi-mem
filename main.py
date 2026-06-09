@@ -1301,7 +1301,10 @@ async def chat_completions(request: Request):
     mcp_servers = body.pop("mcp_servers", [])  # 从 body 中取出并移除
     
     # ---------- 生成 session ID ----------
-    session_id = str(uuid.uuid4())[:8]
+    # 优先用前端传来的 conversation_id：工具抽屉的"手动展开工具"状态按 session 存，
+    # 设计上是"下一轮对话生效"。session_id 必须跨轮稳定，否则每轮新 uuid 会丢掉
+    # 上一轮展开的类别，_drawer_request_tools 永远不会真正生效。
+    session_id = conversation_id or str(uuid.uuid4())[:8]
     
     # 请求 LLM 在流式响应中包含 token 用量
     if body.get("stream"):
@@ -3327,17 +3330,23 @@ async def api_get_provider_models(provider_id: int):
         if not provider:
             return {"error": "供应商不存在"}
 
-        # 构造基础地址
+        # 构造基础地址：去掉聊天端点后缀（OpenAI 的 /chat/completions、Anthropic 的 /messages）
         base = provider['api_base_url'].rstrip('/')
-        # 如果 base 以 /chat/completions 结尾，去掉
-        if base.endswith('/chat/completions'):
-            base = base.rsplit('/chat/completions', 1)[0]
+        for suffix in ('/chat/completions', '/messages'):
+            if base.endswith(suffix):
+                base = base.rsplit(suffix, 1)[0]
+                break
 
         provider_type = _detect_provider_type(base)
 
-        headers = {"Content-Type": "application/json"}
-        if provider['api_key']:
-            headers["Authorization"] = f"Bearer {provider['api_key']}"
+        # Anthropic 原生供应商用 x-api-key + anthropic-version，模型列表在 /v1/models
+        api_format = (provider.get('api_format') or 'openai') or 'openai'
+        if api_format == 'anthropic':
+            headers = to_anthropic_headers(provider['api_key'] or '')
+        else:
+            headers = {"Content-Type": "application/json"}
+            if provider['api_key']:
+                headers["Authorization"] = f"Bearer {provider['api_key']}"
 
         import httpx
         async with httpx.AsyncClient(timeout=30) as client:
@@ -3361,9 +3370,14 @@ async def api_get_provider_models(provider_id: int):
                     models = resp.json().get("data", [])
                     provider_type = 'generic'  # 降级后按通用处理
 
-            # ── OpenRouter / 通用：走旧 /models 接口 ──
+            # ── OpenRouter / Anthropic / 通用：走 /models 接口 ──
             else:
-                resp = await client.get(f"{base}/models", headers=headers)
+                # Anthropic 模型列表在 /v1/models（base 已去后缀，可能以 /v1 结尾）
+                if api_format == 'anthropic':
+                    models_url = f"{base}/models" if base.endswith('/v1') else f"{base}/v1/models"
+                else:
+                    models_url = f"{base}/models"
+                resp = await client.get(models_url, headers=headers)
                 if resp.status_code != 200:
                     return {"error": f"供应商返回 {resp.status_code}", "detail": resp.text[:500]}
                 chat_models = resp.json().get("data", [])
@@ -3439,6 +3453,7 @@ async def api_add_saved_model(provider_id: int, request: Request):
             input_modes=data.get("input_modes", "text"),
             output_modes=data.get("output_modes", "text"),
             capabilities=data.get("capabilities", ""),
+            api_format=data.get("api_format"),
         )
         if model:
             return {"status": "created", "model": model}
