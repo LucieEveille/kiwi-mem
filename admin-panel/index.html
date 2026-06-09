@@ -131,7 +131,15 @@ tailwind.config = {
         <div><label class="text-xs text-gray-500 block mb-1">名称</label><input type="text" id="pf-name" placeholder="OpenRouter"></div>
         <div><label class="text-xs text-gray-500 block mb-1">API Key</label><input type="password" id="pf-key" placeholder="sk-..."></div>
       </div>
-      <div class="mb-4"><label class="text-xs text-gray-500 block mb-1">API Base URL</label><input type="text" id="pf-url" placeholder="https://openrouter.ai/api/v1/chat/completions"></div>
+      <div class="grid grid-cols-2 gap-4 mb-4">
+        <div><label class="text-xs text-gray-500 block mb-1">API Base URL</label><input type="text" id="pf-url" placeholder="https://openrouter.ai/api/v1/chat/completions"></div>
+        <div><label class="text-xs text-gray-500 block mb-1">API 格式</label>
+          <select id="pf-format">
+            <option value="openai">OpenAI 格式</option>
+            <option value="anthropic">Anthropic 格式</option>
+          </select>
+        </div>
+      </div>
       <div class="flex gap-2">
         <button class="btn btn-primary" onclick="saveProvider()">保存</button>
         <button class="btn btn-secondary" onclick="hideProviderForm()">取消</button>
@@ -398,6 +406,7 @@ async function loadDashboard() {
 // ============================================================
 const CONFIG_GROUPS = {
   '基础设置': ['memory_enabled','extract_interval','max_inject','semantic_threshold','dedup_threshold'],
+  '工具抽屉': ['tool_drawer_enabled'],
   '默认模型': ['default_chat_model','default_title_model','default_memory_model','default_digest_model','default_embedding_model','default_compress_model','dream_model','handoff_summary_model'],
   '热度系统': ['heat_half_life_normal','heat_half_life_important','heat_recall_extend','heat_threshold_high','heat_threshold_medium','heat_importance_line','heat_emotion_line','heat_medium_truncate'],
   '自动锁定': ['autolock_access_count','autolock_diversity','autolock_emo_access','autolock_emo_diversity'],
@@ -525,11 +534,12 @@ async function loadProviders() {
     document.getElementById('providers-list').innerHTML = list.map(p => `
       <div class="bg-panel-card border border-panel-border rounded-lg p-4 mb-3 flex items-center justify-between">
         <div>
-          <p class="font-semibold">${escHtml(p.name)}</p>
+          <p class="font-semibold">${escHtml(p.name)} <span class="badge ${p.api_format==='anthropic'?'imp-high':'imp-mid'}" style="font-size:10px;margin-left:6px">${p.api_format || 'openai'}</span></p>
           <p class="text-xs text-gray-500 mt-1">${escHtml(p.api_base_url || '')}</p>
           <p class="text-xs text-gray-500">Key: ${p.api_key_preview || '（未设置）'}</p>
         </div>
         <div class="flex gap-2">
+          <button class="btn btn-sm btn-secondary" onclick="testProvider(${p.id})" id="test-btn-${p.id}">测试</button>
           <button class="btn btn-sm btn-secondary" onclick='editProvider(${JSON.stringify(p).replace(/'/g,"&#39;")})'>编辑</button>
           <button class="btn btn-sm btn-danger" onclick="deleteProvider(${p.id})">删除</button>
         </div>
@@ -547,6 +557,7 @@ function showAddProvider() {
   document.getElementById('pf-name').value = '';
   document.getElementById('pf-key').value = '';
   document.getElementById('pf-url').value = '';
+  document.getElementById('pf-format').value = 'openai';
 }
 
 function editProvider(p) {
@@ -556,6 +567,7 @@ function editProvider(p) {
   document.getElementById('pf-name').value = p.name || '';
   document.getElementById('pf-key').value = '';
   document.getElementById('pf-url').value = p.api_base_url || '';
+  document.getElementById('pf-format').value = p.api_format || 'openai';
 }
 
 function hideProviderForm() {
@@ -568,6 +580,7 @@ async function saveProvider() {
     name: document.getElementById('pf-name').value,
     api_base_url: document.getElementById('pf-url').value,
     api_key: document.getElementById('pf-key').value,
+    api_format: document.getElementById('pf-format').value,
   };
   try {
     if (id) {
@@ -589,6 +602,27 @@ async function deleteProvider(id) {
   await api(`/admin/providers/${id}`, { method: 'DELETE' });
   toast('已删除');
   loadProviders();
+}
+
+async function testProvider(id) {
+  const btn = document.getElementById(`test-btn-${id}`);
+  const originalText = btn.textContent;
+  btn.textContent = '测试中…';
+  btn.disabled = true;
+  try {
+    // 后端返回 {ok: true, message} 或 {ok: false, error}
+    const res = await apiJson(`/admin/test-provider/${id}`, { method: 'POST' });
+    if (res.ok) {
+      toast(`✅ ${res.message || '连接成功'}`);
+    } else {
+      toast(`❌ 连接失败：${res.error || '未知错误'}`, false);
+    }
+  } catch(e) {
+    toast(`❌ 测试失败：${e.message}`, false);
+  } finally {
+    btn.textContent = originalText;
+    btn.disabled = false;
+  }
 }
 
 // ============================================================
