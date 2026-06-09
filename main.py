@@ -3219,15 +3219,29 @@ async def api_test_provider(provider_id: int):
         provider = await get_provider(provider_id)
         if not provider:
             return {"ok": False, "error": "供应商不存在"}
-        base_url = (provider.get("api_base_url") or "").rstrip("/")
+        base = (provider.get("api_base_url") or "").rstrip("/")
         api_key = provider.get("api_key") or ""
-        if not base_url or not api_key:
+        if not base or not api_key:
             return {"ok": False, "error": "缺少 API Base URL 或 API Key"}
+
+        # 去掉聊天端点后缀，还原到基础地址再拼 /models
+        # （供应商可能保存成完整的 .../v1/chat/completions 或 Anthropic 的 .../v1/messages）
+        for suffix in ("/chat/completions", "/messages"):
+            if base.endswith(suffix):
+                base = base.rsplit(suffix, 1)[0]
+                break
+
+        api_format = (provider.get("api_format") or "openai") or "openai"
+        if api_format == "anthropic":
+            # Anthropic 用 x-api-key + anthropic-version，模型列表在 /v1/models
+            headers = to_anthropic_headers(api_key)
+            models_url = f"{base}/models" if base.endswith("/v1") else f"{base}/v1/models"
+        else:
+            headers = {"Authorization": f"Bearer {api_key}"}
+            models_url = f"{base}/models"
+
         async with httpx.AsyncClient(timeout=10) as client:
-            resp = await client.get(
-                f"{base_url}/models",
-                headers={"Authorization": f"Bearer {api_key}"},
-            )
+            resp = await client.get(models_url, headers=headers)
         if resp.status_code == 200:
             data = resp.json()
             count = len(data.get("data", []))
