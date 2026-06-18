@@ -766,6 +766,15 @@ def detect_emotion_from_response(text: str) -> str:
     return "normal"
 
 
+def strip_emotion_tag(text: str) -> str:
+    """滤掉回复里的情绪隐藏标记（任何值），用于存储和提取前的清洗。
+    情绪解析须在调用本函数之前完成（解析依赖原始带标记文本）。"""
+    if not text:
+        return text
+    import re
+    return re.sub(r'<!--\s*emotion\s*[:：][^>]*-->', '', text).rstrip()
+
+
 def detect_dream_trigger(text: str) -> bool:
     """检测模型回复中是否有 <!--dream:trigger--> 标记"""
     if not text:
@@ -821,13 +830,17 @@ async def process_memories_background(session_id: str, user_msg: str, assistant_
     """
     global _conversation_counter
 
+    # 情绪解析已在调用方用原始文本完成（emotion_level 已传入），
+    # 这里把标记滤掉，保证存储和提取用的都是干净文本。
+    assistant_msg = strip_emotion_tag(assistant_msg)
+    assistant_msg = strip_dream_tag(assistant_msg)
+
     try:
         # 对话始终保存
         if is_regenerate:
             await delete_latest_assistant_message(session_id)
         else:
             await save_message(session_id, "user", user_msg, model)
-        assistant_msg = strip_dream_tag(assistant_msg)
         await save_message(session_id, "assistant", assistant_msg, model)
 
         # 项目对话默认不提取碎片（对话已保存，但不走记忆提取流程）
@@ -1987,18 +2000,22 @@ async def _stream_with_tools(messages, tools, tool_map, model, temperature, tool
             if usage_data:
                 finish_payload['usage'] = usage_data
             yield f"data: {json.dumps(finish_payload, ensure_ascii=False)}\n\n"
-            yield "data: [DONE]\n\n"
 
             assistant_msg = final_text
             dream_triggered = detect_dream_trigger(assistant_msg)
+            # 记忆提取在流内同步等待，好让记忆行实时出现在聊天里
+            # （仅每隔 N 轮真正提取并调 LLM，平时是快速 skip，不显示也不卡）
             if mem_enabled and user_message and assistant_msg:
                 _emo = merge_emotion_levels(detect_emotion_from_user_msg(user_message), detect_emotion_from_response(assistant_msg))
                 mem_result = await process_memories_background(session_id, user_message, assistant_msg, model, emotion_level=_emo, project_id=project_id, is_regenerate=is_regenerate)
                 if mem_result and mem_result.get("action") != "skip":
                     yield f"data: {json.dumps({'ev_memory': mem_result}, ensure_ascii=False)}\n\n"
+            # Dream 事件必须在 [DONE] 之前
             if dream_triggered:
                 print(f"🌙 检测到 Dream 标记，通知前端启动 Dream...")
                 yield f"data: {json.dumps({'ev_dream': {'triggered': True}}, ensure_ascii=False)}\n\n"
+            # [DONE] 作为流的最后一个事件
+            yield "data: [DONE]\n\n"
             return
 
         # ── 有 tool_calls → 并行执行工具 ──
@@ -2223,24 +2240,32 @@ async def stream_and_capture(headers: dict, body: dict, session_id: str, user_me
                     yield b"data: [DONE]\n\n"
                     return
 
-                # 使用适配器将 Anthropic SSE 转换为 OpenAI SSE
+                # 按 SSE 事件（\n\n）缓冲转发，并抑制上游 [DONE]——由本函数末尾统一发，保证它是流的最后一个事件
+                _ev_buf = ""
                 async for openai_chunk in anthropic_stream_to_openai(response, model):
-                    yield openai_chunk
-                    # 捕获正文内容（用于后续记忆提取）
-                    try:
-                        decoded = openai_chunk.decode("utf-8", errors="ignore")
-                        for line in decoded.strip().split("\n"):
-                            line = line.strip()
-                            if line.startswith("data: ") and line != "data: [DONE]":
-                                data = json.loads(line[6:])
-                                delta = data.get("choices", [{}])[0].get("delta", {})
-                                content = delta.get("content", "")
-                                if content:
-                                    full_response.append(content)
-                                if delta.get("reasoning_content"):
-                                    _reasoning_chunks += 1
-                    except Exception:
-                        pass
+                    _ev_buf += openai_chunk.decode("utf-8", errors="ignore").replace("\r\n", "\n")
+                    while "\n\n" in _ev_buf:
+                        event, _ev_buf = _ev_buf.split("\n\n", 1)
+                        event = event.strip()
+                        if not event or event == "data: [DONE]":
+                            continue
+                        yield (event + "\n\n").encode("utf-8")
+                        try:
+                            for line in event.split("\n"):
+                                line = line.strip()
+                                if line.startswith("data: "):
+                                    data = json.loads(line[6:])
+                                    delta = data.get("choices", [{}])[0].get("delta", {})
+                                    content = delta.get("content", "")
+                                    if content:
+                                        full_response.append(content)
+                                    if delta.get("reasoning_content"):
+                                        _reasoning_chunks += 1
+                        except Exception:
+                            pass
+                _tail = _ev_buf.strip()
+                if _tail and _tail != "data: [DONE]":
+                    yield (_tail + "\n\n").encode("utf-8")
     else:
         # OpenAI 格式：直接转发
         buffer = ""
@@ -2257,41 +2282,46 @@ async def stream_and_capture(headers: dict, body: dict, session_id: str, user_me
                     yield b"data: [DONE]\n\n"
                     return
 
-                async for chunk in response.aiter_bytes():
-                    yield chunk
-                    try:
-                        buffer += chunk.decode("utf-8", errors="ignore")
-                        while "\n" in buffer:
-                            line, buffer = buffer.split("\n", 1)
+                # 按 SSE 事件（\n\n）缓冲转发，并抑制上游 [DONE]——由本函数末尾统一发，保证它是流的最后一个事件。
+                # 以「整事件」为单位转发（而非裸字节），既能干净拦掉 [DONE]，又不破坏事件分帧。
+                async for chunk in response.aiter_bytes(chunk_size=256):
+                    buffer += chunk.decode("utf-8", errors="ignore").replace("\r\n", "\n")
+                    while "\n\n" in buffer:
+                        event, buffer = buffer.split("\n\n", 1)
+                        event = event.strip()
+                        if not event or event == "data: [DONE]":
+                            continue
+                        yield (event + "\n\n").encode("utf-8")
+                        for line in event.split("\n"):
                             line = line.strip()
-                            if line.startswith("data: ") and line != "data: [DONE]":
-                                try:
-                                    data = json.loads(line[6:])
-                                    delta = data.get("choices", [{}])[0].get("delta", {})
+                            if not line.startswith("data: "):
+                                continue
+                            try:
+                                data = json.loads(line[6:])
+                                delta = data.get("choices", [{}])[0].get("delta", {})
 
-                                    # 🔍 调试日志：记录第一个有效delta的所有字段
-                                    if not _logged_first_delta and delta:
-                                        keys = list(delta.keys())
-                                        if keys and keys != ['role']:
-                                            print(f"🔍 [流式调试] 首个delta字段: {keys}, 模型: {model}")
-                                            # 如果有思考链相关字段，打印示例
-                                            for k in ('reasoning_content', 'reasoning', 'reasoning_details'):
-                                                if k in delta:
-                                                    sample = str(delta[k])[:100]
-                                                    print(f"🔍 [流式调试] {k} 示例: {sample}")
-                                            _logged_first_delta = True
+                                # 🔍 调试日志：记录第一个有效delta的所有字段
+                                if not _logged_first_delta and delta:
+                                    keys = list(delta.keys())
+                                    if keys and keys != ['role']:
+                                        print(f"🔍 [流式调试] 首个delta字段: {keys}, 模型: {model}")
+                                        for k in ('reasoning_content', 'reasoning', 'reasoning_details'):
+                                            if k in delta:
+                                                sample = str(delta[k])[:100]
+                                                print(f"🔍 [流式调试] {k} 示例: {sample}")
+                                        _logged_first_delta = True
 
-                                    # 统计思考链 chunk 数
-                                    if delta.get('reasoning_content') or delta.get('reasoning') or delta.get('reasoning_details'):
-                                        _reasoning_chunks += 1
+                                if delta.get('reasoning_content') or delta.get('reasoning') or delta.get('reasoning_details'):
+                                    _reasoning_chunks += 1
 
-                                    content = delta.get("content", "")
-                                    if content:
-                                        full_response.append(content)
-                                except (json.JSONDecodeError, KeyError, IndexError):
-                                    pass
-                    except Exception:
-                        pass
+                                content = delta.get("content", "")
+                                if content:
+                                    full_response.append(content)
+                            except (json.JSONDecodeError, KeyError, IndexError):
+                                pass
+                _tail = buffer.strip()
+                if _tail and _tail != "data: [DONE]":
+                    yield (_tail + "\n\n").encode("utf-8")
 
     assistant_msg = "".join(full_response)
     
@@ -2315,10 +2345,13 @@ async def stream_and_capture(headers: dict, body: dict, session_id: str, user_me
         if mem_result and mem_result.get("action") != "skip":
             yield f"data: {json.dumps({'ev_memory': mem_result}, ensure_ascii=False)}\n\n".encode("utf-8")
 
-    # Dream 触发：推送 SSE 事件通知前端，由前端连接 Dream SSE 获取进度
+    # Dream 触发：在 [DONE] 之前推送，由前端连接 Dream SSE 获取进度
     if dream_triggered:
         print(f"🌙 检测到 Dream 标记，通知前端启动 Dream...")
         yield f"data: {json.dumps({'ev_dream': {'triggered': True}}, ensure_ascii=False)}\n\n".encode("utf-8")
+
+    # [DONE] 作为流的最后一个事件（上游/适配器的 [DONE] 已在上面被抑制）
+    yield b"data: [DONE]\n\n"
 
 # ============================================================
 # 记忆管理接口

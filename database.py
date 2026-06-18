@@ -800,14 +800,26 @@ def calculate_heat(row, params: dict = None) -> float:
     half_life = base_half_life * (1.0 + access_count * p["recall_extend"])
     
     # --- 时间衰减 ---
-    if created_at:
+    # v5.10：基准时间取"创建时间"和"上次被想起"中更近的那个
+    # 这样冷记忆一旦被用户对话重新命中，时钟就从这一刻重新开始，热度瞬间回升
+    # （就像很久没想起的事，突然有人提起，一下子就鲜活了）
+    last_accessed = row.get("last_accessed")
+    anchor = created_at  # 默认用创建时间
+    if last_accessed is not None and access_count > 0:
         try:
-            # v5.4：安全时区处理（已有时区信息则转换，无则假设 UTC）
-            if created_at.tzinfo is not None:
-                created_utc = created_at.astimezone(timezone.utc)
+            la = last_accessed.astimezone(timezone.utc) if last_accessed.tzinfo else last_accessed.replace(tzinfo=timezone.utc)
+            ca = created_at.astimezone(timezone.utc) if created_at.tzinfo else created_at.replace(tzinfo=timezone.utc)
+            anchor = max(ca, la)
+        except Exception:
+            pass
+
+    if anchor:
+        try:
+            if anchor.tzinfo is not None:
+                anchor_utc = anchor.astimezone(timezone.utc)
             else:
-                created_utc = created_at.replace(tzinfo=timezone.utc)
-            age_seconds = (datetime.now(timezone.utc) - created_utc).total_seconds()
+                anchor_utc = anchor.replace(tzinfo=timezone.utc)
+            age_seconds = (datetime.now(timezone.utc) - anchor_utc).total_seconds()
             age_days = age_seconds / 86400.0
             # 指数衰减：heat = 2^(-age/half_life)
             decay = math.pow(2, -age_days / half_life)
@@ -2929,15 +2941,14 @@ async def get_chat_messages_for_date(date_str: str):
     pool = await get_pool()
     d = date_cls.fromisoformat(date_str)
     async with pool.acquire() as conn:
-        # LEFT JOIN 是为了让没有 conversation_id 的旧消息也能命中（c.id 为 NULL）
         rows = await conn.fetch("""
             SELECT m.role, m.content, m.time, m.conversation_id
             FROM chat_messages m
-            LEFT JOIN chat_conversations c ON m.conversation_id = c.id
+            JOIN chat_conversations c ON m.conversation_id = c.id
             WHERE (m.time AT TIME ZONE 'Asia/Shanghai')::date = $1
               AND m.role IN ('user', 'assistant')
               AND m.content != ''
-              AND (c.project_id IS NULL OR c.id IS NULL)
+              AND c.project_id IS NULL
             ORDER BY m.time ASC
         """, d)
     return [dict(r) for r in rows]
