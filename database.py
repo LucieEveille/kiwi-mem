@@ -1239,7 +1239,7 @@ async def _vector_search(query_embedding: list, limit: int, heat_params: dict, p
                           COALESCE(m.access_query_hashes, '[]'::jsonb) as access_query_hashes,
                           COALESCE(m.is_permanent, false) as is_permanent,
                           COALESCE(m.resolution, 1.0) as resolution,
-                          m.valid_until, m.project_id
+                          m.valid_until, m.project_id, m.last_accessed
                    FROM memories m LEFT JOIN memory_categories c ON m.category_id = c.id
                    WHERE COALESCE(m.memory_type, 'fragment') NOT IN ('digested', 'dream_deleted')
                      AND (m.valid_until IS NULL OR m.valid_until > NOW())
@@ -1248,7 +1248,7 @@ async def _vector_search(query_embedding: list, limit: int, heat_params: dict, p
             )
         else:
             rows = await conn.fetch(
-                """SELECT m.id, m.content, m.importance, m.created_at, m.embedding, 
+                """SELECT m.id, m.content, m.importance, m.created_at, m.embedding,
                           COALESCE(m.title, '') as title, COALESCE(m.memory_type, 'fragment') as memory_type,
                           m.category_id, COALESCE(c.name, '') as category_name, COALESCE(c.color, '') as category_color,
                           COALESCE(m.source, 'ai_extracted') as source,
@@ -1257,7 +1257,7 @@ async def _vector_search(query_embedding: list, limit: int, heat_params: dict, p
                           COALESCE(m.access_query_hashes, '[]'::jsonb) as access_query_hashes,
                           COALESCE(m.is_permanent, false) as is_permanent,
                           COALESCE(m.resolution, 1.0) as resolution,
-                          m.valid_until, m.project_id
+                          m.valid_until, m.project_id, m.last_accessed
                    FROM memories m LEFT JOIN memory_categories c ON m.category_id = c.id
                    WHERE COALESCE(m.memory_type, 'fragment') NOT IN ('digested', 'dream_deleted')
                      AND (m.valid_until IS NULL OR m.valid_until > NOW())
@@ -1698,7 +1698,7 @@ async def _keyword_search(query: str, limit: int = 10, heat_params: dict = None,
                 COALESCE(m.access_query_hashes, '[]'::jsonb) as access_query_hashes,
                 COALESCE(m.is_permanent, false) as is_permanent,
                 COALESCE(m.resolution, 1.0) as resolution,
-                m.project_id,
+                m.project_id, m.last_accessed,
                 ({hit_count_expr}) AS hit_count,
                 (
                     0.5 * ({hit_count_expr})::float / {max_hits} +
