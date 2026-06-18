@@ -912,16 +912,16 @@ async function loadCategoryFilter() {
       categoriesCache = data.categories || [];
     }
     const select = document.getElementById('mem-category');
-    const current = select.value;
-    if (select.options.length <= 1) {
-      categoriesCache.forEach(c => {
-        const opt = document.createElement('option');
-        opt.value = c.id;
-        opt.textContent = `${c.icon || '📁'} ${c.name}`;
-        select.appendChild(opt);
-      });
-    }
-    select.value = current;
+    const prev = select.value;
+    while (select.options.length > 1) select.remove(1);
+    categoriesCache.forEach(c => {
+      const opt = document.createElement('option');
+      opt.value = c.id;
+      opt.textContent = `${c.icon || '📁'} ${c.name}`;
+      select.appendChild(opt);
+    });
+    if ([...select.options].some(o => o.value === prev)) select.value = prev;
+    else select.value = '';
   } catch(e) { /* categories are optional */ }
 }
 
@@ -1121,7 +1121,9 @@ async function addCategory() {
   const color = document.getElementById('cat-color').value;
   const icon = document.getElementById('cat-icon').value.trim() || '📁';
   try {
-    await api('/admin/categories', { method: 'POST', body: JSON.stringify({ name, color, icon }) });
+    const res = await api('/admin/categories', { method: 'POST', body: JSON.stringify({ name, color, icon }) });
+    const body = await res.json();
+    if (body.error) { toast('❌ ' + body.error, false); return; }
     toast('✅ 分类已添加');
     document.getElementById('cat-name').value = '';
     categoriesCache = [];
@@ -1154,7 +1156,9 @@ async function saveEditCategory(id) {
   const icon = document.getElementById(`cat-edit-icon-${id}`).value.trim();
   if (!name) { toast('❌ 名称不能为空', false); return; }
   try {
-    await api(`/admin/categories/${id}`, { method: 'PUT', body: JSON.stringify({ name, color, icon }) });
+    const res = await api(`/admin/categories/${id}`, { method: 'PUT', body: JSON.stringify({ name, color, icon }) });
+    const body = await res.json();
+    if (body.error) { toast('❌ ' + body.error, false); return; }
     toast('✅ 分类已更新');
     categoriesCache = [];
     loadCategories();
@@ -1166,7 +1170,9 @@ async function saveEditCategory(id) {
 async function deleteCategory(id) {
   if (!confirm('确定删除这个分类？已有的记忆不会被删除，但会变成无分类。')) return;
   try {
-    await api(`/admin/categories/${id}`, { method: 'DELETE' });
+    const res = await api(`/admin/categories/${id}`, { method: 'DELETE' });
+    const body = await res.json();
+    if (body.error) { toast('❌ ' + body.error, false); return; }
     toast('已删除');
     categoriesCache = [];
     loadCategories();
