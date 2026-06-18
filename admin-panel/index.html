@@ -29,6 +29,7 @@ tailwind.config = {
     background: #1e2130; border: 1px solid #2a2d3a; color: #e2e8f0; border-radius: 6px; padding: 8px 12px; width: 100%; outline: none;
   }
   textarea:focus, input:focus, select:focus { border-color: #4ade80; }
+  input[type=color] { background: #1e2130; border: 1px solid #2a2d3a; border-radius: 6px; padding: 2px; width: 40px; height: 36px; cursor: pointer; }
   .btn { padding: 8px 16px; border-radius: 6px; font-size: 14px; cursor: pointer; transition: all 0.15s; border: none; }
   .btn-primary { background: #22c55e; color: #fff; } .btn-primary:hover { background: #16a34a; }
   .btn-secondary { background: #2a2d3a; color: #e2e8f0; } .btn-secondary:hover { background: #353849; }
@@ -48,8 +49,19 @@ tailwind.config = {
   .imp-low { background:rgba(74,222,128,0.15); color:#4ade80; }
   .loading { display:inline-block; width:16px; height:16px; border:2px solid #2a2d3a; border-top:2px solid #4ade80; border-radius:50%; animation:spin 0.6s linear infinite; }
   @keyframes spin { to{transform:rotate(360deg)} }
-  .accordion-body { max-height:0; overflow:hidden; transition:max-height 0.3s ease; }
-  .accordion-body.open { max-height:2000px; }
+  .accordion-header { cursor:pointer; display:flex; align-items:center; justify-content:space-between; user-select:none; }
+  .accordion-header:hover { opacity:0.85; }
+  .accordion-arrow { transition:transform 0.2s; font-size:12px; color:#64748b; }
+  .accordion-arrow.open { transform:rotate(90deg); }
+  .accordion-body { max-height:0; overflow:hidden; transition:max-height 0.35s ease; }
+  .accordion-body.open { max-height:5000px; }
+  .param-desc { font-size:11px; color:#64748b; margin-top:4px; line-height:1.4; }
+  .group-desc { font-size:12px; color:#64748b; margin-top:4px; margin-bottom:0; line-height:1.5; }
+  .heat-dot { display:inline-block; width:8px; height:8px; border-radius:50%; margin-right:4px; }
+  .heat-hot { background:#ef4444; }
+  .heat-warm { background:#eab308; }
+  .heat-cold { background:#3b82f6; }
+  .cat-dot { display:inline-block; width:10px; height:10px; border-radius:50%; margin-right:6px; border:1px solid rgba(255,255,255,0.1); }
   ::-webkit-scrollbar { width:6px; } ::-webkit-scrollbar-track { background:#0f1117; } ::-webkit-scrollbar-thumb { background:#2a2d3a; border-radius:3px; }
 </style>
 </head>
@@ -66,6 +78,7 @@ tailwind.config = {
     <a onclick="switchTab('config')" class="tab-btn block px-5 py-2.5 text-sm cursor-pointer hover:bg-panel-hover" data-tab="config">⚙️ 配置管理</a>
     <a onclick="switchTab('providers')" class="tab-btn block px-5 py-2.5 text-sm cursor-pointer hover:bg-panel-hover" data-tab="providers">🔑 供应商</a>
     <a onclick="switchTab('memories')" class="tab-btn block px-5 py-2.5 text-sm cursor-pointer hover:bg-panel-hover" data-tab="memories">🧠 记忆</a>
+    <a onclick="switchTab('categories')" class="tab-btn block px-5 py-2.5 text-sm cursor-pointer hover:bg-panel-hover" data-tab="categories">🏷️ 分类</a>
     <a onclick="switchTab('prompt')" class="tab-btn block px-5 py-2.5 text-sm cursor-pointer hover:bg-panel-hover" data-tab="prompt">📝 人设</a>
     <a onclick="switchTab('tools')" class="tab-btn block px-5 py-2.5 text-sm cursor-pointer hover:bg-panel-hover" data-tab="tools">🛠️ 工具</a>
   </div>
@@ -120,7 +133,7 @@ tailwind.config = {
   <!-- ── Config ── -->
   <div id="tab-config" class="tab-content fade-in hidden">
     <h2 class="text-xl font-semibold mb-2">⚙️ 配置管理</h2>
-    <p class="text-sm text-gray-500 mb-6">修改后即时生效，不需要重启服务。</p>
+    <p class="text-sm text-gray-500 mb-6">修改后即时生效，不需要重启服务。点击分组标题展开/收起。</p>
     <div id="external-mcp-servers-card" class="bg-panel-card border border-panel-border rounded-lg p-5 mb-4">
       <p class="section-title">外部 MCP Servers</p>
       <p class="text-xs text-gray-500 mb-3">推荐把外部 MCP server 固定写在配置里；请求 body 里的 mcp_servers 旧路径仍可继续使用。</p>
@@ -221,9 +234,39 @@ tailwind.config = {
         <option value="5">5-6 普通</option>
         <option value="1">1-4 低</option>
       </select>
+      <select id="mem-category" class="w-40" onchange="loadMemories()">
+        <option value="">全部分类</option>
+      </select>
     </div>
     <div id="memories-list" class="text-sm text-gray-400">加载中…</div>
     <div class="flex justify-center mt-4 gap-2" id="mem-pagination"></div>
+  </div>
+
+  <!-- ── Categories ── -->
+  <div id="tab-categories" class="tab-content fade-in hidden">
+    <h2 class="text-xl font-semibold mb-2">🏷️ 分类管理</h2>
+    <p class="text-sm text-gray-500 mb-6">管理记忆碎片的分类。碎片提取时会自动匹配最合适的分类。</p>
+
+    <div class="bg-panel-card border border-panel-border rounded-lg p-5 mb-4">
+      <p class="section-title">添加分类</p>
+      <div class="flex gap-3 items-end">
+        <div class="flex-1">
+          <label class="text-xs text-gray-500 block mb-1">名称</label>
+          <input type="text" id="cat-name" placeholder="例如：工作、兴趣、人际关系…">
+        </div>
+        <div>
+          <label class="text-xs text-gray-500 block mb-1">颜色</label>
+          <input type="color" id="cat-color" value="#6B7280">
+        </div>
+        <div style="width:80px">
+          <label class="text-xs text-gray-500 block mb-1">图标</label>
+          <input type="text" id="cat-icon" value="📁" style="width:80px; text-align:center;">
+        </div>
+        <button class="btn btn-primary" onclick="addCategory()">添加</button>
+      </div>
+    </div>
+
+    <div id="categories-list" class="text-sm text-gray-400">加载中…</div>
   </div>
 
   <!-- ── System Prompt ── -->
@@ -244,7 +287,6 @@ tailwind.config = {
     <h2 class="text-xl font-semibold mb-6">🛠️ 工具</h2>
 
     <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
-      <!-- Dream -->
       <div class="bg-panel-card border border-panel-border rounded-lg p-5">
         <p class="font-semibold mb-1">🌙 Dream 记忆整合</p>
         <p class="text-xs text-gray-500 mb-4">触发 AI 的"睡眠"——整理碎片、合并记忆、产生前瞻。</p>
@@ -252,7 +294,6 @@ tailwind.config = {
         <button class="btn btn-primary" onclick="triggerDream()">开始 Dream</button>
       </div>
 
-      <!-- Daily Digest -->
       <div class="bg-panel-card border border-panel-border rounded-lg p-5">
         <p class="font-semibold mb-1">📅 每日整理</p>
         <p class="text-xs text-gray-500 mb-4">从今天的聊天记录生成日页面，更新日历和用户画像。</p>
@@ -262,28 +303,24 @@ tailwind.config = {
         </div>
       </div>
 
-      <!-- Extract -->
       <div class="bg-panel-card border border-panel-border rounded-lg p-5">
         <p class="font-semibold mb-1">🧩 手动提取记忆</p>
         <p class="text-xs text-gray-500 mb-4">立即从最近对话中提取记忆碎片，不等自动轮次。</p>
         <button class="btn btn-secondary" onclick="triggerExtract()">立即提取</button>
       </div>
 
-      <!-- Seed Import -->
       <div class="bg-panel-card border border-panel-border rounded-lg p-5">
         <p class="font-semibold mb-1">📦 导入预置记忆</p>
         <p class="text-xs text-gray-500 mb-4">从 seed_memories.py 导入预置记忆条目。</p>
         <button class="btn btn-secondary" onclick="triggerSeed()">导入</button>
       </div>
 
-      <!-- Backup -->
       <div class="bg-panel-card border border-panel-border rounded-lg p-5">
         <p class="font-semibold mb-1">💾 数据备份</p>
         <p class="text-xs text-gray-500 mb-4">导出所有对话、记忆、配置为 zip 文件。</p>
         <button class="btn btn-secondary" onclick="downloadBackup()">下载备份</button>
       </div>
 
-      <!-- Embedding Migration -->
       <div class="bg-panel-card border border-panel-border rounded-lg p-5">
         <p class="font-semibold mb-1">🔄 向量迁移</p>
         <p class="text-xs text-gray-500 mb-4">为缺少向量的记忆补充 embedding（更换模型后使用）。</p>
@@ -350,11 +387,11 @@ function switchTab(tab) {
   document.querySelector(`[data-tab="${tab}"]`).classList.add('tab-active');
   currentTab = tab;
 
-  // lazy load
   if (tab === 'dashboard') loadDashboard();
   if (tab === 'config') loadConfig();
   if (tab === 'providers') loadProviders();
   if (tab === 'memories') loadMemories();
+  if (tab === 'categories') loadCategories();
   if (tab === 'prompt') loadPrompt();
   if (tab === 'tools') loadDreamStatus();
 }
@@ -364,7 +401,6 @@ function switchTab(tab) {
 // ============================================================
 async function loadDashboard() {
   try {
-    // Status
     const status = await apiJson('/');
     document.getElementById('stat-memories').textContent = status.memories ?? '-';
     document.getElementById('stat-mem-enabled').textContent = status.memory_enabled ? '✅ 开启' : '❌ 关闭';
@@ -394,7 +430,6 @@ async function loadDashboard() {
     document.getElementById('stat-memories').textContent = total;
     document.getElementById('stat-locked').textContent = locked;
 
-    // Recent 5
     const recent = (mems.memories || []).slice(0, 5);
     if (recent.length === 0) {
       document.getElementById('recent-memories').innerHTML = '<p class="text-gray-500">还没有记忆。</p>';
@@ -409,7 +444,6 @@ async function loadDashboard() {
     }
   } catch(e) {}
 
-  // Embedding 覆盖率
   try {
     const embed = await apiJson('/admin/embedding-stats');
     const el = document.getElementById('embed-status');
@@ -426,7 +460,7 @@ async function loadDashboard() {
 }
 
 // ============================================================
-// Config
+// Config — Descriptions & Accordion
 // ============================================================
 const CONFIG_GROUPS = {
   '基础设置': ['memory_enabled','extract_interval','max_inject','semantic_threshold','dedup_threshold'],
@@ -446,12 +480,85 @@ const CONFIG_GROUPS = {
   '提示词模板': ['prompt_memory_extract','prompt_daily_digest','prompt_daily_digest_page','prompt_weekly_summary','prompt_monthly_summary','prompt_period_summary','prompt_dream','prompt_compress','prompt_title_summary','prompt_user_profile','prompt_handoff_summary'],
 };
 
+const GROUP_DESCRIPTIONS = {
+  '基础设置': '控制记忆系统的核心行为：是否开启、多久提取一次、注入多少条、搜索和去重的敏感度。',
+  '记忆新陈代谢': '模拟记忆的自然老化：老旧碎片自动软化（模糊细节保留要点）、长期未用的锁定碎片自动退役、过冷碎片清理。',
+  '场景注入': 'Dream 产出的叙事场景会在聊天时自动注入，提供长期记忆的宏观视角。这里控制是否注入、注入几条、相似度门槛。',
+  '外部 MCP 抽屉': '连接第三方 MCP 服务器（如 Notion、日历等外部工具）。抽屉会根据对话内容自动判断是否展开外部工具。',
+  '工具抽屉': '内部工具（记忆搜索、日历查询等）的向量路由开关。开启后工具按语义相关性按需展开，关闭则全部传给模型。',
+  '默认模型': '各功能模块使用的模型。留空则使用聊天时选择的模型。建议小模型（如 Haiku）用于提取/整理/标题等后台任务以节省成本。',
+  '热度系统': '控制记忆热度的衰减速度和分档阈值。热度决定碎片在注入时的优先级和展示形式（全文/摘要/跳过）。',
+  '自动锁定': '当一条碎片被反复召回（跨不同话题），说明它对用户持续重要，系统会自动锁定保护它不被衰减清理。',
+  'Dream 睡眠': 'Dream 是 AI 的"睡眠"——整合碎片、合并记忆、产生洞察。犯困阈值控制未处理碎片积累多少后开始提示犯困。',
+  '用户画像': 'AI 对用户的整体认知。由每日整理自动更新，也可手动编辑。注入在 system prompt 中供模型参考。',
+  '对话衔接': '新建对话时自动注入上个对话的最近内容，让 AI 不会"失忆"。可控制注入条数和持续轮数。',
+  '日历注入': '每日整理产生的日页面和各级总结会自动注入 system prompt，让 AI 知道最近发生了什么。',
+  'Prompt 缓存': 'Claude 模型的显式缓存，重复的 system prompt 前缀只收 1/10 的费用。非 Claude 模型自动跳过。',
+  '联网搜索': '让 AI 在对话中搜索互联网。需要配置搜索引擎 API（支持 Bing、Serper、Tavily 等）。',
+  '提示词模板': '各功能模块使用的提示词。点击"编辑"可自定义，留空使用代码内置的默认提示词。',
+};
+
+const PARAM_DESCRIPTIONS = {
+  memory_enabled: '总开关。关闭后不提取记忆、不注入碎片，但对话仍正常保存。默认：开启',
+  extract_interval: '每隔多少轮对话提取一次记忆。值越小提取越频繁但消耗更多 token。默认：5，建议范围：3-10',
+  max_inject: '每次对话注入多少条语义相关的碎片。太多会占 token，太少可能遗漏。默认：15，建议范围：5-30',
+  semantic_threshold: '语义搜索的最低相似度。低于此值的碎片不会被注入。默认：0.25，建议范围：0.15-0.5',
+  dedup_threshold: '新碎片与已有碎片的文字重叠度超过此值时判定为重复，不存储。默认：0.55，建议范围：0.4-0.7',
+  cleanup_heat_threshold: '热度低于此值的碎片会被清理（软删除）。默认：0.15',
+  auto_soften_enabled: '是否自动软化老旧碎片（模糊细节、保留要点）。默认：开启',
+  auto_soften_daily_limit: '每天最多软化多少条碎片，防止一次性大量重写。默认：10',
+  auto_soften_min_age: '碎片至少存在多少天才会被考虑软化。默认：5 天',
+  soften_cooldown_days: '同一条碎片两次软化之间的冷却期。默认：21 天',
+  lock_retire_enabled: '是否让长期未被召回的锁定碎片自动退役（解锁但不删除）。默认：开启',
+  lock_retire_days: '锁定碎片超过多少天未被召回则退役。默认：90 天',
+  merge_retention_days: '合并后的旧碎片保留多少天后清理。默认：90 天',
+  merge_min_keep: '即使符合合并清理条件，也至少保留多少条碎片。默认：20',
+  scene_inject_enabled: '是否在聊天时注入 Dream 产出的叙事场景。默认：开启',
+  scene_inject_limit: '每次最多注入多少条场景。默认：2',
+  scene_inject_min_sim: '场景与当前对话的最低相似度。默认：0.5',
+  ext_drawer_threshold: '外部工具与对话内容的语义相似度门槛。低于此值不展开。默认：0.40',
+  ext_drawer_max_open: '单次对话最多同时展开几个外部工具抽屉。默认：3',
+  mcp_mode: '外部 MCP 的控制模式。off=全部禁用，auto=自动按语义路由，manual=只启用手动选择的。默认：auto',
+  mcp_manual_ids: '手动模式下启用的 MCP 服务器 ID 列表（JSON 数组）',
+  tool_drawer_enabled: '内部工具是否走向量路由按需展开。关闭则全部工具每次都传给模型。默认：关闭',
+  default_chat_model: '默认聊天模型。留空使用前端选择的模型',
+  default_title_model: '自动标题生成用的模型。建议小模型',
+  default_memory_model: '记忆提取用的模型。建议小模型',
+  default_digest_model: '每日整理（日页面/总结）用的模型',
+  default_embedding_model: '向量嵌入模型。更换后需执行向量迁移',
+  default_compress_model: '上下文压缩用的模型。建议小模型',
+  dream_model: 'Dream 记忆整合用的模型',
+  handoff_summary_model: '对话衔接摘要用的模型。建议小模型',
+  heat_half_life_normal: '普通碎片（重要度 < 分界线）的热度半衰期。默认：3 天',
+  heat_half_life_important: '重要碎片（重要度 ≥ 分界线）的热度半衰期。默认：7 天',
+  heat_recall_extend: '每次被召回时半衰期延长的倍率。默认：0.5（即延长 50%）',
+  heat_threshold_high: '热度高于此值的碎片全文注入。默认：0.7',
+  heat_threshold_medium: '热度在此值和高阈值之间的碎片摘要注入。低于此值跳过。默认：0.3',
+  heat_importance_line: '重要度分界线，≥ 此值使用更长的半衰期。默认：8',
+  heat_emotion_line: '高情绪碎片的分界线，≥ 此值使用更宽松的自动锁定条件。默认：6',
+  heat_medium_truncate: '中热度碎片摘要注入时截断到多少字。默认：60',
+  autolock_access_count: '普通碎片被召回多少次后自动锁定。默认：10',
+  autolock_diversity: '普通碎片被多少个不同话题召回后自动锁定。默认：5',
+  autolock_emo_access: '高情绪碎片被召回多少次后自动锁定（更宽松）。默认：6',
+  autolock_emo_diversity: '高情绪碎片被多少个不同话题召回后自动锁定。默认：3',
+  dream_drowsy_threshold: '未处理碎片积累超过此数量后，AI 开始表现犯困。默认：30',
+  last_dream_date: '上次 Dream 的日期（自动更新，一般不需要手动改）',
+  handoff_enabled: '新对话是否自动注入上个对话的最近内容。默认：开启',
+  handoff_msg_count: '注入上个对话最后多少条消息。默认：6（3 轮对话）',
+  handoff_stop_rounds: '衔接内容在新对话中持续多少轮后停止注入。默认：3',
+  calendar_inject_enabled: '是否注入日历日志（日/周/月/季/年总结）。默认：开启',
+  prompt_cache_enabled: '是否启用 Claude 的显式 Prompt 缓存（非 Claude 模型自动跳过）。默认：开启',
+  search_engine: '搜索引擎类型（bing / serper / tavily 等）',
+  search_api_key: '搜索引擎的 API Key',
+  search_max_results: '每次搜索返回多少条结果。默认：5',
+};
+
 let configData = {};
+let configOpenGroups = {};
 
 async function loadConfig() {
   try {
     const data = await apiJson('/admin/config');
-    // 后端可能返 {status, config: {...}} 也可能直接返 {key: cfg, ...}，两种都兼容
     const config = data.config || data;
     configData = config;
     renderConfig(config);
@@ -461,23 +568,43 @@ async function loadConfig() {
   }
 }
 
+function toggleConfigGroup(group) {
+  configOpenGroups[group] = !configOpenGroups[group];
+  const body = document.getElementById(`cfg-group-body-${cssId(group)}`);
+  const arrow = document.getElementById(`cfg-group-arrow-${cssId(group)}`);
+  if (body) body.classList.toggle('open');
+  if (arrow) arrow.classList.toggle('open');
+}
+
+function cssId(s) { return s.replace(/[^a-zA-Z0-9一-鿿]/g, '_'); }
+
 function renderConfig(data) {
-  const allKeys = new Set(Object.keys(data));
   let html = '';
 
   for (const [group, keys] of Object.entries(CONFIG_GROUPS)) {
     const items = keys.filter(k => data[k]);
     if (items.length === 0) continue;
 
-    html += `<div class="bg-panel-card border border-panel-border rounded-lg p-5 mb-4">
-      <p class="section-title">${group}</p>`;
+    const gid = cssId(group);
+    const isOpen = configOpenGroups[group];
+    const desc = GROUP_DESCRIPTIONS[group] || '';
+
+    html += `<div class="bg-panel-card border border-panel-border rounded-lg mb-4">
+      <div class="accordion-header p-5" onclick="toggleConfigGroup('${group.replace(/'/g, "\\'")}')">
+        <div>
+          <p class="section-title" style="margin-bottom:0">${group}</p>
+          ${desc ? `<p class="group-desc">${desc}</p>` : ''}
+        </div>
+        <span id="cfg-group-arrow-${gid}" class="accordion-arrow ${isOpen ? 'open' : ''}">▶</span>
+      </div>
+      <div id="cfg-group-body-${gid}" class="accordion-body ${isOpen ? 'open' : ''}" style="padding:0 20px;">`;
 
     for (const key of items) {
       const cfg = data[key];
       const label = cfg.label || key;
       const val = cfg.value || '';
       const type = cfg.type || 'text';
-      allKeys.delete(key);
+      const paramDesc = PARAM_DESCRIPTIONS[key] || '';
 
       if (type === 'bool') {
         html += `<div class="config-row">
@@ -487,30 +614,35 @@ function renderConfig(data) {
               <option value="true" ${val==='true'?'selected':''}>开启</option>
               <option value="false" ${val!=='true'?'selected':''}>关闭</option>
             </select>
+            ${paramDesc ? `<p class="param-desc">${paramDesc}</p>` : ''}
           </div>
         </div>`;
       } else if (key.startsWith('prompt_') || key === 'user_profile') {
-        // 长文本类 (提示词模板、用户画像), 用弹窗编辑而不是 inline input
         html += `<div class="config-row">
           <span class="config-label">${label}</span>
           <div class="config-value">
             <button class="btn btn-sm btn-secondary" onclick="editPromptConfig('${key}', '${escAttr(label)}')">编辑</button>
             <span class="text-xs text-gray-500 ml-2">${val ? escHtml(val.slice(0,40))+'…' : '（空）'}</span>
+            ${paramDesc ? `<p class="param-desc">${paramDesc}</p>` : ''}
           </div>
         </div>`;
       } else {
         html += `<div class="config-row">
           <span class="config-label">${label}</span>
-          <div class="config-value flex gap-2">
-            <input type="${type==='int'||type==='float'?'number':'text'}" id="cfg-${key}" value="${escAttr(val)}"
-              ${type==='int'?'step="1"':''} ${type==='float'?'step="0.01"':''}
-              class="flex-1">
-            <button class="btn btn-sm btn-secondary" onclick="saveConfig('${key}', document.getElementById('cfg-${key}').value)">保存</button>
+          <div class="config-value">
+            <div class="flex gap-2">
+              <input type="${type==='int'||type==='float'?'number':'text'}" id="cfg-${key}" value="${escAttr(val)}"
+                ${type==='int'?'step="1"':''} ${type==='float'?'step="0.01"':''}
+                ${key==='search_api_key'?'type="password"':''}
+                class="flex-1">
+              <button class="btn btn-sm btn-secondary" onclick="saveConfig('${key}', document.getElementById('cfg-${key}').value)">保存</button>
+            </div>
+            ${paramDesc ? `<p class="param-desc">${paramDesc}</p>` : ''}
           </div>
         </div>`;
       }
     }
-    html += '</div>';
+    html += '<div style="height:12px"></div></div></div>';
   }
 
   document.getElementById('config-area').innerHTML = html;
@@ -600,6 +732,7 @@ async function saveMcpServersConfig() {
 
 document.getElementById('save-mcp-servers-btn')?.addEventListener('click', saveMcpServersConfig);
 document.getElementById('external-mcp-mode')?.addEventListener('change', saveMcpModeConfig);
+
 function editPromptConfig(key, label) {
   const val = configData[key]?.value || '';
   const modal = document.createElement('div');
@@ -626,7 +759,7 @@ async function savePromptModal(key) {
 // ============================================================
 // Providers
 // ============================================================
-let providersCache = {};  // 按 id 缓存供应商, editProvider(id) 时查表取出, 避免把整条对象塞进 inline onclick
+let providersCache = {};
 
 async function loadProviders() {
   try {
@@ -719,7 +852,6 @@ async function testProvider(id) {
   btn.textContent = '测试中…';
   btn.disabled = true;
   try {
-    // 后端返回 {ok: true, message} 或 {ok: false, error}
     const res = await apiJson(`/admin/test-provider/${id}`, { method: 'POST' });
     if (res.ok) {
       toast(`✅ ${res.message || '连接成功'}`);
@@ -739,20 +871,58 @@ async function testProvider(id) {
 // ============================================================
 let memPage = 0;
 const MEM_LIMIT = 20;
-let memCache = {};  // 缓存当前列表的记忆数据, editMemory(id) 时按 id 取出
+let memCache = {};
+let heatCache = {};
+let categoriesCache = [];
 
 async function loadMemories() {
   const sort = document.getElementById('mem-sort').value;
   const imp = document.getElementById('mem-importance').value;
+  const catId = document.getElementById('mem-category').value;
   let url = `/debug/memories?limit=${MEM_LIMIT}&offset=${memPage * MEM_LIMIT}&sort=${sort}`;
   if (imp) url += `&min_importance=${imp}`;
+  if (catId) url += `&category_id=${catId}`;
 
   try {
     const data = await apiJson(url);
-    renderMemories(data.memories || [], data.total_memories || 0);
+    const memories = data.memories || [];
+
+    // Load heat data in parallel
+    try {
+      const heatData = await apiJson('/debug/memory-heat?limit=500');
+      heatCache = {};
+      if (heatData.memories) {
+        heatData.memories.forEach(m => { heatCache[m.id] = m.heat; });
+      }
+    } catch(e) { /* heat is optional */ }
+
+    // Load categories for filter dropdown
+    await loadCategoryFilter();
+
+    renderMemories(memories, data.total_memories || 0);
   } catch(e) {
     document.getElementById('memories-list').innerHTML = `<p class="text-red-400">加载失败：${e.message}</p>`;
   }
+}
+
+async function loadCategoryFilter() {
+  try {
+    if (categoriesCache.length === 0) {
+      const data = await apiJson('/admin/categories');
+      categoriesCache = data.categories || [];
+    }
+    const select = document.getElementById('mem-category');
+    const current = select.value;
+    if (select.options.length <= 1) {
+      categoriesCache.forEach(c => {
+        const opt = document.createElement('option');
+        opt.value = c.id;
+        opt.textContent = `${c.icon || '📁'} ${c.name}`;
+        select.appendChild(opt);
+      });
+    }
+    select.value = current;
+  } catch(e) { /* categories are optional */ }
 }
 
 async function searchMemories() {
@@ -766,8 +936,17 @@ async function searchMemories() {
   }
 }
 
+function heatBadge(id, inlineHeat) {
+  const heat = heatCache[id] ?? inlineHeat;
+  if (heat === undefined || heat === null) return '';
+  const h = parseFloat(heat);
+  let cls = 'heat-cold', label = '冷';
+  if (h > 0.7) { cls = 'heat-hot'; label = '热'; }
+  else if (h >= 0.3) { cls = 'heat-warm'; label = '温'; }
+  return `<span class="badge" style="background:rgba(100,116,139,0.12);color:#94a3b8"><span class="heat-dot ${cls}"></span>${h.toFixed(2)}</span>`;
+}
+
 function renderMemories(memories, total) {
-  // 把当前列表缓存进 memCache, editMemory(id) 时按 id 取出, 避免把整条数据塞 onclick 出注入
   memCache = {};
   memories.forEach(m => { memCache[m.id] = m; });
 
@@ -786,7 +965,7 @@ function renderMemories(memories, total) {
           <div class="flex gap-2 mt-2 flex-wrap">
             <span class="badge ${m.importance >= 8 ? 'imp-high' : m.importance >= 5 ? 'imp-mid' : 'imp-low'}">重要度 ${m.importance}</span>
             ${m.is_permanent ? '<span class="badge imp-high">🔒 锁定</span>' : ''}
-            ${m.heat !== undefined ? `<span class="badge" style="background:rgba(251,146,60,0.15);color:#fb923c">🔥 ${(m.heat||0).toFixed(2)}</span>` : ''}
+            ${heatBadge(m.id, m.heat)}
             ${m.category_name ? `<span class="badge" style="background:rgba(148,163,184,0.1);color:#94a3b8">${escHtml(m.category_name)}</span>` : ''}
           </div>
         </div>
@@ -799,7 +978,6 @@ function renderMemories(memories, total) {
     </div>
   `).join('');
 
-  // Pagination
   const totalPages = Math.ceil(total / MEM_LIMIT);
   if (totalPages > 1) {
     let pg = '';
@@ -812,7 +990,6 @@ function renderMemories(memories, total) {
   }
 }
 
-// ── 手动添加记忆 ──
 function toggleAddMemory() {
   const form = document.getElementById('add-memory-form');
   form.classList.toggle('hidden');
@@ -847,7 +1024,6 @@ async function deleteMemory(id) {
   loadMemories();
 }
 
-// 编辑单条记忆 —— 运维场景: 修 AI 提取错的内容/重要度/标题
 function editMemory(id) {
   const m = memCache[id];
   if (!m) { toast('记忆数据丢失，请刷新', false); return; }
@@ -894,13 +1070,108 @@ async function saveMemoryEdit(id) {
   }
 }
 
-// 锁定/解锁切换 —— 运维便捷, 不用再去命令行
 async function toggleLockMemory(id) {
   try {
     await api(`/debug/memories/${id}/toggle-permanent`, { method: 'POST' });
     loadMemories();
   } catch(e) {
     toast('操作失败：' + e.message, false);
+  }
+}
+
+// ============================================================
+// Categories
+// ============================================================
+async function loadCategories() {
+  try {
+    const data = await apiJson('/admin/categories');
+    const cats = data.categories || [];
+    categoriesCache = cats;
+    renderCategories(cats);
+  } catch(e) {
+    document.getElementById('categories-list').innerHTML = `<p class="text-red-400">加载失败：${e.message}</p>`;
+  }
+}
+
+function renderCategories(cats) {
+  if (cats.length === 0) {
+    document.getElementById('categories-list').innerHTML = '<p class="text-gray-500">还没有分类。提取记忆时如果有分类，会自动匹配。</p>';
+    return;
+  }
+
+  document.getElementById('categories-list').innerHTML = cats.map(c => `
+    <div class="bg-panel-card border border-panel-border rounded-lg p-4 mb-3 flex items-center justify-between" id="cat-row-${c.id}">
+      <div class="flex items-center gap-3">
+        <span style="font-size:18px">${escHtml(c.icon || '📁')}</span>
+        <span class="cat-dot" style="background:${escAttr(c.color || '#6B7280')}"></span>
+        <span class="font-medium" id="cat-name-display-${c.id}">${escHtml(c.name)}</span>
+        <span class="text-xs text-gray-500">${c.memory_count ?? 0} 条记忆</span>
+      </div>
+      <div class="flex gap-2" id="cat-actions-${c.id}">
+        <button class="btn btn-sm btn-secondary" onclick="startEditCategory(${c.id})">编辑</button>
+        <button class="btn btn-sm btn-danger" onclick="deleteCategory(${c.id})">删除</button>
+      </div>
+    </div>
+  `).join('');
+}
+
+async function addCategory() {
+  const name = document.getElementById('cat-name').value.trim();
+  if (!name) { toast('❌ 名称不能为空', false); return; }
+  const color = document.getElementById('cat-color').value;
+  const icon = document.getElementById('cat-icon').value.trim() || '📁';
+  try {
+    await api('/admin/categories', { method: 'POST', body: JSON.stringify({ name, color, icon }) });
+    toast('✅ 分类已添加');
+    document.getElementById('cat-name').value = '';
+    categoriesCache = [];
+    loadCategories();
+  } catch(e) {
+    toast('❌ 添加失败：' + e.message, false);
+  }
+}
+
+function startEditCategory(id) {
+  const c = categoriesCache.find(x => x.id === id);
+  if (!c) return;
+  const row = document.getElementById(`cat-row-${id}`);
+  if (!row) return;
+  row.innerHTML = `
+    <div class="flex items-center gap-3 flex-1">
+      <input type="text" id="cat-edit-icon-${id}" value="${escAttr(c.icon || '📁')}" style="width:50px; text-align:center;">
+      <input type="color" id="cat-edit-color-${id}" value="${escAttr(c.color || '#6B7280')}">
+      <input type="text" id="cat-edit-name-${id}" value="${escAttr(c.name)}" class="flex-1">
+    </div>
+    <div class="flex gap-2 ml-3">
+      <button class="btn btn-sm btn-primary" onclick="saveEditCategory(${id})">保存</button>
+      <button class="btn btn-sm btn-secondary" onclick="loadCategories()">取消</button>
+    </div>`;
+}
+
+async function saveEditCategory(id) {
+  const name = document.getElementById(`cat-edit-name-${id}`).value.trim();
+  const color = document.getElementById(`cat-edit-color-${id}`).value;
+  const icon = document.getElementById(`cat-edit-icon-${id}`).value.trim();
+  if (!name) { toast('❌ 名称不能为空', false); return; }
+  try {
+    await api(`/admin/categories/${id}`, { method: 'PUT', body: JSON.stringify({ name, color, icon }) });
+    toast('✅ 分类已更新');
+    categoriesCache = [];
+    loadCategories();
+  } catch(e) {
+    toast('❌ 更新失败：' + e.message, false);
+  }
+}
+
+async function deleteCategory(id) {
+  if (!confirm('确定删除这个分类？已有的记忆不会被删除，但会变成无分类。')) return;
+  try {
+    await api(`/admin/categories/${id}`, { method: 'DELETE' });
+    toast('已删除');
+    categoriesCache = [];
+    loadCategories();
+  } catch(e) {
+    toast('❌ 删除失败：' + e.message, false);
   }
 }
 
