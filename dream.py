@@ -16,6 +16,7 @@ v5.1 初版
 
 import os
 import json
+import re
 import asyncio
 from datetime import datetime, timedelta, timezone
 
@@ -30,6 +31,7 @@ TZ_CST = timezone(timedelta(hours=8))
 # Dream 状态锁 — 同一时间只允许一个 Dream
 _dream_lock = asyncio.Lock()
 _dream_cancelled = False
+_dream_running = False   # 同步互斥标记：check 后立即置位，不依赖 Lock 快速路径
 
 # ============================================================
 # Dream Prompt
@@ -130,15 +132,19 @@ async def run_dream(trigger_type: str = "manual", model_override: str = None):
 
     yields: dict with type = "narrative" | "action" | "progress" | "complete" | "error"
     """
-    global _dream_cancelled
+    global _dream_cancelled, _dream_running
 
-    if _dream_lock.locked():
-        # 注意：不要在这里重置 _dream_cancelled，否则会误清掉
+    if _dream_running:
+        # 已有 Dream 在跑。注意：不要在这里重置 _dream_cancelled，否则会误清掉
         # 用户对当前正在运行的那个 Dream 发出的 stop 信号。
         yield {"type": "error", "data": "AI 已经在睡觉了，不能同时做两个梦"}
         return
 
-    async with _dream_lock:
+    # 同步置位：check 与置位之间无 await，真正堵住并发，不依赖 Lock 快速路径。
+    # 仍持有 _dream_lock，供自动 Dream 触发处的 _dream_lock.locked() 判断。
+    _dream_running = True
+    await _dream_lock.acquire()
+    try:
         # 拿到锁后再重置取消标记，确保只影响本次 Dream
         _dream_cancelled = False
         from database import (
@@ -284,6 +290,17 @@ async def run_dream(trigger_type: str = "manual", model_override: str = None):
             "foresights_generated": 0, "links_created": 0,
         }
 
+        processed_memory_ids = [m["id"] for m in unprocessed]
+
+        # Bug #14：模型调用最长可等 120s，调用前后各检查一次取消标记
+        if _dream_cancelled:
+            await update_dream_log(dream_id, status="interrupted",
+                                    finished_at=datetime.now(TZ_CST),
+                                    dream_narrative="取消于模型调用前")
+            yield {"type": "complete", "data": {"dream_id": dream_id, "interrupted": True}}
+            await mark_memories_dreamed(processed_memory_ids)
+            return
+
         # v5.4：动态解析供应商端点
         try:
             from database import resolve_model_endpoint
@@ -310,6 +327,14 @@ async def run_dream(trigger_type: str = "manual", model_override: str = None):
             async with httpx.AsyncClient(timeout=120) as client:
                 response = await client.post(use_api_url, headers=_headers, json=_send_body)
 
+                if _dream_cancelled:
+                    await update_dream_log(dream_id, status="interrupted",
+                                            finished_at=datetime.now(TZ_CST),
+                                            dream_narrative="取消于模型调用后")
+                    yield {"type": "complete", "data": {"dream_id": dream_id, "interrupted": True}}
+                    await mark_memories_dreamed(processed_memory_ids)
+                    return
+
                 if response.status_code != 200:
                     error_msg = f"模型请求失败: HTTP {response.status_code}"
                     await update_dream_log(dream_id, status="error", finished_at=datetime.now(TZ_CST),
@@ -327,9 +352,10 @@ async def run_dream(trigger_type: str = "manual", model_override: str = None):
             yield {"type": "error", "data": error_msg}
             return
 
-        # 5. 解析模型输出，逐段处理
+        # 5. 解析模型输出，逐段处理（支持模型输出美化的多行 JSON action）
         lines = text.split("\n")
-        processed_memory_ids = [m["id"] for m in unprocessed]
+
+        action_buffer = ""  # 多行 JSON 缓冲：花括号未配平时跨行累积，配平后再解析
 
         for line in lines:
             if _dream_cancelled:
@@ -346,6 +372,24 @@ async def run_dream(trigger_type: str = "manual", model_override: str = None):
             if not line:
                 continue
 
+            # 正在缓冲多行 JSON：继续累积，直到花括号配平再解析
+            if action_buffer:
+                action_buffer += " " + line
+                if action_buffer.count("{") <= action_buffer.count("}"):
+                    match = re.search(r'\{.*\}', action_buffer, re.DOTALL)
+                    if match:
+                        try:
+                            action = json.loads(match.group())
+                            result = await _execute_dream_action(action, dream_id, stats)
+                            yield {"type": "action", "data": result}
+                        except Exception as e:
+                            print(f"   ⚠️ Dream action 多行解析失败: {e}")
+                    else:
+                        full_narrative += action_buffer + "\n"
+                        yield {"type": "narrative", "data": action_buffer}
+                    action_buffer = ""
+                continue
+
             if line.startswith("narrative:"):
                 narrative_text = line[len("narrative:"):].strip()
                 full_narrative += narrative_text + "\n"
@@ -358,24 +402,32 @@ async def run_dream(trigger_type: str = "manual", model_override: str = None):
                     result = await _execute_dream_action(action, dream_id, stats)
                     yield {"type": "action", "data": result}
                 except json.JSONDecodeError:
-                    # 尝试从整行提取 JSON
-                    import re
-                    match = re.search(r'\{.*\}', action_text, re.DOTALL)
-                    if match:
-                        try:
-                            action = json.loads(match.group())
-                            result = await _execute_dream_action(action, dream_id, stats)
-                            yield {"type": "action", "data": result}
-                        except (json.JSONDecodeError, Exception) as e:
-                            print(f"   ⚠️ Dream action 解析失败: {e}")
+                    # 单行解析失败：花括号没配平 → 多行 JSON 开头，开始缓冲后续行
+                    if action_text.count("{") > action_text.count("}"):
+                        action_buffer = action_text
                     else:
-                        # 可能是独白的一部分，当作 narrative 处理
-                        full_narrative += action_text + "\n"
-                        yield {"type": "narrative", "data": action_text}
+                        # 花括号配平却仍解析失败：尝试正则提取，否则当 narrative
+                        match = re.search(r'\{.*\}', action_text, re.DOTALL)
+                        if match:
+                            try:
+                                action = json.loads(match.group())
+                                result = await _execute_dream_action(action, dream_id, stats)
+                                yield {"type": "action", "data": result}
+                            except Exception as e:
+                                print(f"   ⚠️ Dream action 解析失败: {e}")
+                        else:
+                            full_narrative += action_text + "\n"
+                            yield {"type": "narrative", "data": action_text}
             else:
                 # 没有前缀的行，当作 narrative
                 full_narrative += line + "\n"
                 yield {"type": "narrative", "data": line}
+
+        # 循环结束后若还有未配平的缓冲，当 narrative 处理，避免静默丢弃
+        if action_buffer:
+            print("   ⚠️ Dream action 缓冲未配平，当 narrative 处理")
+            full_narrative += action_buffer + "\n"
+            action_buffer = ""
 
         # 6. 标记所有碎片已处理
         await mark_memories_dreamed(processed_memory_ids)
@@ -387,6 +439,9 @@ async def run_dream(trigger_type: str = "manual", model_override: str = None):
         await set_config("last_dream_date", now.strftime("%Y-%m-%d"))
 
         yield {"type": "complete", "data": {"dream_id": dream_id, **stats}}
+    finally:
+        _dream_lock.release()
+        _dream_running = False
 
 
 async def stop_dream():
@@ -399,6 +454,14 @@ async def stop_dream():
 # ============================================================
 # Dream Action 执行器
 # ============================================================
+
+def _safe_int(v):
+    """把 LLM 可能返回的 "5" / "5.0" / 5.0 等安全转成 int，失败返回 None。"""
+    try:
+        return int(float(v))
+    except (ValueError, TypeError):
+        return None
+
 
 async def _execute_dream_action(action: dict, dream_id: int, stats: dict) -> dict:
     """执行单个 Dream 操作"""
@@ -414,7 +477,7 @@ async def _execute_dream_action(action: dict, dream_id: int, stats: dict) -> dic
         if action_type == "delete":
             ids = action.get("memory_ids", [])
             # 确保 ID 是整数（LLM 可能返回字符串）
-            ids = [int(i) for i in ids if str(i).isdigit()]
+            ids = [_safe_int(i) for i in ids if _safe_int(i) is not None]
             if ids:
                 await soft_delete_memories(ids)
                 stats["memories_deleted"] += len(ids)
@@ -424,7 +487,7 @@ async def _execute_dream_action(action: dict, dream_id: int, stats: dict) -> dic
 
         elif action_type == "merge":
             ids = action.get("memory_ids", [])
-            ids = [int(i) for i in ids if str(i).isdigit()]
+            ids = [_safe_int(i) for i in ids if _safe_int(i) is not None]
             merged = action.get("merged_content", "").strip()
             if not ids:
                 pass
@@ -452,9 +515,8 @@ async def _execute_dream_action(action: dict, dream_id: int, stats: dict) -> dic
                 print(f"   🔗 合并 {len(ids)} 条碎片 → #{new_merge_id} {title}")
 
         elif action_type == "promote":
-            mid = action.get("memory_id")
+            mid = _safe_int(action.get("memory_id"))
             if mid is not None:
-                mid = int(mid)
                 await promote_memory(mid)
                 result["memory_id"] = mid
                 print(f"   ⭐ 升格记忆 #{mid}: {action.get('reason', '')}")
