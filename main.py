@@ -14,6 +14,7 @@ AI Memory Gateway — 带记忆系统的 LLM 转发网关
 
 import os
 import json
+import hashlib
 import uuid
 import asyncio
 import httpx
@@ -1430,7 +1431,16 @@ async def chat_completions(request: Request):
     # 优先用前端传来的 conversation_id：工具抽屉的"手动展开工具"状态按 session 存，
     # 设计上是"下一轮对话生效"。session_id 必须跨轮稳定，否则每轮新 uuid 会丢掉
     # 上一轮展开的类别，_drawer_request_tools 永远不会真正生效。
-    session_id = conversation_id or str(uuid.uuid4())[:8]
+    # Bug #3：前端不传 conversation_id 时，退回用「首条用户消息」的 hash —— 它在同一段
+    # 对话的多轮间稳定（不像 uuid 每轮都变），让上面说的“跨轮稳定”在无 conversation_id
+    # 时也成立。
+    if conversation_id:
+        session_id = conversation_id
+    else:
+        first_user = next((m.get("content") for m in messages if m.get("role") == "user"), "") or ""
+        if not isinstance(first_user, str):
+            first_user = json.dumps(first_user, ensure_ascii=False)
+        session_id = "auto-" + hashlib.md5(first_user.encode("utf-8")).hexdigest()[:8]
     
     # 请求 LLM 在流式响应中包含 token 用量
     if body.get("stream"):

@@ -6,6 +6,7 @@ tool_drawer.py - Vector Tool Drawer (Auto-Discovery)
 """
 
 import ast
+import asyncio
 import hashlib
 import json
 import os
@@ -98,6 +99,7 @@ CATEGORIES = {}        # cat_id -> {label, description, tool_names}
 _tool_to_category = {} # tool_name -> cat_id
 _external_categories = {}   # cat_id -> external drawer metadata + execution map
 _external_config_hash = None
+_refresh_lock = asyncio.Lock()   # Bug #4：串行化 refresh_external_drawers，避免半重建的注册表被并发读到
 
 # ============================================================
 # 4. Meta-tools (always available)
@@ -423,6 +425,13 @@ def _unregister_external_drawers():
 
 
 async def refresh_external_drawers(force=False):
+    # Bug #4：刷新会先清空注册表再逐个重建，期间有多个 await；并发刷新会让其他请求读到
+    # 半重建的注册表。用锁把整个刷新串行化。
+    async with _refresh_lock:
+        await _refresh_external_drawers_impl(force)
+
+
+async def _refresh_external_drawers_impl(force=False):
     """Register external MCP servers as dynamic tool drawer categories."""
     global _external_config_hash
 
@@ -706,6 +715,9 @@ async def route_tools(user_message, session_id, user_embedding=None, mem_enabled
     external_pinned = mode in ("auto", "manual")
 
     await refresh_external_drawers()
+    # Bug #4：在锁内对注册表做一次快照，避免遍历期间被并发刷新改成半成品
+    async with _refresh_lock:
+        cat_embeddings_snapshot = dict(_category_embeddings)
     if len(_sessions) > 200:
         _cleanup_sessions()
 
@@ -716,9 +728,9 @@ async def route_tools(user_message, session_id, user_embedding=None, mem_enabled
     external_keyword_hits = _external_keyword_match(user_message) if external_auto else set()
     external_scores = {}
 
-    if user_embedding and _category_embeddings:
+    if user_embedding and cat_embeddings_snapshot:
         scores = {}
-        for cat_id, cat_emb in _category_embeddings.items():
+        for cat_id, cat_emb in cat_embeddings_snapshot.items():
             is_external = cat_id in _external_categories
             if is_external and not external_auto:
                 continue
@@ -736,7 +748,7 @@ async def route_tools(user_message, session_id, user_embedding=None, mem_enabled
         else:
             print(f"\U0001f5c3\ufe0f  抽屉路由：未命中（top3: {top3_str}）")
         internal_keyword_hits = _keyword_match(user_message)
-        fallback_hits = {c for c in internal_keyword_hits if c not in _category_embeddings}
+        fallback_hits = {c for c in internal_keyword_hits if c not in cat_embeddings_snapshot}
         if fallback_hits:
             matched_categories |= fallback_hits
             print(f"\U0001f5c3\ufe0f  抽屉路由（关键词补位）：命中 {fallback_hits}")
@@ -919,6 +931,8 @@ async def execute_drawer_tool(tool_name, arguments):
         return f"[tool_error] {tool_name}: argument mismatch", extra
     except Exception as e:
         print(f"\u274c drawer\u5de5\u5177 {tool_name} \u6267\u884c\u5931\u8d25: {e}")
+        import traceback
+        traceback.print_exc()
         return f"[tool_error] {tool_name}: execution failed", extra
 
 # ============================================================

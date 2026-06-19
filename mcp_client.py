@@ -201,6 +201,9 @@ async def call_tool(tool_name: str, arguments: dict, tool_map: dict) -> str:
     except Exception as e:
         error_msg = f"工具调用失败 [{tool_name}]: {str(e)}"
         print(f"❌ {error_msg}")
+        # Bug #20：调用失败（404 / 未知工具等）可能意味着缓存的工具列表已过期，
+        # 驱逐该 URL 的缓存，下次重新拉取，避免坏数据卡满 _CACHE_TTL。
+        _tool_cache.pop(url, None)
         return error_msg
 
 
