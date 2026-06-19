@@ -263,8 +263,18 @@ async def anthropic_stream_to_openai(response, model: str = "") -> AsyncGenerato
     output_tokens = 0
     cache_creation = 0
     cache_read = 0
+    done_sent = False
 
-    async for chunk in response.aiter_bytes(chunk_size=256):
+    # 手动迭代上游 SSE：流被截断 / 协议异常时 aiter_bytes 可能直接抛错，这里捕获后
+    # 跳出循环，由循环结束后的兜底逻辑补发 [DONE]，避免下游一直挂着等结束信号。
+    chunk_iter = response.aiter_bytes(chunk_size=256)
+    while True:
+        try:
+            chunk = await chunk_iter.__anext__()
+        except StopAsyncIteration:
+            break
+        except Exception:
+            break
         buffer += chunk.decode("utf-8", errors="ignore")
 
         while "\n" in buffer:
@@ -365,13 +375,20 @@ async def anthropic_stream_to_openai(response, model: str = "") -> AsyncGenerato
 
             # ── message_stop ──
             elif event_type == "message_stop":
+                done_sent = True
                 yield b"data: [DONE]\n\n"
 
             # ── error ──
             elif event_type == "error":
                 err_msg = data.get("error", {}).get("message", "Unknown error")
                 yield _sse(msg_id, model, {"content": f"⚠️ {err_msg}"})
+                done_sent = True
                 yield b"data: [DONE]\n\n"
+
+    # 兜底：上游正常结束或被截断却没发 message_stop / error 时，补一个 [DONE] 收尾，
+    # 否则下游（OpenAI SSE 消费方）会一直等不到结束标记。
+    if not done_sent:
+        yield b"data: [DONE]\n\n"
 
 
 # ============================================================
@@ -457,14 +474,23 @@ def _convert_messages(openai_msgs: list) -> list:
         content = msg.get("content", "")
 
         if role == "tool":
-            # ── tool result → 合并到 user message ──
+            # ── tool result → 合并进紧邻的 user message ──
+            # Anthropic 要求同一轮的 tool_result 并进同一条 user 消息，且不允许连续两条
+            # user。上一条已是 user 时：list 内容直接 append；纯字符串内容先转成 text
+            # block 再 append（而不是另起一条 user，避免触发"连续 user"报错）。
             block = {
                 "type": "tool_result",
                 "tool_use_id": msg.get("tool_call_id", ""),
                 "content": content if isinstance(content, str) else json.dumps(content, ensure_ascii=False),
             }
-            if result and result[-1]["role"] == "user" and isinstance(result[-1]["content"], list):
-                result[-1]["content"].append(block)
+            if result and result[-1]["role"] == "user":
+                prev = result[-1]["content"]
+                if isinstance(prev, list):
+                    prev.append(block)
+                else:
+                    result[-1]["content"] = (
+                        [{"type": "text", "text": prev}] if prev else []
+                    ) + [block]
             else:
                 result.append({"role": "user", "content": [block]})
 

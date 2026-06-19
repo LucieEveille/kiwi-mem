@@ -113,6 +113,20 @@ CONFIG_SCHEMA = {
 # 读取配置
 # ============================================================
 
+def _env_or_default(env_name: str, default_val: str) -> tuple:
+    """解析"环境变量 > 默认值"。
+
+    环境变量未设置、或被设成空串 / 纯空白时一律视为"未设置"，回落到默认值，
+    避免空环境变量（如 docker-compose 里 KEY=${KEY} 而 KEY 未定义）把默认值冲掉。
+    返回 (值, 来源)，来源为 'env' 或 'default'。
+    """
+    if env_name:
+        env_val = os.getenv(env_name)
+        if env_val is not None and env_val.strip() != "":
+            return env_val, "env"
+    return default_val, "default"
+
+
 async def get_config(key: str) -> Optional[str]:
     """
     获取单个配置值
@@ -129,9 +143,8 @@ async def get_config(key: str) -> Optional[str]:
     # 降级到环境变量和默认值
     if key in CONFIG_SCHEMA:
         env_name, default_val, _, _ = CONFIG_SCHEMA[key]
-        if env_name:
-            return os.getenv(env_name, default_val)
-        return default_val
+        value, _ = _env_or_default(env_name, default_val)
+        return value
     
     return None
 
@@ -142,12 +155,12 @@ async def get_all_config() -> dict:
     
     # 先填默认值和环境变量
     for key, (env_name, default_val, label, val_type) in CONFIG_SCHEMA.items():
-        env_val = os.getenv(env_name, default_val) if env_name else default_val
+        env_val, source = _env_or_default(env_name, default_val)
         result[key] = {
             "value": env_val,
             "label": label,
             "type": val_type,
-            "source": "env" if (env_name and os.getenv(env_name)) else "default",
+            "source": source,
         }
     
     # 覆盖数据库里的值
@@ -220,8 +233,13 @@ async def get_config_float(key: str, fallback: float = 0.0) -> float:
 
 
 async def get_config_bool(key: str, fallback: bool = False) -> bool:
-    """获取布尔配置"""
+    """获取布尔配置（接受 true/1/yes/on 与 false/0/no/off 等常见写法）"""
     val = await get_config(key)
     if val is None:
         return fallback
-    return val.lower() == "true"
+    v = val.strip().lower()
+    if v in ("true", "1", "yes", "on"):
+        return True
+    if v in ("false", "0", "no", "off"):
+        return False
+    return fallback
