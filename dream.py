@@ -165,7 +165,8 @@ async def run_dream(trigger_type: str = "manual", model_override: str = None):
         # 2. 收集素材
         # 主要素材：上次Dream以来的日页面
         from database import get_calendar_range
-        last_dream_date = await get_config("last_dream_date") or "2020-01-01"
+        fallback_date = (datetime.now(TZ_CST) - timedelta(days=14)).strftime("%Y-%m-%d")
+        last_dream_date = await get_config("last_dream_date") or fallback_date
         today_str = datetime.now(TZ_CST).strftime("%Y-%m-%d")
         day_pages = await get_calendar_range(last_dream_date, today_str, "day")
 
@@ -423,34 +424,32 @@ async def _execute_dream_action(action: dict, dream_id: int, stats: dict) -> dic
 
         elif action_type == "merge":
             ids = action.get("memory_ids", [])
-            # 确保 ID 是整数（LLM 可能返回字符串）
             ids = [int(i) for i in ids if str(i).isdigit()]
-            if ids:
-                # 软删除被合并的碎片
+            merged = action.get("merged_content", "").strip()
+            if not ids:
+                pass
+            elif not merged:
+                print(f"   ⚠️ merge 动作 merged_content 为空，跳过整个合并，原始碎片 {ids} 保持不变")
+                result["skipped"] = True
+                result["reason"] = "merged_content 为空，拒绝软删除原始碎片"
+            else:
+                title = action.get("merged_title", "")
+                from database import save_memory, get_embedding
+                embedding = await get_embedding(f"{title} {merged}" if title else merged)
+                embedding_json = json.dumps(embedding) if embedding else None
+                from database import get_pool
+                pool = await get_pool()
+                async with pool.acquire() as conn:
+                    new_merge_id = await conn.fetchval("""
+                        INSERT INTO memories (content, title, importance, memory_type, embedding, source, source_session, dream_processed_at)
+                        VALUES ($1, $2, 6, 'daily_digest', $3, 'dream_merge', 'dream', NOW())
+                        RETURNING id
+                    """, merged, title, embedding_json)
                 await soft_delete_memories(ids)
                 stats["memories_merged"] += len(ids)
-                # 创建合并后的新记忆
-                from database import save_memory, get_embedding
-                merged = action.get("merged_content", "")
-                title = action.get("merged_title", "")
-                new_merge_id = None
-                if merged:
-                    embedding = await get_embedding(f"{title} {merged}" if title else merged)
-                    embedding_json = json.dumps(embedding) if embedding else None
-                    from database import get_pool
-                    pool = await get_pool()
-                    async with pool.acquire() as conn:
-                        new_merge_id = await conn.fetchval("""
-                            INSERT INTO memories (content, title, importance, memory_type, embedding, source, source_session, dream_processed_at)
-                            VALUES ($1, $2, 6, 'daily_digest', $3, 'dream_merge', 'dream', NOW())
-                            RETURNING id
-                        """, merged, title, embedding_json)
                 result["merged"] = len(ids)
-                if new_merge_id:
-                    result["new_id"] = new_merge_id
-                    print(f"   🔗 合并 {len(ids)} 条碎片 → #{new_merge_id} {title}")
-                else:
-                    print(f"   ⚠️ 合并 {len(ids)} 条碎片但 merged_content 为空，未创建新记忆")
+                result["new_id"] = new_merge_id
+                print(f"   🔗 合并 {len(ids)} 条碎片 → #{new_merge_id} {title}")
 
         elif action_type == "promote":
             mid = action.get("memory_id")
