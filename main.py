@@ -2959,6 +2959,60 @@ async def api_generate_year_summary(year: str = None):
         return {"error": str(e)}
 
 
+# ============================================================
+# 自动上下文压缩摘要（v6.1）
+# 压缩在前端执行，后端只负责存储/读取摘要，为无缝换窗 v2 预留
+# 两个端点都在 /admin/* 下，受 AdminAuthMiddleware 保护（前端用 authFetch 带 Bearer）
+# ============================================================
+
+@app.post("/admin/compression-summary")
+async def api_save_compression_summary(request: Request):
+    """前端压缩成功后调此端点存储摘要（为无缝换窗 v2 预留）"""
+    try:
+        body = await request.json()
+        conv_id = body.get("conversation_id")
+        summary = body.get("summary", "")
+        if not conv_id or not summary:
+            return JSONResponse(status_code=400, content={"error": "缺少 conversation_id 或 summary"})
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            await conn.execute(
+                "INSERT INTO compression_summaries (conversation_id, summary, model, summary_type, msg_count) VALUES ($1, $2, $3, $4, $5)",
+                conv_id,
+                summary,
+                body.get("model", ""),
+                body.get("summary_type", "auto"),
+                body.get("msg_count", 0),
+            )
+        return JSONResponse(content={"ok": True})
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": str(e)})
+
+
+@app.get("/admin/compression-summaries")
+async def api_get_compression_summaries(conversation_id: str):
+    """读取某对话的全部压缩摘要（按时间正序），供无缝换窗 v2 使用"""
+    try:
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT summary, model, summary_type, msg_count, compressed_at FROM compression_summaries WHERE conversation_id = $1 ORDER BY compressed_at ASC",
+                conversation_id,
+            )
+        return JSONResponse(content=[
+            {
+                "summary": r["summary"],
+                "model": r["model"],
+                "summary_type": r["summary_type"],
+                "msg_count": r["msg_count"],
+                "compressed_at": str(r["compressed_at"]),
+            }
+            for r in rows
+        ])
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": str(e)})
+
+
 @app.get("/calendar/{date}")
 async def api_get_calendar_day(date: str, type: str = "day"):
     """获取指定日期的日历页面"""
@@ -4469,6 +4523,8 @@ async def api_sync_reset(request: Request):
             # 删除所有消息和对话（级联）
             deleted_convs = await conn.execute("DELETE FROM chat_conversations")
             deleted_projs = await conn.execute("DELETE FROM chat_projects")
+            # compression_summaries 无外键，不会随对话级联删除，手动清空
+            await conn.execute("DELETE FROM compression_summaries")
 
             # 清除同步设置
             sync_keys = ["user_avatar", "user_nickname", "assistant_avatar", "assistant_settings",

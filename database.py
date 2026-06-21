@@ -293,6 +293,24 @@ async def init_tables():
             );
         """)
 
+        # v6.1：自动上下文压缩摘要（每次压缩单独存一条，为无缝换窗 v2 预留）
+        # conversation_id 是前端对话 ID，后端没有对应外键表，故不加外键约束
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS compression_summaries (
+                id              SERIAL PRIMARY KEY,
+                conversation_id TEXT NOT NULL,
+                summary         TEXT NOT NULL,
+                model           TEXT DEFAULT '',
+                summary_type    TEXT DEFAULT 'auto',
+                msg_count       INT DEFAULT 0,
+                compressed_at   TIMESTAMPTZ DEFAULT NOW()
+            );
+        """)
+        await conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_comp_sum_conv
+            ON compression_summaries (conversation_id);
+        """)
+
         # v4.2：提醒系统
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS reminders (
@@ -2340,12 +2358,18 @@ async def sync_upsert_conversation(conv: dict):
 
 
 async def sync_delete_conversation(conv_id: str):
-    """删除对话（级联删除消息）"""
+    """删除对话（chat_messages 由外键级联删除；compression_summaries 无外键，需手动清理）"""
     pool = await get_pool()
     async with pool.acquire() as conn:
-        result = await conn.execute(
-            "DELETE FROM chat_conversations WHERE id = $1", conv_id
-        )
+        async with conn.transaction():
+            result = await conn.execute(
+                "DELETE FROM chat_conversations WHERE id = $1", conv_id
+            )
+            # compression_summaries 没有外键约束，不会随对话级联删除，必须手动删，
+            # 否则无缝换窗 v2 读取时可能读到已删对话的旧窗口摘要
+            await conn.execute(
+                "DELETE FROM compression_summaries WHERE conversation_id = $1", conv_id
+            )
         return "DELETE" in result
 
 

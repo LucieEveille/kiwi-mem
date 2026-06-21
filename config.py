@@ -39,6 +39,11 @@ CONFIG_SCHEMA = {
     # 上下文压缩（v3.9）
     "default_compress_model":("",                        "",     "上下文压缩模型",    "text"),
     "prompt_compress":       ("",                        "",     "上下文压缩提示词",  "text"),
+    # 自动上下文压缩（v6.1）
+    "auto_compress_enabled":    ("", "true",  "自动压缩开关",        "bool"),
+    "auto_compress_msg_limit":  ("", "40",    "压缩触发条数",        "int"),
+    "auto_compress_token_limit":("", "30000", "压缩触发 token 上限",  "int"),
+    "auto_compress_keep_last":  ("", "4",     "压缩后保留原文条数",   "int"),
     # 用户画像（v4.0）
     "user_profile":          ("",                        "",     "用户画像",          "text"),
     "prompt_user_profile":   ("",                        "",     "画像更新提示词",    "text"),
