@@ -4391,12 +4391,16 @@ async def api_sync_put_settings(request: Request):
     """批量更新同步配置"""
     try:
         data = await request.json()
-        updated = []
+        updated, rejected = [], []
         for key, value in data.items():
             ok = await set_config(key, str(value) if value is not None else "")
-            if ok:
-                updated.append(key)
-        return {"status": "ok", "updated": updated}
+            (updated if ok else rejected).append(key)
+        # rejected = set_config 拒收的键（不在 CONFIG_SCHEMA / 类型校验失败）。
+        # 必须如实回报，否则前端批量同步对"被静默丢弃的设置"毫无察觉
+        # （例如网关版本过旧、还没有某个新配置键时，对应设置会一直存不进却无任何提示）。
+        if rejected:
+            print(f"⚠️  /sync/settings 拒收配置项（未落库）: {rejected}")
+        return {"status": "ok", "updated": updated, "rejected": rejected}
     except Exception as e:
         return JSONResponse(status_code=500, content={"error": str(e)})
 
