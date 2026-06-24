@@ -113,6 +113,33 @@ print(f"  [INFO] 已知残余：纯数字/单字更新可能漏判（当前 7 in
 
 
 # ============================================================
+# 3. prepare_background_request：归因头必须 ASCII 安全
+#    含 É(\xc9) 等非 ASCII 的 X-Title 会让 httpx 编码直接抛 'ascii' codec can't
+#    encode，把整个后台请求带崩。kiwi 各处 title 本就是 ASCII，这里守护清洗逻辑本身。
+# ============================================================
+from anthropic_adapter import prepare_background_request
+
+
+def _headers_ascii_safe(headers):
+    try:
+        for v in headers.values():
+            v.encode("ascii")
+        return True
+    except UnicodeEncodeError:
+        return False
+
+
+h, _ = prepare_background_request("sk-x", "openai", {"model": "m"},
+                                  referer="https://gateway.eveille.love",
+                                  title="Éveille Memory Extraction")
+check("含 É 的 X-Title 被清洗成 ASCII（不再让 httpx 编码崩溃）", _headers_ascii_safe(h))
+check("清洗后 X-Title 仍非空（保留可读标识）", bool(h.get("X-Title")))
+
+h2, _ = prepare_background_request("sk-x", "openai", {"model": "m"}, title="未命名场景")
+check("纯非 ASCII 标题清洗后回退占位符", _headers_ascii_safe(h2) and h2.get("X-Title") == "Eveille")
+
+
+# ============================================================
 if _failures:
     print(f"\n❌ {len(_failures)} 个用例失败：{_failures}")
     sys.exit(1)

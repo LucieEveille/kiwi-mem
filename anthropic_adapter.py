@@ -224,6 +224,18 @@ def from_anthropic_response(anthropic_data: dict, model: str = "") -> dict:
 # 配合 database.resolve_model_endpoint 返回的 (url, key, api_format)。
 # ============================================================
 
+def _ascii_header(value: str) -> str:
+    """HTTP 头只接受 ASCII/latin-1；含非 ASCII（如 É = \\xc9）会让 httpx 编码时直接抛
+    'ascii' codec can't encode...，把整个后台请求带崩。归因头（HTTP-Referer / X-Title）
+    本就是给上游看的标识，这里降级清洗成 ASCII，丢弃无法编码的字符。"""
+    try:
+        value.encode("ascii")
+        return value
+    except (UnicodeEncodeError, AttributeError):
+        cleaned = value.encode("ascii", "ignore").decode("ascii").strip()
+        return cleaned or "Eveille"
+
+
 def prepare_background_request(api_key: str, api_format: str, openai_body: dict,
                                referer: str = None, title: str = None) -> tuple:
     """根据 api_format 构造后台请求，返回 (headers, send_body)。
@@ -237,9 +249,9 @@ def prepare_background_request(api_key: str, api_format: str, openai_body: dict,
         return to_anthropic_headers(api_key), to_anthropic_request(openai_body)
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
     if referer:
-        headers["HTTP-Referer"] = referer
+        headers["HTTP-Referer"] = _ascii_header(referer)
     if title:
-        headers["X-Title"] = title
+        headers["X-Title"] = _ascii_header(title)
     return headers, openai_body
 
 
