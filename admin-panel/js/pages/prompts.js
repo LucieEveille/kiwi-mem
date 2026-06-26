@@ -1,6 +1,6 @@
 // 📜 提示词模板 — 集中编辑全部 prompt_* 与 user_profile（自实现弹窗，不依赖 config.js 私有函数）
 import { get, post, escHtml } from '../api.js';
-import { card, badge, emptyState, loadingBlock, toast, modal, delegate, setBusy } from '../ui.js';
+import { badge, emptyState, loadingBlock, toast, modal, delegate, setBusy } from '../ui.js';
 import { loadConfig, saveConfig } from '../config.js';
 import { CONFIG_META, RESTORABLE_PROMPTS } from '../config-schema.js';
 
