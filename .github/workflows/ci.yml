@@ -23,22 +23,6 @@ jobs:
       - name: 编译检查所有 .py 文件（有语法错误这步就会变红）
         run: python -m compileall -q .
 
-  behavior-tests:
-    name: 行为测试（纯函数逻辑）
-    runs-on: ubuntu-latest
-    steps:
-      - name: 拉取代码
-        uses: actions/checkout@v4
-
-      - name: 准备 Python 3.12（与 Dockerfile 一致）
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-
-      - name: 安装测试所需依赖（detect_contradictions 在 database.py 里需要这三个）
-        run: pip install asyncpg httpx jieba
-
-      - name: 跑行为测试（思考链约束 + 矛盾检测 + 工具抽屉路由语义/并发快照）
-        run: |
-          python tests/test_logic.py
-          python tests/test_drawer.py
+  # 注：开源版不随仓库携带 tests/（见提交 a0968f6「删除测试用文件」），
+  # 故这里不再跑 behavior-tests；语法自检即开源版 CI 的绿勾标准。
+  # 行为测试仍保留在私人后端 gateway 仓库里。
