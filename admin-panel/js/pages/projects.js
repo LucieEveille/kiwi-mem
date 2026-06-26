@@ -31,7 +31,7 @@ export default {
       const cnt = this.root.querySelector('#proj-count');
       if (cnt) cnt.textContent = this.list.length ? `共 ${this.list.length} 个项目` : '';
       if (!this.list.length) {
-        el.innerHTML = emptyState({ icon: '📁', msg: '还没有项目', hint: '项目通常由聊天前端创建，用于把不同主题的对话与记忆分开。' });
+        el.innerHTML = emptyState({ icon: '📁', msg: '还没有项目', hint: '项目通常由客户端创建，用于把不同主题的对话与记忆分开。' });
         return;
       }
       el.innerHTML = `<div class="grid grid-2">` + this.list.map(p => {

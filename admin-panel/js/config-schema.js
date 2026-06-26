@@ -65,10 +65,6 @@ export const CONFIG_META = {
   // —— 用户/助手画像 ——
   user_profile:           { label:'用户画像', type:'text', def:'', input:'prompt', hasDefault:false, desc:'AI 对用户的整体认知，注入 system prompt。由每日整理自动更新，也可手动编辑。' },
   prompt_user_profile:    { label:'画像更新提示词', type:'text', def:'', input:'prompt', hasDefault:true, desc:'指导每日整理如何更新用户画像。留空用内置默认。' },
-  user_nickname:          { label:'用户昵称', type:'text', def:'', input:'text', desc:'同步给聊天前端的用户昵称。' },
-  user_avatar:            { label:'用户头像', type:'text', def:'', input:'text', desc:'用户头像（URL 或 base64），同步给聊天前端。' },
-  assistant_avatar:       { label:'助手头像', type:'text', def:'', input:'text', desc:'助手头像，同步给聊天前端。' },
-  assistant_settings:     { label:'助手参数', type:'text', def:'', input:'json', desc:'助手相关参数（JSON），由聊天前端读写。' },
 
   // —— 日历 / 每日整理 ——
   calendar_inject_enabled:{ label:'日历注入', type:'bool', def:'true', input:'bool', desc:'是否把日/周/月/季/年总结注入 system prompt，让 AI 知道最近发生了什么。' },
@@ -97,7 +93,6 @@ export const CONFIG_META = {
   mcp_mode:               { label:'外部 MCP 模式', type:'text', def:'auto', input:'text', desc:'off=全禁用，auto=按语义自动路由，manual=只启用手动选择的。只影响配置来源的外部抽屉。' },
   mcp_servers:            { label:'外部 MCP 服务器', type:'text', def:'', input:'json', desc:'外部 MCP server 列表（JSON 数组）。在「工具抽屉」页用专用编辑器维护。' },
   mcp_manual_ids:         { label:'手动 MCP 选择', type:'text', def:'', input:'json', desc:'manual 模式下启用的 MCP 服务器 ID 列表（JSON 数组）。' },
-  mcp_switches:           { label:'MCP 开关状态', type:'text', def:'', input:'json', desc:'聊天前端的 MCP 开关状态（JSON），一般由前端读写。' },
   ext_drawer_threshold:   { label:'外部抽屉相似度阈值', type:'float', def:'0.40', input:'float', desc:'外部工具与对话内容的语义相似度门槛，低于此值不展开。' },
   ext_drawer_max_open:    { label:'外部抽屉同开上限', type:'int', def:'3', input:'int', desc:'单次对话最多同时展开几个外部工具抽屉。' },
 
@@ -106,10 +101,6 @@ export const CONFIG_META = {
   search_api_key:         { label:'搜索 API Key', type:'text', def:'', input:'pass', desc:'所选搜索引擎的 API Key（local 类型引擎无需）。' },
   search_max_results:     { label:'搜索结果条数', type:'int', def:'5', input:'int', desc:'每次搜索返回多少条结果。' },
 
-  // —— 指令 / 快捷短语 ——
-  custom_skills:          { label:'自定义技能', type:'text', def:'', input:'json', desc:'自定义指令/技能（JSON），同步给聊天前端。' },
-  quick_phrases:          { label:'快捷短语', type:'text', def:'', input:'json', desc:'快捷短语（JSON），同步给聊天前端。' },
-
   // —— 模型默认（通用）——
   default_chat_model:     { label:'默认聊天模型', type:'text', def:'', input:'model', desc:'未在前端指定时使用的默认聊天模型。' },
   default_title_model:    { label:'标题生成模型', type:'text', def:'', input:'model', desc:'自动生成对话标题用的模型。建议小模型。' },
@@ -117,9 +108,6 @@ export const CONFIG_META = {
 
   // —— 网关 / 性能 ——
   prompt_cache_enabled:   { label:'Prompt 缓存', type:'bool', def:'true', input:'bool', desc:'Claude 模型的显式缓存：重复的 system prompt 前缀只收 1/10 费用。非 Claude 自动跳过。' },
-
-  // —— 前端偏好 ——
-  theme_preference:       { label:'主题偏好', type:'text', def:'', input:'text', desc:'聊天前端的主题偏好，同步用。' },
 };
 
 // 各功能页的配置编排：master 总开关 + 分组旋钮
@@ -148,7 +136,6 @@ export const CONFIG_PAGES = {
   profile: {
     groups: [
       { title:'用户画像', keys:['user_profile','prompt_user_profile'] },
-      { title:'前端身份', desc:'同步给聊天前端的昵称/头像等。', keys:['user_nickname','user_avatar','assistant_avatar','assistant_settings'] },
     ],
   },
   calendar: {
@@ -173,23 +160,17 @@ export const CONFIG_PAGES = {
     master: 'tool_drawer_enabled',
     groups: [
       { title:'外部 MCP 抽屉', desc:'外部工具按语义相关性自动展开。', keys:['mcp_mode','ext_drawer_threshold','ext_drawer_max_open'] },
-      { title:'高级（JSON）', keys:['mcp_manual_ids','mcp_switches'] },
+      { title:'高级（JSON）', keys:['mcp_manual_ids'] },
     ],
   },
   websearch: {
     groups: [ { title:'搜索配置', keys:['search_engine','search_api_key','search_max_results'] } ],
-  },
-  phrases: {
-    groups: [ { title:'指令与短语（JSON）', keys:['custom_skills','quick_phrases'] } ],
   },
   providers: {
     groups: [ { title:'默认模型', desc:'未指定时的兜底模型。', keys:['default_chat_model','default_title_model','prompt_title_summary'] } ],
   },
   gateway: {
     groups: [ { title:'性能', keys:['prompt_cache_enabled'] } ],
-  },
-  sync: {
-    groups: [ { title:'前端偏好', keys:['theme_preference'] } ],
   },
 };
 

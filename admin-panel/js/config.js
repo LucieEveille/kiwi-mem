@@ -9,7 +9,7 @@
 //
 // 控件改动即时 PUT /admin/config/{key}，无需保存按钮。总开关联动变暗下方旋钮。
 // ============================================================
-import { get, put, post, escHtml } from './api.js';
+import { get, put, post, escHtml, escAttr } from './api.js';
 import { toast, cfgRow, ctl, masterSwitch, modal, setBusy } from './ui.js';
 import { CONFIG_META, CONFIG_PAGES, RESTORABLE_PROMPTS } from './config-schema.js';
 
@@ -42,7 +42,7 @@ function controlFor(key, val) {
     case 'pass':
       return `<input type="password" ${attr} value="${escHtml(v)}" placeholder="••••••">`;
     case 'model':
-      return `<input type="text" list="model-datalist" ${attr} value="${escHtml(v)}" placeholder="留空跟随聊天模型">`;
+      return `<select ${attr} data-model-select data-current="${escAttr(v)}">${modelOptions(v)}</select>`;
     case 'json':
       return `<textarea class="mono" ${attr} rows="4" spellcheck="false" placeholder="JSON">${escHtml(v)}</textarea>`;
     case 'prompt':
@@ -183,6 +183,8 @@ export function wireConfig(root, cfg) {
       } catch (err) { toast(`恢复失败：${err.message}`, 'err'); }
     }
   });
+
+  upgradeModelSelects(root); // 用已保存模型填充本容器内的 model 下拉（缓存就绪即时填，否则随 ensureModelDatalist 异步补）
 }
 
 // 保存状态反馈：saving / ok / fail。fail 持久显示并把控件标红，让用户明确知道没存上。
@@ -240,14 +242,45 @@ function openPromptEditor(root, key, cfg) {
   });
 }
 
-// 提供给页面：往 <head> 注入一个 datalist 供 model 输入框补全
+// ---- model 下拉：按供应商分组，数据来自 /admin/all-saved-models（缓存） ----
+let MODEL_GROUPS = null;
+
+function modelOptions(selected) {
+  const sel = selected ?? '';
+  const groups = MODEL_GROUPS || [];
+  const known = new Set(groups.flatMap(g => g.models));
+  let html = `<option value="">（默认 / 未指定）</option>`;
+  // 当前值若不在已保存模型里，仍保留为一个选项，避免把手填的值弄丢
+  if (sel && !known.has(sel)) html += `<option value="${escAttr(sel)}" selected>${escHtml(sel)}（手填）</option>`;
+  for (const g of groups) {
+    html += `<optgroup label="${escAttr(g.provider)}">` +
+      g.models.map(m => `<option value="${escAttr(m)}" ${m === sel ? 'selected' : ''}>${escHtml(m)}</option>`).join('') +
+      `</optgroup>`;
+  }
+  return html;
+}
+
+// 把容器内（默认整个文档）的 model 下拉用已保存模型重填，保留各自当前值
+function upgradeModelSelects(root = document) {
+  root.querySelectorAll('select[data-model-select]').forEach(s => {
+    const val = s.getAttribute('data-current') || '';
+    s.innerHTML = modelOptions(val);
+    s.value = val;
+  });
+}
+
+// 页面在 mount 里调用：拉取已保存模型并刷新所有 model 下拉（保留旧名以兼容调用方）
 export async function ensureModelDatalist() {
-  if (document.getElementById('model-datalist')) return;
-  const dl = document.createElement('datalist');
-  dl.id = 'model-datalist';
-  document.body.appendChild(dl);
-  try {
-    const data = await get('/admin/all-saved-models');
-    dl.innerHTML = (data.models || []).map(m => `<option value="${escHtml(m.model_id)}">${escHtml(m.display_name || m.model_id)} · ${escHtml(m.provider_name || '')}</option>`).join('');
-  } catch {}
+  if (!MODEL_GROUPS) {
+    try {
+      const data = await get('/admin/all-saved-models');
+      const byProv = {};
+      for (const m of (data.models || [])) {
+        const prov = m.provider_name || '其他';
+        (byProv[prov] = byProv[prov] || []).push(m.model_id);
+      }
+      MODEL_GROUPS = Object.entries(byProv).map(([provider, models]) => ({ provider, models }));
+    } catch { MODEL_GROUPS = []; }
+  }
+  upgradeModelSelects();
 }

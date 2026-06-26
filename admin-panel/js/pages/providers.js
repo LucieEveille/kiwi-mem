@@ -1,6 +1,6 @@
 // 🔌 供应商与模型 — CRUD + 连接测试 + 模型管理（决定 /v1/models 与聊天路由）+ 额度 + 默认模型
 import { get, post, put, del, escHtml, escAttr } from '../api.js';
-import { card, badge, emptyState, loadingBlock, toast, modal, confirmDialog, delegate, setBusy, ctl } from '../ui.js';
+import { badge, emptyState, loadingBlock, toast, modal, confirmDialog, delegate, setBusy, ctl } from '../ui.js';
 import { loadConfig, renderConfigGroups, wireConfig, ensureModelDatalist } from '../config.js';
 
 export default {
@@ -13,12 +13,10 @@ export default {
       <div class="card-head"><div class="card-title">供应商</div><button class="btn btn-primary" data-act="add">+ 添加供应商</button></div>
       <div id="prov-list">${loadingBlock()}</div>
       <div id="default-models" class="mt24"></div>
-      <div id="credits" class="mt16"></div>
     `;
     this.cfg = await loadConfig().catch(() => ({}));
     this.renderDefaults();
     this.load();
-    this.loadCredits();
 
     delegate(root, {
       add: () => this.form(null),
@@ -61,22 +59,6 @@ export default {
   },
 
   find(id) { return (this.list || []).find(p => String(p.id) === String(id)); },
-
-  async loadCredits() {
-    const el = this.root.querySelector('#credits');
-    try {
-      const d = await get('/admin/credits');
-      const provs = (d.providers || []).filter(p => p.balance != null || p.total_credits != null || p.usage != null);
-      if (!provs.length) return;
-      el.innerHTML = card({
-        title: '💰 额度', body: `<table class="table"><thead><tr><th>供应商</th><th class="num">余额</th><th class="num">已用</th><th class="num">额度</th></tr></thead><tbody>${
-          provs.map(p => `<tr><td>${escHtml(p.provider_name || '')}</td>
-            <td class="num">${p.balance != null ? p.balance : (p.limit_remaining ?? '—')}</td>
-            <td class="num">${p.total_usage ?? p.usage ?? '—'}</td>
-            <td class="num">${p.total_credits ?? p.limit ?? '—'}</td></tr>`).join('')
-        }</tbody></table>` });
-    } catch {}
-  },
 
   form(p) {
     const isNew = !p;

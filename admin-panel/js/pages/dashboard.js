@@ -7,6 +7,7 @@ export default {
   title: '仪表盘',
   async mount(root) {
     root.innerHTML = `
+      <div class="banner banner-accent mb16"><span style="font-size:17px;line-height:1.4">🧵</span><div><b>本网关只支持线性对话</b><br>不支持消息分支（重新生成多条分叉、fork 对话树）。记忆提取、上下文压缩与各项注入都按单一线性序列设计，分支会让记忆归属与上下文衔接错乱——因此后端有意只做线性对话。</div></div>
       <div id="health" class="mb16">${loadingBlock('正在自检配置…')}</div>
       <div class="grid grid-4 mb16" id="stats">${loadingBlock()}</div>
       <div class="grid grid-2">

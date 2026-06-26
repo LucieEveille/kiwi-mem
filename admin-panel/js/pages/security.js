@@ -18,7 +18,7 @@ export default {
         title: '① 前端访问密码',
         body: `<p class="muted" style="line-height:1.7;margin:0">
           公开版<b>不再校验前端访问密码</b>（<code>/auth/verify</code> 恒返回「无需密码」）。
-          私人后端如需密码门禁，由配套的 React 聊天前端自带的登录逻辑处理，与本网关无关。
+          如需密码门禁，可在客户端或反向代理层自行处理，本网关本身不内置访问密码。
         </p>`,
       })}
 

@@ -1,41 +1,34 @@
-// 📅 日历与整理 — 总开关 + 日历浏览/编辑 + 各级生成 + 参数（pill-tabs）
-import { get, put, del, escHtml, escAttr, fmtDate, todayStr } from '../api.js';
-import { badge, emptyState, loadingBlock, errorBlock, toast, modal, confirmDialog, delegate, setBusy, ctl, masterSwitch } from '../ui.js';
+// 📅 日历与整理 — 总开关 + 各级生成 + 参数（pill-tabs）
+import { get, escAttr, todayStr } from '../api.js';
+import { loadingBlock, toast, delegate, setBusy, masterSwitch } from '../ui.js';
 import { loadConfig, renderConfigGroups, wireConfig, ensureModelDatalist } from '../config.js';
 import { CONFIG_META } from '../config-schema.js';
 
 export default {
   title: '日历与整理',
-  state: { cfg: {}, pages: [], tab: 'browse' },
+  state: { cfg: {}, tab: 'generate' },
 
   async mount(root) {
     this.root = root;
     ensureModelDatalist();
     root.innerHTML = `
-      <p class="page-intro">日历把零散对话凝成日/周/月/季/年的总结，开启注入后 AI 便知道「最近发生了什么」。这里可以浏览、手动编辑，也能随时触发各级整理。</p>
+      <p class="page-intro">日历把零散对话凝成日/周/月/季/年的总结，开启注入后 AI 便知道「最近发生了什么」。这里可以随时触发各级整理，并调整参数。</p>
       <div id="master-slot">${loadingBlock()}</div>
       <div class="pill-tabs" id="tabs">
-        <div class="pill-tab active" data-act="tab" data-tab="browse">🗂️ 日历浏览</div>
-        <div class="pill-tab" data-act="tab" data-tab="generate">⚙️ 生成整理</div>
+        <div class="pill-tab active" data-act="tab" data-tab="generate">⚙️ 生成整理</div>
         <div class="pill-tab" data-act="tab" data-tab="settings">🎛️ 参数设置</div>
       </div>
-      <div id="panel-browse"></div>
-      <div id="panel-generate" style="display:none"></div>
+      <div id="panel-generate"></div>
       <div id="panel-settings" style="display:none"></div>
     `;
 
     this.state.cfg = await loadConfig().catch(() => ({}));
     this.renderMaster();
-    this.renderBrowseShell();
     this.renderGenerate();
     this.renderSettings();
-    this.loadPages();
 
     delegate(root, {
       tab: (el) => this.switchTab(el.dataset.tab),
-      reload: () => this.loadPages(),
-      edit: (el) => this.editModal(this.findPage(el.dataset.id)),
-      del: (el) => this.remove(el.dataset.date, el.dataset.type),
       'gen-daily': (el) => this.runTask(el, () => `/admin/daily-digest${this.dateQ('d-daily')}`, '每日整理'),
       'gen-day': (el) => this.runTask(el, () => `/admin/day-page${this.dateQ('d-day')}`, '日页面生成'),
       'gen-week': (el) => this.runTask(el, () => `/admin/week-summary${this.weekQ()}`, '周总结'),
@@ -63,119 +56,8 @@ export default {
   switchTab(tab) {
     this.state.tab = tab;
     this.root.querySelectorAll('.pill-tab').forEach(t => t.classList.toggle('active', t.dataset.tab === tab));
-    this.root.querySelector('#panel-browse').style.display = tab === 'browse' ? '' : 'none';
     this.root.querySelector('#panel-generate').style.display = tab === 'generate' ? '' : 'none';
     this.root.querySelector('#panel-settings').style.display = tab === 'settings' ? '' : 'none';
-  },
-
-  // ---- 浏览 ----
-  renderBrowseShell() {
-    this.root.querySelector('#panel-browse').innerHTML = `
-      <div class="toolbar">
-        <label class="text-sm muted">起</label>
-        <input type="date" id="cal-start" value="${escAttr(todayStr(-30))}">
-        <label class="text-sm muted">止</label>
-        <input type="date" id="cal-end" value="${escAttr(todayStr(0))}">
-        <select id="cal-type" style="width:130px">
-          <option value="">全部类型</option>
-          <option value="day">日</option>
-          <option value="week">周</option>
-          <option value="month">月</option>
-          <option value="quarter">季</option>
-          <option value="year">年</option>
-        </select>
-        <button class="btn btn-secondary" data-act="reload">查询</button>
-      </div>
-      <div id="cal-list">${loadingBlock()}</div>
-    `;
-  },
-
-  typeLabel(t) {
-    return ({ day: '日', week: '周', month: '月', quarter: '季', year: '年' })[t] || (t || '页面');
-  },
-
-  async loadPages() {
-    const el = this.root.querySelector('#cal-list');
-    if (!el) return;
-    el.innerHTML = loadingBlock();
-    const start = this.val('cal-start'), end = this.val('cal-end'), type = this.val('cal-type');
-    let url = '/calendar?';
-    if (start) url += `start=${encodeURIComponent(start)}&`;
-    if (end) url += `end=${encodeURIComponent(end)}&`;
-    if (type) url += `type=${encodeURIComponent(type)}`;
-    try {
-      const d = await get(url);
-      this.state.pages = d.pages || [];
-      this.renderList();
-    } catch (e) { el.innerHTML = errorBlock(e.message); }
-  },
-
-  findPage(id) { return (this.state.pages || []).find(p => String(p.id) === String(id)); },
-
-  renderList() {
-    const el = this.root.querySelector('#cal-list');
-    const pages = this.state.pages;
-    if (!pages.length) { el.innerHTML = emptyState({ icon: '📭', msg: '这段时间还没有日历页面', hint: '去「生成整理」触发每日整理或各级总结' }); return; }
-    el.innerHTML = pages.map(p => {
-      const body = p.diary || p.summary || p.digest || '';
-      const secs = Array.isArray(p.sections) ? p.sections : [];
-      const kws = Array.isArray(p.keywords) ? p.keywords : [];
-      return `
-      <div class="item">
-        <div class="item-row">
-          <div style="flex:1;min-width:0">
-            <div class="item-title">${escHtml(p.title || fmtDate(p.date))} ${badge(this.typeLabel(p.type), 'info')}</div>
-            <div class="item-sub faint text-xs">${escHtml(p.date || '')}</div>
-            ${body ? `<div class="text-sm muted clamp3" style="color:var(--text-soft);margin-top:6px;white-space:pre-wrap">${escHtml(body)}</div>` : '<div class="faint text-xs" style="margin-top:6px">（无正文）</div>'}
-            ${secs.length ? `<div class="btn-row mt8">${secs.map(s => badge(typeof s === 'string' ? s : (s.title || s.name || ''), 'muted')).join('')}</div>` : ''}
-            ${kws.length ? `<div class="btn-row mt8">${kws.map(k => `<span class="badge badge-accent">${escHtml(k)}</span>`).join('')}</div>` : ''}
-          </div>
-          <div class="item-actions">
-            <button class="btn btn-xs btn-secondary" data-act="edit" data-id="${p.id}">编辑</button>
-            <button class="btn btn-xs btn-danger-soft" data-act="del" data-date="${escAttr(p.date)}" data-type="${escAttr(p.type || 'day')}">删除</button>
-          </div>
-        </div>
-      </div>`;
-    }).join('');
-  },
-
-  editModal(p) {
-    if (!p) { toast('找不到该页面', 'err'); return; }
-    const mod = modal({
-      title: `编辑 · ${escHtml(p.title || p.date || '')}`,
-      wide: true,
-      body: `
-        <div class="grid grid-2">
-          <div class="field"><label>标题</label>${ctl.text('title', p.title || '', '给这一页起个标题…')}</div>
-          <div class="field"><label>类型</label>${ctl.select('type', p.type || 'day', [
-            { value: 'day', label: '日' }, { value: 'week', label: '周' },
-            { value: 'month', label: '月' }, { value: 'quarter', label: '季' }, { value: 'year', label: '年' },
-          ])}</div>
-        </div>
-        <div class="field"><label>正文（diary）</label>${ctl.area('content', p.diary || p.summary || p.digest || '', 12, '这一页的内容…')}</div>
-        <div class="field-hint">手动保存后该页 model_used 会标记为 user_edit。</div>`,
-      footer: `<button class="btn btn-secondary" data-cancel>取消</button><button class="btn btn-primary" data-save>保存</button>`,
-    });
-    mod.root.querySelector('[data-cancel]').onclick = () => mod.close();
-    mod.root.querySelector('[data-save]').onclick = async (ev) => {
-      const content = mod.root.querySelector('[data-key="content"]').value;
-      const title = mod.root.querySelector('[data-key="title"]').value.trim();
-      const type = mod.root.querySelector('[data-key="type"]').value;
-      setBusy(ev.currentTarget, true, '保存中');
-      try {
-        await put(`/admin/calendar/${encodeURIComponent(p.date)}`, { content, title, type });
-        toast('已保存'); mod.close(); this.loadPages();
-      } catch (e) { toast('保存失败：' + e.message, 'err'); setBusy(ev.currentTarget, false); }
-    };
-  },
-
-  async remove(date, type) {
-    if (!date) { toast('缺少日期', 'err'); return; }
-    if (!(await confirmDialog({ title: '删除日历页面', message: `确定删除「${date}」这一页？相关评论会一并清除，不可恢复。`, danger: true, okText: '删除' }))) return;
-    try {
-      await del(`/admin/calendar/${encodeURIComponent(date)}?type=${encodeURIComponent(type || 'day')}`);
-      toast('已删除'); this.loadPages();
-    } catch (e) { toast('删除失败：' + e.message, 'err'); }
   },
 
   // ---- 生成整理 ----
@@ -264,7 +146,6 @@ export default {
         r.fragments != null ? `碎片 ${r.fragments}` : '', r.digests != null ? `摘要 ${r.digests}` : '',
         r.sections != null ? `章节 ${r.sections}` : ''].filter(Boolean).join(' · ');
       toast(`${label}：${status}${extra ? '（' + extra + '）' : ''}`, status === 'error' ? 'err' : 'ok');
-      this.loadPages();
     } catch (e) { toast(`${label}失败：${e.message}`, 'err'); }
     finally { setBusy(btn, false); }
   },
