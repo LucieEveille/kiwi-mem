@@ -645,41 +645,54 @@ async def init_tables():
 # Embedding 生成
 # ============================================================
 
+async def _resolve_embedding_endpoint():
+    """决定 embedding 的「模型 / 供应商 / 端点」。
+
+    · 模型：面板配置 default_embedding_model（空则回落 env EMBEDDING_MODEL）。
+    · 供应商：该模型在已保存供应商里解析到的 base+key（与聊天路由同源 resolve_provider_for_model）；
+              解析不到再回落 env API_KEY / API_BASE_URL。
+    返回 (url, api_key, model, source)；url 或 api_key 为 None 表示「向量服务不可用」。
+    """
+    model = EMBEDDING_MODEL
+    try:
+        from config import get_config
+        model = (await get_config("default_embedding_model")) or EMBEDDING_MODEL
+    except Exception:
+        pass
+    prov = None
+    try:
+        prov = await resolve_provider_for_model(model)
+    except Exception:
+        prov = None
+    if prov and prov.get("api_key"):
+        base = (prov.get("api_base_url") or "").rstrip("/")
+        for suffix in ("/chat/completions", "/messages", "/completions"):
+            if base.endswith(suffix):
+                base = base[: -len(suffix)]
+                break
+        return base + "/embeddings", prov["api_key"], model, (prov.get("provider_name") or "provider")
+    if API_KEY:
+        return _get_embedding_url(), API_KEY, model, "env"
+    return None, None, model, "none"
+
+
 async def get_embedding(text: str) -> Optional[List[float]]:
-    """
-    调用 OpenRouter Embedding API 生成向量
-    
-    使用与聊天相同的 API_KEY，接口完全兼容 OpenAI 格式
-    失败时返回 None（触发降级搜索）
-    """
-    if not API_KEY:
-        print("⚠️  API_KEY 未设置，无法生成 embedding")
+    """生成向量。优先走已保存供应商（按嵌入模型解析），否则回落环境变量。失败返回 None（触发降级搜索）。"""
+    url, key, model, _ = await _resolve_embedding_endpoint()
+    if not url or not key:
+        print("⚠️  无可用 embedding 供应商/Key：把默认嵌入模型在某供应商下保存，或设置 API_KEY")
         return None
-    
-    url = _get_embedding_url()
-    
     try:
         async with httpx.AsyncClient(timeout=15) as client:
             resp = await client.post(
                 url,
-                headers={
-                    "Authorization": f"Bearer {API_KEY}",
-                    "Content-Type": "application/json",
-                },
-                json={
-                    "model": EMBEDDING_MODEL,
-                    "input": text,
-                },
+                headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+                json={"model": model, "input": text},
             )
-            
             if resp.status_code == 200:
-                data = resp.json()
-                embedding = data["data"][0]["embedding"]
-                return embedding
-            else:
-                print(f"⚠️  Embedding API 返回 {resp.status_code}: {resp.text[:200]}")
-                return None
-                
+                return resp.json()["data"][0]["embedding"]
+            print(f"⚠️  Embedding API 返回 {resp.status_code}: {resp.text[:200]}")
+            return None
     except Exception as e:
         print(f"⚠️  Embedding 生成失败: {e}")
         return None
@@ -690,21 +703,22 @@ async def get_embeddings_batch(texts: List[str]) -> List[Optional[List[float]]]:
     批量生成 embedding（OpenRouter 支持批量输入）
     返回与 texts 等长的列表，失败的位置为 None
     """
-    if not API_KEY or not texts:
+    if not texts:
+        return []
+    url, key, model, _ = await _resolve_embedding_endpoint()
+    if not url or not key:
         return [None] * len(texts)
-    
-    url = _get_embedding_url()
-    
+
     try:
         async with httpx.AsyncClient(timeout=30) as client:
             resp = await client.post(
                 url,
                 headers={
-                    "Authorization": f"Bearer {API_KEY}",
+                    "Authorization": f"Bearer {key}",
                     "Content-Type": "application/json",
                 },
                 json={
-                    "model": EMBEDDING_MODEL,
+                    "model": model,
                     "input": texts,
                 },
             )
@@ -2030,11 +2044,15 @@ async def get_embedding_stats() -> dict:
         with_embedding = await conn.fetchval(
             "SELECT COUNT(*) FROM memories WHERE embedding IS NOT NULL"
         )
+    url, key, emb_model, source = await _resolve_embedding_endpoint()
     return {
         "total_memories": total,
         "with_embedding": with_embedding,
         "without_embedding": total - with_embedding,
         "coverage": f"{with_embedding/total*100:.1f}%" if total > 0 else "N/A",
+        "embedding_model": emb_model,
+        "embedding_source": source,                 # 供应商名 / "env" / "none"
+        "embedding_available": bool(url and key),    # 向量服务是否可用
     }
 
 async def get_all_providers():

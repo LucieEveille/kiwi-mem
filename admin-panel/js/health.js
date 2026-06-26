@@ -30,7 +30,9 @@ export async function runHealthChecks() {
     issues.push({ level: 'warn', title: '没有保存任何模型', detail: '前端模型列表（/v1/models）会回退到环境变量默认（通常是 OpenRouter），聊天可能路由不到你的供应商。去供应商页点「模型」保存。', route: 'providers' });
   }
 
-  if (on('memory_enabled') && embed && !embed.error && embed.total_memories > 0 && embed.without_embedding > 0) {
+  if (on('memory_enabled') && embed && !embed.error && embed.embedding_available === false) {
+    issues.push({ level: 'error', title: '向量服务不可用', detail: `嵌入模型「${embed.embedding_model || '?'}」没有可用供应商/Key，记忆向量化与语义搜索会失败。把该嵌入模型在某供应商下保存，或配置 API_KEY。`, route: 'providers' });
+  } else if (on('memory_enabled') && embed && !embed.error && embed.total_memories > 0 && embed.without_embedding > 0) {
     issues.push({ level: 'warn', title: `有 ${embed.without_embedding} 条记忆缺少向量`, detail: `向量覆盖 ${embed.coverage || ''}，语义搜索不完整。去记忆碎片页执行「向量迁移」。`, route: 'memories' });
   }
 

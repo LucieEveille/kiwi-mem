@@ -1276,9 +1276,8 @@ async def chat_completions(request: Request):
 
     # 先确定最终模型，后面的 prompt cache 判断要用它。
     # 如果客户端没传 model，这里会补上默认值，避免误判为“非 Claude”而跳过缓存。
-    model = body.get("model", DEFAULT_MODEL)
-    if not model:
-        model = DEFAULT_MODEL
+    # 未传 model 时优先用面板保存的默认聊天模型，再回落到环境变量 DEFAULT_MODEL
+    model = body.get("model") or await get_config("default_chat_model") or DEFAULT_MODEL
     body["model"] = model
 
     # ---------- 供应商路由（提前解析）----------
@@ -3572,6 +3571,9 @@ async def api_update_provider(provider_id: int, request: Request):
     """更新供应商"""
     try:
         data = await request.json()
+        # 编辑时留空的 api_key 视为「不修改」，避免把已存的 key 清空（前端会发空串）
+        if not (data.get("api_key") or "").strip():
+            data.pop("api_key", None)
         provider = await update_provider(provider_id, **data)
         if provider:
             return {"status": "updated", "provider": provider}
@@ -3937,13 +3939,15 @@ async def api_get_search_engines():
 
 @app.get("/admin/search-config")
 async def api_get_search_config():
-    """获取当前搜索配置"""
+    """获取当前搜索配置（api_key 脱敏，不回显明文）"""
     engine = await get_config("search_engine") or ""
     api_key = await get_config("search_api_key") or ""
     max_results = await get_config_int("search_max_results", fallback=5)
+    masked = (api_key[:4] + "…" + api_key[-3:]) if len(api_key) > 10 else ("•" * min(len(api_key), 8))
     return {
         "engine": engine,
-        "api_key": api_key,
+        "api_key": masked,
+        "api_key_set": bool(api_key),
         "max_results": max_results,
     }
 
@@ -3955,8 +3959,10 @@ async def api_set_search_config(request: Request):
         data = await request.json()
         if "engine" in data:
             await set_config("search_engine", data["engine"])
-        if "api_key" in data:
-            await set_config("search_api_key", data["api_key"])
+        # 仅当传入了非空、且不是脱敏回显的值时才覆盖（留空＝保持原 key）
+        _sk = (data.get("api_key") or "")
+        if _sk and "…" not in _sk and "•" not in _sk:
+            await set_config("search_api_key", _sk)
         if "max_results" in data:
             await set_config("search_max_results", str(data["max_results"]))
         return {"status": "updated"}

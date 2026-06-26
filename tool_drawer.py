@@ -723,7 +723,9 @@ async def route_tools(user_message, session_id, user_embedding=None, mem_enabled
     # 一致，消除两条路径对「auto 是否尊重钉选」给出相反答案的分叉。
     external_pinned = mode == "manual"
 
-    await refresh_external_drawers()
+    # off 模式：完全不刷新/探测外部 MCP（否则会对示例/失效 server 发探测请求，日志刷 405/连接失败）
+    if mode != "off":
+        await refresh_external_drawers()
     # Bug #4：在锁内对注册表做一次快照，避免遍历期间被并发刷新改成半成品。
     # 刷新（_unregister/_refresh_external_drawers_impl）是「pop 旧 + 赋新 dict」整体替换，
     # 故浅拷贝足够冻住本轮所需的引用：即使刷新随后清空/重建 live 字典，快照仍自洽。

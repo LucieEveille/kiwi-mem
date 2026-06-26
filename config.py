@@ -182,11 +182,32 @@ async def get_all_config() -> dict:
 # 写入配置
 # ============================================================
 
+_ENUM_VALUES = {"mcp_mode": {"off", "auto", "manual"}}
+
+
+def _mask_secret(value: str) -> str:
+    v = value or ""
+    return (v[:4] + "…" + v[-3:]) if len(v) > 10 else ("•" * min(len(v), 8))
+
+
+def _safe_log_value(key: str, value: str) -> str:
+    """日志脱敏：密钥类只显脱敏值；提示词/长文本只显长度，避免进 Zeabur 日志。"""
+    low = key.lower()
+    if "key" in low or "token" in low or "secret" in low or "password" in low:
+        return _mask_secret(value)
+    if key.startswith("prompt_") or key in (
+        "user_profile", "assistant_settings", "custom_skills", "quick_phrases",
+        "mcp_servers", "mcp_switches", "mcp_manual_ids", "user_avatar", "assistant_avatar",
+    ) or len(value or "") > 80:
+        return f"<{len(value or '')} 字符>"
+    return value
+
+
 async def set_config(key: str, value: str) -> bool:
     """设置配置值（存入数据库，带类型验证）"""
     if key not in CONFIG_SCHEMA:
         return False
-    
+
     # 类型验证
     _, _, _, val_type = CONFIG_SCHEMA[key]
     try:
@@ -200,6 +221,10 @@ async def set_config(key: str, value: str) -> bool:
         # text 类型不需要验证
     except ValueError:
         return False
+
+    # 枚举值校验：非法值直接拒绝，不再悄悄按默认跑
+    if key in _ENUM_VALUES and value not in _ENUM_VALUES[key]:
+        return False
     
     pool = await get_pool()
     async with pool.acquire() as conn:
@@ -209,7 +234,7 @@ async def set_config(key: str, value: str) -> bool:
             ON CONFLICT (key) DO UPDATE SET value = $2, updated_at = NOW()
         """, key, value, CONFIG_SCHEMA[key][2])
     
-    print(f"⚙️  配置更新: {key} = {value}")
+    print(f"⚙️  配置更新: {key} = {_safe_log_value(key, value)}")
     return True
 
 

@@ -8,6 +8,16 @@ import { get } from './api.js';
 
 const DEFAULT_ROUTE = 'dashboard';
 
+// 已从管理面板移除的旧路由 → key:中文名。命中后给明确提示，不再静默跳仪表盘。
+const REMOVED = {
+  journey: '消息旅程',
+  fileextract: '文件提取',
+  reminders: '提醒',
+  comments: '评论',
+  search: '对话搜索',
+  phrases: '指令与短语',
+};
+
 // ---------- 主题 ----------
 function applyTheme(t) {
   document.documentElement.setAttribute('data-theme', t);
@@ -65,6 +75,20 @@ async function route() {
   const content = document.getElementById('content');
   const titleEl = document.getElementById('page-title');
   const crumbEl = document.getElementById('page-crumb');
+
+  // 已移除的旧路由：给明确提示并提供返回链接，而非静默跳仪表盘。
+  if (REMOVED[key]) {
+    highlight('');
+    titleEl.textContent = '页面已移除';
+    crumbEl.textContent = 'kiwi-mem';
+    document.title = '页面已移除 · Kiwi-Mem';
+    content.scrollTop = 0;
+    closeSidebar();
+    try { currentMod?.unmount?.(); } catch {}
+    currentMod = null;
+    content.innerHTML = `<div class="banner banner-info"><span>💡</span><div>「${REMOVED[key]}」已从管理面板移除（相关功能已交给客户端）。<a href="#/${DEFAULT_ROUTE}">返回仪表盘</a></div></div>`;
+    return;
+  }
 
   if (!meta) { location.hash = '#/' + DEFAULT_ROUTE; return; }
 

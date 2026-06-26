@@ -41,6 +41,8 @@ function controlFor(key, val) {
       return `<input type="number" step="0.01" ${attr} value="${escHtml(v)}">`;
     case 'pass':
       return `<input type="password" ${attr} value="${escHtml(v)}" placeholder="••••••">`;
+    case 'select':
+      return `<select ${attr}>${(m.options || []).map(o => `<option value="${escAttr(o)}" ${String(o) === String(v) ? 'selected' : ''}>${escHtml(o)}</option>`).join('')}</select>`;
     case 'model':
       return `<select ${attr} data-model-select data-current="${escAttr(v)}">${modelOptions(v)}</select>`;
     case 'json':

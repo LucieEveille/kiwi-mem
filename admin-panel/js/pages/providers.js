@@ -75,12 +75,14 @@ export default {
     });
     mod.root.querySelector('[data-cancel]').onclick = () => mod.close();
     mod.root.querySelector('[data-save]').onclick = async (ev) => {
+      const keyVal = mod.root.querySelector('[data-key="api_key"]').value;
       const body = {
         name: mod.root.querySelector('[data-key="name"]').value.trim(),
         api_base_url: mod.root.querySelector('[data-key="api_base_url"]').value.trim(),
-        api_key: mod.root.querySelector('[data-key="api_key"]').value,
         api_format: mod.root.querySelector('[data-key="api_format"]').value,
       };
+      // 编辑时留空 API Key ＝ 不修改：不带 api_key，后端就不会覆盖已存的。新增时照常发送。
+      if (isNew || keyVal.trim() !== '') body.api_key = keyVal;
       if (!body.name || !body.api_base_url) { toast('名称和 Base URL 必填', 'err'); return; }
       setBusy(ev.currentTarget, true, '保存中');
       try {

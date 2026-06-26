@@ -9,12 +9,13 @@ export default {
     this.root = root;
     root.innerHTML = `
       <p class="page-intro">项目用于隔离不同主题的对话与记忆：每个项目可带专属指令与参考文件，文件会被切块、向量化后供该项目的对话检索。</p>
-      <div class="card-head"><div class="card-title">项目</div><span id="proj-count" class="info"></span></div>
+      <div class="card-head"><div class="card-title">项目 <span id="proj-count" class="info"></span></div><button class="btn btn-primary" data-act="new">+ 新建项目</button></div>
       <div id="proj-list">${loadingBlock()}</div>
     `;
     this.load();
 
     delegate(root, {
+      new: () => this.newForm(),
       detail: (el) => this.detail(el.dataset.id),
       edit: (el) => this.editForm(this.find(el.dataset.id)),
       del: (el) => this.remove(el.dataset.id),
@@ -164,6 +165,44 @@ export default {
       const fresh = this.find(pid);
       if (fresh && this._curMod && document.body.contains(this._curMod.root)) this.renderDetail(this._curMod, fresh);
     } catch { /* 静默：详情仍显示旧数据 */ }
+  },
+
+  // ===== 新建项目 =====
+  newForm() {
+    const mod = modal({
+      title: '新建项目',
+      wide: true,
+      body: `
+        <div class="grid grid-2">
+          <div class="field"><label>名称</label>${ctl.text('name', '', '项目名称')}</div>
+          <div class="field"><label>图标 icon</label>${ctl.text('icon', '📁', '如 📁 / 🚀')}</div>
+        </div>
+        <div class="field"><label>说明 description</label>${ctl.area('description', '', 2, '一句话说明这个项目…')}</div>
+        <div class="field"><label>指令 instructions</label>${ctl.areaMono('instructions', '', 8, '该项目对话的专属系统指令…')}</div>`,
+      footer: `<button class="btn btn-secondary" data-cancel>取消</button><button class="btn btn-primary" data-save>创建</button>`,
+    });
+    mod.root.querySelector('[data-cancel]').onclick = () => mod.close();
+    mod.root.querySelector('[data-save]').onclick = async (ev) => {
+      const name = mod.root.querySelector('[data-key="name"]').value.trim();
+      if (!name) { toast('项目名称不能为空', 'err'); return; }
+      const id = `proj-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
+      const body = {
+        name,
+        icon: mod.root.querySelector('[data-key="icon"]').value.trim() || '📁',
+        description: mod.root.querySelector('[data-key="description"]').value,
+        instructions: mod.root.querySelector('[data-key="instructions"]').value,
+      };
+      setBusy(ev.currentTarget, true, '创建中');
+      try {
+        await put(`/sync/projects/${id}`, body);
+        toast('项目已创建', 'ok');
+        mod.close();
+        this.load();
+      } catch (e) {
+        toast('创建失败：' + e.message, 'err');
+        setBusy(ev.currentTarget, false);
+      }
+    };
   },
 
   // ===== 编辑项目 =====

@@ -90,7 +90,7 @@ export const CONFIG_META = {
 
   // —— 工具抽屉 / 外部 MCP ——
   tool_drawer_enabled:    { label:'工具抽屉', type:'bool', def:'false', input:'bool', desc:'内部工具是否走向量路由按需展开。关闭则所有内部工具每次都传给模型。' },
-  mcp_mode:               { label:'外部 MCP 模式', type:'text', def:'auto', input:'text', desc:'off=全禁用，auto=按语义自动路由，manual=只启用手动选择的。只影响配置来源的外部抽屉。' },
+  mcp_mode:               { label:'外部 MCP 模式', type:'text', def:'auto', input:'select', options:['off','auto','manual'], desc:'off=全禁用，auto=按语义自动路由，manual=只启用手动选择的。只影响配置来源的外部抽屉。' },
   mcp_servers:            { label:'外部 MCP 服务器', type:'text', def:'', input:'json', desc:'外部 MCP server 列表（JSON 数组）。在「工具抽屉」页用专用编辑器维护。' },
   mcp_manual_ids:         { label:'手动 MCP 选择', type:'text', def:'', input:'json', desc:'manual 模式下启用的 MCP 服务器 ID 列表（JSON 数组）。' },
   ext_drawer_threshold:   { label:'外部抽屉相似度阈值', type:'float', def:'0.40', input:'float', desc:'外部工具与对话内容的语义相似度门槛，低于此值不展开。' },
@@ -108,6 +108,16 @@ export const CONFIG_META = {
 
   // —— 网关 / 性能 ——
   prompt_cache_enabled:   { label:'Prompt 缓存', type:'bool', def:'true', input:'bool', desc:'Claude 模型的显式缓存：重复的 system prompt 前缀只收 1/10 费用。非 Claude 自动跳过。' },
+
+  // —— 客户端同步项（不进功能页，仅「全部配置」可见）——
+  user_nickname:          { label:'用户昵称', type:'text', def:'', input:'text', desc:'用户昵称。（同步给客户端，一般不在面板编辑）' },
+  user_avatar:            { label:'用户头像', type:'text', def:'', input:'text', desc:'用户头像（URL 或标识）。（同步给客户端，一般不在面板编辑）' },
+  assistant_avatar:       { label:'助手头像', type:'text', def:'', input:'text', desc:'助手头像（URL 或标识）。（同步给客户端，一般不在面板编辑）' },
+  assistant_settings:     { label:'助手设置', type:'text', def:'', input:'json', desc:'助手相关设置（JSON）。（同步给客户端，一般不在面板编辑）' },
+  custom_skills:          { label:'自定义技能', type:'text', def:'', input:'json', desc:'自定义技能列表（JSON）。（同步给客户端，一般不在面板编辑）' },
+  quick_phrases:          { label:'快捷短语', type:'text', def:'', input:'json', desc:'快捷短语列表（JSON）。（同步给客户端，一般不在面板编辑）' },
+  mcp_switches:           { label:'MCP 开关', type:'text', def:'', input:'json', desc:'各 MCP 的开关状态（JSON）。（同步给客户端，一般不在面板编辑）' },
+  theme_preference:       { label:'主题偏好', type:'text', def:'', input:'text', desc:'客户端主题偏好。（同步给客户端，一般不在面板编辑）' },
 };
 
 // 各功能页的配置编排：master 总开关 + 分组旋钮

@@ -6,6 +6,7 @@ export default {
   title: '联网搜索',
   engines: [],
   config: { engine: '', api_key: '', max_results: 5 },
+  hasKey: false,  // 后端已存在 API Key（不回显原文，留空＝不修改）
 
   async mount(root) {
     this.root = root;
@@ -39,9 +40,14 @@ export default {
         get('/admin/search-config'),
       ]);
       this.engines = eng.engines || [];
+      // 后端可能只回传遮罩/预览的 api_key，绝不回显原文。
+      // 「已配置」检测优先用显式布尔 has_api_key/api_key_set；否则看返回值是否像遮罩（含 … 或 *）或非空。
+      const rawKey = typeof cfg.api_key === 'string' ? cfg.api_key : '';
+      const looksMasked = rawKey.includes('…') || rawKey.includes('*');
+      this.hasKey = (cfg.has_api_key ?? cfg.api_key_set) ?? (looksMasked || rawKey.length > 0);
       this.config = {
         engine: cfg.engine ?? '',
-        api_key: cfg.api_key ?? '',
+        api_key: '',  // 永不回显，输入框始终留空
         max_results: cfg.max_results ?? 5,
       };
       this.renderForm();
@@ -77,8 +83,8 @@ export default {
         </div>
         <div class="field" id="ws-key-field" style="${this.needsKey() ? '' : 'display:none'}">
           <label>API Key</label>
-          <input type="password" id="ws-apikey" value="${escAttr(this.config.api_key)}" placeholder="所选引擎的 API Key">
-          <div class="field-hint">本地引擎无需 Key；切换引擎时此项会自动显隐。</div>
+          <input type="password" id="ws-apikey" value="" placeholder="${this.hasKey ? '（已配置，留空不修改）' : '所选引擎的 API Key'}">
+          <div class="field-hint">本地引擎无需 Key；切换引擎时此项会自动显隐。${this.hasKey ? '已配置 Key 不回显，留空＝不修改。' : ''}</div>
         </div>
         <div class="field">
           <label>结果条数</label>
@@ -110,11 +116,14 @@ export default {
     const form = this.readForm();
     if (!form.engine) { toast('请先选择搜索引擎', 'err'); return; }
     const body = { engine: form.engine, max_results: form.max_results };
-    if (this.needsKey()) body.api_key = form.api_key;
+    // 只有用户输入了非空 Key 才提交 api_key；留空＝保留已存的（不覆盖）。
+    if (this.needsKey() && form.api_key.trim() !== '') body.api_key = form.api_key;
     setBusy(btn, true, '保存中');
     try {
       await put('/admin/search-config', body);
-      this.config = form;
+      // 用户填了新 Key 即视为「已配置」；不回写明文到 config。
+      if (body.api_key !== undefined) this.hasKey = true;
+      this.config = { engine: form.engine, api_key: '', max_results: form.max_results };
       toast('已保存');
     } catch (e) {
       toast('保存失败：' + e.message, 'err');
