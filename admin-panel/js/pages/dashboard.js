@@ -1,11 +1,13 @@
-// 📊 仪表盘 — 系统总览
+// 📊 仪表盘 — 系统总览 + 状态自检
 import { get, escHtml, fmtDateTime } from '../api.js';
 import { statCard, card, badge, emptyState, loadingBlock } from '../ui.js';
+import { runHealthChecks } from '../health.js';
 
 export default {
   title: '仪表盘',
   async mount(root) {
     root.innerHTML = `
+      <div id="health" class="mb16">${loadingBlock('正在自检配置…')}</div>
       <div class="grid grid-4 mb16" id="stats">${loadingBlock()}</div>
       <div class="grid grid-2">
         <div id="sys-card"></div>
@@ -14,11 +16,40 @@ export default {
       <div id="embed-banner"></div>
       <div id="recent-card"></div>
     `;
+    this.loadHealth(root);
     this.loadStats(root);
     this.loadSys(root);
     this.loadDream(root);
     this.loadRecent(root);
     this.loadEmbed(root);
+  },
+
+  async loadHealth(root) {
+    const el = root.querySelector('#health');
+    try {
+      const issues = await runHealthChecks();
+      if (!issues.length) {
+        el.innerHTML = `<div class="banner banner-accent"><span>✅</span><div><b>一切就绪。</b>没有发现「启用了却没配好」的地方。</div></div>`;
+        return;
+      }
+      const order = { error: 0, warn: 1, info: 2 };
+      issues.sort((a, b) => order[a.level] - order[b.level]);
+      const ic = { error: '⛔', warn: '⚠️', info: '💡' };
+      const n = { error: issues.filter(i => i.level === 'error').length, warn: issues.filter(i => i.level === 'warn').length };
+      const summary = [n.error ? `${n.error} 项严重` : '', n.warn ? `${n.warn} 项警告` : ''].filter(Boolean).join(' · ') || `${issues.length} 项提示`;
+      el.innerHTML = card({
+        title: `🩺 状态自检 · ${summary}`,
+        desc: '以下是「开了却没配好 / 可能不工作」的地方。',
+        body: issues.map(i => `
+          <div class="health-item health-${i.level}">
+            <span class="health-ic">${ic[i.level]}</span>
+            <div class="health-body"><div class="health-title">${escHtml(i.title)}</div><div class="health-detail">${escHtml(i.detail)}</div></div>
+            <a class="btn btn-xs btn-secondary nowrap" href="#/${i.route}">去处理 →</a>
+          </div>`).join(''),
+      });
+    } catch (e) {
+      el.innerHTML = '';
+    }
   },
 
   async loadStats(root) {

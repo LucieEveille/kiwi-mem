@@ -125,14 +125,19 @@ export function wireConfig(root, cfg) {
     const el = e.target.closest('[data-cfg][data-key]');
     if (!el || el.dataset.prompt !== undefined) return; // prompt 走弹窗保存
     const key = el.dataset.key;
-    let value;
-    if (el.dataset.bool !== undefined || el.type === 'checkbox') { value = el.checked ? 'true' : 'false'; applyDim(key, el.checked); }
-    else value = el.value;
+    const isBool = el.dataset.bool !== undefined || el.type === 'checkbox';
+    const value = isBool ? (el.checked ? 'true' : 'false') : el.value;
+    if (isBool) applyDim(key, el.checked);
+    flashStatus(el, 'saving');
     try {
       await saveConfig(key, value);
       cfg[key] = value;
-      flashSaved(el);
-    } catch (err) { toast(`保存失败：${err.message}`, 'err'); }
+      flashStatus(el, 'ok');
+    } catch (err) {
+      flashStatus(el, 'fail', err.message);
+      toast(`「${CONFIG_META[key]?.label || key}」保存失败：${err.message}`, 'err');
+      if (isBool) { el.checked = !el.checked; applyDim(key, el.checked); } // 回滚开关，避免界面骗人
+    }
   });
 
   // Enter 即保存（触发 change）
@@ -159,13 +164,24 @@ export function wireConfig(root, cfg) {
   });
 }
 
-function flashSaved(el) {
-  const host = el.closest('.cfg-control') || el.parentElement;
+// 保存状态反馈：saving / ok / fail。fail 持久显示并把控件标红，让用户明确知道没存上。
+function flashStatus(el, state, msg) {
+  const host = el.closest('.cfg-control') || el.closest('.master')?.querySelector('.master-info') || el.parentElement;
   if (!host) return;
   let tag = host.querySelector('.cfg-saved');
   if (!tag) { tag = document.createElement('span'); tag.className = 'cfg-saved'; host.appendChild(tag); }
-  tag.textContent = '✓ 已保存'; tag.classList.add('show');
-  setTimeout(() => tag.classList.remove('show'), 1400);
+  clearTimeout(tag._t);
+  el.classList.remove('invalid');
+  tag.classList.remove('fail');
+  if (state === 'saving') { tag.textContent = '保存中…'; tag.classList.add('show'); return; }
+  if (state === 'ok') {
+    tag.textContent = '✓ 已保存'; tag.classList.add('show');
+    tag._t = setTimeout(() => tag.classList.remove('show'), 1600);
+  } else {
+    tag.textContent = '✗ 保存失败：' + (msg || '未知错误');
+    tag.classList.add('show', 'fail');
+    el.classList.add('invalid');
+  }
 }
 
 function updatePromptUI(root, key, val) {

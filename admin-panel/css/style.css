@@ -255,6 +255,20 @@ input[type=range] { accent-color:var(--c-accent); padding:0; }
 .knobs.dimmed { opacity:.5; pointer-events:none; transition:opacity .2s; }
 .cfg-saved { font-size:11px; color:var(--c-accent); opacity:0; transition:opacity .2s; margin-top:6px; display:inline-block; }
 .cfg-saved.show { opacity:1; }
+.cfg-saved.fail { color:var(--c-danger); font-weight:600; }
+input.invalid, textarea.invalid, select.invalid { border-color:var(--c-danger) !important; box-shadow:0 0 0 3px var(--c-danger-soft) !important; }
+
+/* 首页健康自检面板 */
+.health-item { display:flex; align-items:flex-start; gap:12px; padding:12px 2px; border-bottom:1px solid var(--border); }
+.health-item:last-child { border-bottom:none; }
+.health-ic { font-size:17px; line-height:1.5; flex-shrink:0; }
+.health-body { flex:1; min-width:0; }
+.health-title { font-weight:600; font-size:13.5px; }
+.health-detail { font-size:12px; color:var(--text-muted); margin-top:2px; line-height:1.55; }
+.health-item .btn { align-self:center; }
+.health-error .health-title { color:var(--c-danger); }
+.health-warn .health-title { color:var(--c-warn); }
+
 .prompt-ctl { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
 .prompt-preview { color:var(--text-faint); }
 .knobs > .card { box-shadow:none; }
