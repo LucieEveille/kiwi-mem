@@ -140,13 +140,17 @@ export function modal({ title = '', body = '', footer = '', wide = false, onClos
 
 export function confirmDialog({ title = '确认', message = '', okText = '确定', danger = false } = {}) {
   return new Promise((resolve) => {
+    // settled 守卫：close() 会触发 onClose→done(false)，确定时必须先 done(true) 锁定结果，
+    // 否则 close 的 resolve(false) 会把「确定」当成「取消」。
+    let settled = false;
+    const done = (v) => { if (settled) return; settled = true; resolve(v); };
     const m = modal({
       title,
       body: `<div style="font-size:14px;line-height:1.7;color:var(--text-soft)">${escHtml(message)}</div>`,
       footer: `<button class="btn btn-secondary" data-no>取消</button><button class="btn ${danger ? 'btn-danger' : 'btn-primary'}" data-yes>${escHtml(okText)}</button>`,
-      onClose: () => resolve(false),
+      onClose: () => done(false),
     });
-    m.root.querySelector('[data-yes]').addEventListener('click', () => { m.close(); resolve(true); });
+    m.root.querySelector('[data-yes]').addEventListener('click', () => { done(true); m.close(); });
     m.root.querySelector('[data-no]').addEventListener('click', () => m.close());
   });
 }

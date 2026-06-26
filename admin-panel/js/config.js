@@ -121,12 +121,16 @@ export function wireConfig(root, cfg) {
     applyDim(key, String(cfg[key]) === 'true');
   });
 
-  root.addEventListener('change', async (e) => {
-    const el = e.target.closest('[data-cfg][data-key]');
+  // 统一保存。开关/下拉走 change（即时）；文字/数字额外走防抖 input——停止输入约 700ms 即落库，
+  // 不必失焦，解决「改完没点别处、直接刷新就丢」（change 只在 blur 触发，开关却是点击即触发，
+  // 所以之前只有开关能存）。change 与防抖互不重复；值未变则跳过。
+  const debouncers = {};
+  const doSave = async (el) => {
     if (!el || el.dataset.prompt !== undefined) return; // prompt 走弹窗保存
     const key = el.dataset.key;
     const isBool = el.dataset.bool !== undefined || el.type === 'checkbox';
     const value = isBool ? (el.checked ? 'true' : 'false') : el.value;
+    if (String(cfg[key] ?? '') === String(value)) return; // 未变化，跳过
     if (isBool) applyDim(key, el.checked);
     flashStatus(el, 'saving');
     try {
@@ -138,11 +142,28 @@ export function wireConfig(root, cfg) {
       toast(`「${CONFIG_META[key]?.label || key}」保存失败：${err.message}`, 'err');
       if (isBool) { el.checked = !el.checked; applyDim(key, el.checked); } // 回滚开关，避免界面骗人
     }
+  };
+
+  root.addEventListener('change', (e) => {
+    const el = e.target.closest('[data-cfg][data-key]');
+    if (!el) return;
+    clearTimeout(debouncers[el.dataset.key]); // change 权威，取消待执行的防抖
+    doSave(el);
   });
 
-  // Enter 即保存（触发 change）
+  root.addEventListener('input', (e) => {
+    const el = e.target.closest('[data-cfg][data-key]');
+    if (!el || el.dataset.prompt !== undefined) return;
+    if (el.type === 'checkbox' || el.dataset.bool !== undefined) return; // 开关走 change
+    const key = el.dataset.key;
+    clearTimeout(debouncers[key]);
+    debouncers[key] = setTimeout(() => doSave(el), 700);
+  });
+
+  // Enter 立即保存（取消防抖）
   root.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' && e.target.matches('input[data-cfg]:not([type=checkbox])')) { e.preventDefault(); e.target.blur(); }
+    const el = e.target.closest('input[data-cfg]:not([type=checkbox])');
+    if (e.key === 'Enter' && el) { e.preventDefault(); clearTimeout(debouncers[el.dataset.key]); doSave(el); }
   });
 
   // prompt 编辑 / 恢复默认
