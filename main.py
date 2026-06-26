@@ -3563,6 +3563,7 @@ async def api_create_provider(request: Request):
         provider = await create_provider(name, api_base_url, api_key, enabled, api_format=data.get("api_format", "openai"))
         return {"status": "created", "provider": provider}
     except Exception as e:
+        print(f"⚠️  创建供应商失败: {e}")
         return {"error": str(e)}
 
 
@@ -3576,6 +3577,7 @@ async def api_update_provider(provider_id: int, request: Request):
             return {"status": "updated", "provider": provider}
         return {"error": "供应商不存在"}
     except Exception as e:
+        print(f"⚠️  更新供应商失败: {e}")
         return {"error": str(e)}
 
 

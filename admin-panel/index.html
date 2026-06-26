@@ -815,17 +815,18 @@ async function saveProvider() {
     api_format: document.getElementById('pf-format').value,
   };
   try {
-    if (id) {
-      await api(`/admin/providers/${id}`, { method: 'PUT', body: JSON.stringify(body) });
-      toast('✅ 供应商已更新');
-    } else {
-      await api('/admin/providers', { method: 'POST', body: JSON.stringify(body) });
-      toast('✅ 供应商已添加');
-    }
+    const res = id
+      ? await api(`/admin/providers/${id}`, { method: 'PUT', body: JSON.stringify(body) })
+      : await api('/admin/providers', { method: 'POST', body: JSON.stringify(body) });
+    // 后端对校验失败 / 异常会返回 HTTP 200 + {error}，必须读 body 判定；
+    // 否则会对一次"根本没入库"的保存误报成功，刷新后供应商消失（看着像"存不上"）。
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || data.error) throw new Error(data.error || `HTTP ${res.status}`);
+    toast(id ? '✅ 供应商已更新' : '✅ 供应商已添加');
     hideProviderForm();
     loadProviders();
   } catch(e) {
-    toast('❌ 保存失败', false);
+    toast(`❌ 保存失败：${e.message || '请检查后端日志'}`, false);
   }
 }
 
