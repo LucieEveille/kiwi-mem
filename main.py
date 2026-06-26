@@ -4687,6 +4687,15 @@ async def api_delete_reminder(rid: str):
 app.mount("/memory", get_mcp_app())
 app.mount("/calendar", get_calendar_mcp_app())
 
+# 管理面板静态资源（css/js/assets）。必须在所有 /admin/* API 路由之后挂载，
+# 这样显式 API 路由优先匹配，本挂载只接管 /admin/css、/admin/js 等静态文件。
+# /admin 返回 index.html（上面的 @app.get("/admin")），/admin/ 由 html=True 提供；
+# 页面内用绝对路径 /admin/... 引用资源。
+from fastapi.staticfiles import StaticFiles as _StaticFiles
+_panel_dir = os.path.join(os.path.dirname(__file__), "admin-panel")
+if os.path.isdir(_panel_dir):
+    app.mount("/admin", _StaticFiles(directory=_panel_dir, html=True), name="admin-panel")
+
 
 # ============================================================
 # 启动入口
