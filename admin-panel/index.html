@@ -183,6 +183,31 @@ tailwind.config = {
         <button class="btn btn-secondary" onclick="hideProviderForm()">取消</button>
       </div>
     </div>
+
+    <!-- 模型管理面板（点供应商卡片的「模型」按钮打开）。
+         只有在这里保存过的模型，才会出现在前端 /v1/models 列表里、并能被聊天路由调用。 -->
+    <div id="provider-models-panel" class="bg-panel-card border border-panel-border rounded-lg p-5 mb-6 hidden">
+      <div class="flex items-center justify-between mb-3">
+        <p class="section-title" id="pm-title" style="margin:0">管理模型</p>
+        <button class="btn btn-sm btn-secondary" onclick="closeModelsPanel()">关闭</button>
+      </div>
+      <p class="text-xs text-gray-500 mb-3">只有这里保存的模型会出现在前端模型列表、并能被路由调用；一个都没保存时，前端会回退到环境变量默认（如 OpenRouter）。</p>
+
+      <p class="section-title" style="font-size:13px">已保存的模型</p>
+      <div id="pm-saved-list" class="text-sm text-gray-600 mb-4">加载中…</div>
+
+      <p class="section-title" style="font-size:13px">添加模型</p>
+      <div class="flex gap-2 mb-3">
+        <input type="text" id="pm-manual-id" placeholder="手动输入模型 ID，如 deepseek-chat" style="flex:1" onkeydown="if(event.key==='Enter')addModelManual()">
+        <button class="btn btn-secondary" onclick="addModelManual()">+ 添加</button>
+      </div>
+      <div class="flex items-center gap-3 mb-2">
+        <button class="btn btn-primary" id="pm-fetch-btn" onclick="fetchAvailableModels()">从供应商拉取可用模型</button>
+        <span id="pm-fetch-status" class="text-xs text-gray-500"></span>
+      </div>
+      <div id="pm-available-list" class="text-sm text-gray-600"></div>
+    </div>
+
     <div id="providers-list" class="text-sm text-gray-600">加载中…</div>
   </div>
 
@@ -769,6 +794,7 @@ async function loadProviders() {
           <p class="text-xs text-gray-500">Key: ${p.api_key_preview || '（未设置）'}</p>
         </div>
         <div class="flex gap-2">
+          <button class="btn btn-sm btn-primary" onclick="manageModels(${p.id})">模型</button>
           <button class="btn btn-sm btn-secondary" onclick="testProvider(${p.id})" id="test-btn-${p.id}">测试</button>
           <button class="btn btn-sm btn-secondary" onclick="editProvider(${p.id})">编辑</button>
           <button class="btn btn-sm btn-danger" onclick="deleteProvider(${p.id})">删除</button>
@@ -854,6 +880,116 @@ async function testProvider(id) {
   } finally {
     btn.textContent = originalText;
     btn.disabled = false;
+  }
+}
+
+// ============================================================
+// 供应商模型管理
+// 决定对外 /v1/models 列表 + 聊天路由 resolve_provider_for_model 能用哪些模型。
+// 只有在此保存到 provider_models 的模型，前端才看得到、才路由得通；
+// 一个都没保存时 /v1/models 会回退到环境变量默认（通常是 OpenRouter）。
+// ============================================================
+let pmProviderId = null;
+
+function closeModelsPanel() {
+  document.getElementById('provider-models-panel').classList.add('hidden');
+  pmProviderId = null;
+}
+
+async function manageModels(id) {
+  pmProviderId = id;
+  const p = providersCache[id] || {};
+  document.getElementById('pm-title').textContent = `管理「${p.name || ''}」的模型`;
+  document.getElementById('pm-manual-id').value = '';
+  document.getElementById('pm-available-list').innerHTML = '';
+  document.getElementById('pm-fetch-status').textContent = '';
+  document.getElementById('provider-models-panel').classList.remove('hidden');
+  document.getElementById('provider-models-panel').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  await loadSavedModels();
+}
+
+async function loadSavedModels() {
+  const box = document.getElementById('pm-saved-list');
+  box.innerHTML = '加载中…';
+  try {
+    const data = await apiJson(`/admin/providers/${pmProviderId}/saved-models`);
+    const list = data.models || [];
+    if (!list.length) {
+      box.innerHTML = '<p class="text-gray-500">还没有保存任何模型。先点下面「从供应商拉取」选模型，或手动输入模型 ID 添加。</p>';
+      return;
+    }
+    box.innerHTML = list.map(m => `
+      <div class="flex items-center justify-between py-1.5 border-b border-panel-border">
+        <span class="font-mono text-xs">${escHtml(m.model_id)}${m.display_name && m.display_name !== m.model_id ? ` <span class="text-gray-500">· ${escHtml(m.display_name)}</span>` : ''}</span>
+        <button class="btn btn-sm btn-danger" onclick="deleteSavedModel(${m.id})">删除</button>
+      </div>
+    `).join('');
+  } catch(e) {
+    box.innerHTML = `<p class="text-red-500">加载失败：${escHtml(e.message)}</p>`;
+  }
+}
+
+async function deleteSavedModel(pk) {
+  try {
+    const res = await api(`/admin/saved-models/${pk}`, { method: 'DELETE' });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || data.error) throw new Error(data.error || `HTTP ${res.status}`);
+    toast('已删除');
+    loadSavedModels();
+  } catch(e) {
+    toast(`❌ 删除失败：${e.message}`, false);
+  }
+}
+
+async function addModelManual() {
+  const input = document.getElementById('pm-manual-id');
+  const mid = (input.value || '').trim();
+  if (!mid) { toast('请输入模型 ID', false); return; }
+  await addModel(mid);
+  input.value = '';
+}
+
+async function addModel(modelId) {
+  if (!pmProviderId) return;
+  try {
+    const res = await api(`/admin/providers/${pmProviderId}/saved-models`, {
+      method: 'POST',
+      body: JSON.stringify({ model_id: modelId }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || data.error) throw new Error(data.error || `HTTP ${res.status}`);
+    toast(`✅ 已添加 ${modelId}`);
+    loadSavedModels();
+  } catch(e) {
+    toast(`❌ 添加失败：${e.message}`, false);
+  }
+}
+
+async function fetchAvailableModels() {
+  if (!pmProviderId) return;
+  const btn = document.getElementById('pm-fetch-btn');
+  const status = document.getElementById('pm-fetch-status');
+  const box = document.getElementById('pm-available-list');
+  btn.disabled = true; btn.textContent = '拉取中…'; status.textContent = '';
+  try {
+    const data = await apiJson(`/admin/providers/${pmProviderId}/models`);
+    if (data.error) throw new Error(data.error);
+    // 嵌入模型聊天选择器用不到，过滤掉
+    const models = (data.models || []).filter(m => !m._is_embedding);
+    status.textContent = `共 ${models.length} 个模型`;
+    if (!models.length) { box.innerHTML = '<p class="text-gray-500">供应商没有返回可用模型。</p>'; return; }
+    box.innerHTML = models.map(m => {
+      const mid = m.id || '';
+      return `
+      <div class="flex items-center justify-between py-1.5 border-b border-panel-border">
+        <span class="font-mono text-xs">${escHtml(mid)}</span>
+        <button class="btn btn-sm btn-secondary" onclick='addModel(${JSON.stringify(mid)})'>+ 添加</button>
+      </div>`;
+    }).join('');
+  } catch(e) {
+    box.innerHTML = `<p class="text-red-500">拉取失败：${escHtml(e.message)}</p>`;
+  } finally {
+    btn.disabled = false; btn.textContent = '从供应商拉取可用模型';
   }
 }
 
