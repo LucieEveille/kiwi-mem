@@ -18,8 +18,8 @@ export default {
       <p class="page-intro">记忆碎片是 kiwi-mem 的原子单位：每条都带重要度、热度、情绪、分类、锁定等属性，会随时间软化、淡忘，也会因反复提起而升温。</p>
       <div id="master-slot">${loadingBlock()}</div>
       <div class="pill-tabs" id="tabs">
-        <div class="pill-tab active" data-tab="browse">🗂️ 碎片浏览</div>
-        <div class="pill-tab" data-tab="settings">⚙️ 参数设置</div>
+        <div class="pill-tab active" data-act="tab" data-tab="browse">🗂️ 碎片浏览</div>
+        <div class="pill-tab" data-act="tab" data-tab="settings">⚙️ 参数设置</div>
       </div>
       <div id="panel-browse"></div>
       <div id="panel-settings" style="display:none"></div>

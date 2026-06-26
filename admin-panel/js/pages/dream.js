@@ -16,10 +16,10 @@ export default {
     root.innerHTML = `
       <p class="page-intro">Dream 是 kiwi-mem 的「睡眠」：在空闲时把零散碎片清理、融合、推断前瞻，凝结成叙事场景。未处理碎片积太多时 AI 会犯困、提示该睡了。</p>
       <div class="pill-tabs" id="tabs">
-        <div class="pill-tab active" data-tab="status">🌙 状态</div>
-        <div class="pill-tab" data-tab="scenes">🎬 场景</div>
-        <div class="pill-tab" data-tab="history">📜 历史</div>
-        <div class="pill-tab" data-tab="settings">⚙️ 参数</div>
+        <div class="pill-tab active" data-act="tab" data-tab="status">🌙 状态</div>
+        <div class="pill-tab" data-act="tab" data-tab="scenes">🎬 场景</div>
+        <div class="pill-tab" data-act="tab" data-tab="history">📜 历史</div>
+        <div class="pill-tab" data-act="tab" data-tab="settings">⚙️ 参数</div>
       </div>
       <div id="panel-status"></div>
       <div id="panel-scenes" style="display:none"></div>

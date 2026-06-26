@@ -24,9 +24,9 @@ export default {
     root.innerHTML = `
       <p class="page-intro">「零件箱」是聊天前端与网关共享的一组同步设置（昵称、头像、技能、快捷短语、MCP 开关、主题）。这里还能整体备份/恢复数据、管理对话、以及在危险区重置同步数据。</p>
       <div class="pill-tabs" id="tabs">
-        <div class="pill-tab active" data-tab="parts">🧰 零件箱</div>
-        <div class="pill-tab" data-tab="convos">💬 对话</div>
-        <div class="pill-tab" data-tab="danger">⚠️ 危险区</div>
+        <div class="pill-tab active" data-act="tab" data-tab="parts">🧰 零件箱</div>
+        <div class="pill-tab" data-act="tab" data-tab="convos">💬 对话</div>
+        <div class="pill-tab" data-act="tab" data-tab="danger">⚠️ 危险区</div>
       </div>
       <div id="panel-parts"></div>
       <div id="panel-convos" style="display:none"></div>

@@ -15,9 +15,9 @@ export default {
       <p class="page-intro">日历把零散对话凝成日/周/月/季/年的总结，开启注入后 AI 便知道「最近发生了什么」。这里可以浏览、手动编辑，也能随时触发各级整理。</p>
       <div id="master-slot">${loadingBlock()}</div>
       <div class="pill-tabs" id="tabs">
-        <div class="pill-tab active" data-tab="browse">🗂️ 日历浏览</div>
-        <div class="pill-tab" data-tab="generate">⚙️ 生成整理</div>
-        <div class="pill-tab" data-tab="settings">🎛️ 参数设置</div>
+        <div class="pill-tab active" data-act="tab" data-tab="browse">🗂️ 日历浏览</div>
+        <div class="pill-tab" data-act="tab" data-tab="generate">⚙️ 生成整理</div>
+        <div class="pill-tab" data-act="tab" data-tab="settings">🎛️ 参数设置</div>
       </div>
       <div id="panel-browse"></div>
       <div id="panel-generate" style="display:none"></div>
