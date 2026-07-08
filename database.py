@@ -2969,6 +2969,46 @@ async def save_calendar_page(date_str: str, page_type: str, sections: list, diar
     return row["id"] if row else None
 
 
+async def update_calendar_page_user_edit(date_str: str, page_type: str, diary: str = "", title: str = ""):
+    """用户手动编辑日历页：只写 diary / title，保留 AI 生成的 sections / keywords / summary / digest / model_used。
+
+    页面已存在 → 仅改 diary/title/updated_at，其余字段一律不动（避免"改个错别字就清空整页 AI 内容、
+    导致该日退出记忆注入"的老 bug）；页面不存在 → 新建，此时无 AI 内容可保留，sections 等为空是合理的，
+    model_used 记为 user_edit。返回页面 id。
+    """
+    from datetime import date as date_cls
+    pool = await get_pool()
+    d = date_cls.fromisoformat(date_str)
+    empty_json = json.dumps([], ensure_ascii=False)
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow("""
+            INSERT INTO calendar_pages (date, type, sections, diary, keywords, model_used, summary, digest, title, updated_at)
+            VALUES ($1, $2, $3::jsonb, $4, $3::jsonb, 'user_edit', '', '', $5, NOW())
+            ON CONFLICT (date, type) DO UPDATE SET
+                diary = EXCLUDED.diary,
+                title = EXCLUDED.title,
+                updated_at = NOW()
+            RETURNING id
+        """, d, page_type, empty_json, diary, title)
+    return row["id"] if row else None
+
+
+def _calendar_row_to_dict(row) -> dict:
+    """把 calendar_pages 行转为 dict，并就地解析 JSONB 列（sections / keywords）为 Python 对象。
+
+    连接池未注册全局 jsonb codec（有意为之：本文件多处已手动 json.loads，注册全局 codec
+    会让那些地方对已解析对象二次解析而崩，详见 KNOWN_ISSUES）。因此在读取出口统一解析，
+    消费方（dream / daily_digest / main）拿到的 sections/keywords 直接就是 list，
+    无需再做 isinstance 字符串判断（此前它们恒为字符串，正文被静默丢弃）。
+    """
+    d = dict(row)
+    if "sections" in d:
+        d["sections"] = _jsonb_to_python(d.get("sections"), [])
+    if "keywords" in d:
+        d["keywords"] = _jsonb_to_python(d.get("keywords"), [])
+    return d
+
+
 async def get_calendar_page(date_str: str, page_type: str = "day"):
     """读取指定日期的日历页面"""
     from datetime import date as date_cls
@@ -2980,7 +3020,24 @@ async def get_calendar_page(date_str: str, page_type: str = "day"):
         )
     if not row:
         return None
-    return dict(row)
+    return _calendar_row_to_dict(row)
+
+
+async def get_latest_day_page():
+    """读取最近一张 day 日历页（供画像更新用）。sections/keywords 已解析为 Python 对象。
+
+    收拢 daily_digest.update_user_profile 原先的内联 SQL，使 JSONB 解析统一在 DB 出口完成。
+    """
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow("""
+            SELECT * FROM calendar_pages
+            WHERE type = 'day'
+            ORDER BY date DESC LIMIT 1
+        """)
+    if not row:
+        return None
+    return _calendar_row_to_dict(row)
 
 
 async def get_calendar_range(start: str, end: str, page_type: str = None):
@@ -3000,7 +3057,7 @@ async def get_calendar_range(start: str, end: str, page_type: str = None):
                 "SELECT * FROM calendar_pages WHERE date >= $1 AND date <= $2 ORDER BY date ASC, type ASC",
                 s, e
             )
-    return [dict(r) for r in rows]
+    return [_calendar_row_to_dict(r) for r in rows]
 
 
 async def delete_calendar_page(date_str: str, page_type: str = "day"):
@@ -3049,7 +3106,7 @@ async def get_calendar_for_injection(lookback_days: int = 365):
     if not rows:
         return []
 
-    pages = [dict(r) for r in rows]
+    pages = [_calendar_row_to_dict(r) for r in rows]
 
     # 按类型分组
     by_type = {}
