@@ -366,15 +366,10 @@ async def update_user_profile(digest_text: str = None, model_override: str = Non
     
     # 2. 准备今天的日志（从日页面读取）
     if not digest_text:
-        from database import get_pool
-        pool = await get_pool()
-        async with pool.acquire() as conn:
-            # 读最近的日页面
-            row = await conn.fetchrow("""
-                SELECT sections, diary, date FROM calendar_pages 
-                WHERE type = 'day'
-                ORDER BY date DESC LIMIT 1
-            """)
+        # 走 DB 出口 get_latest_day_page，sections 已解析为 list（此前内联 SQL 拿到的是
+        # JSONB 字符串，下方 isinstance 判定恒为假，日页面正文被静默丢弃）
+        from database import get_latest_day_page
+        row = await get_latest_day_page()
         if not row:
             print("   📭 没有找到日页面，跳过画像更新")
             return {"status": "skipped", "reason": "no day page"}

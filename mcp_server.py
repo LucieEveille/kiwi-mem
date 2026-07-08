@@ -580,41 +580,25 @@ async def trigger_dream() -> str:
     通常在碎片堆积较多或长时间未整理时使用。
     """
     try:
-        # /dream/start 返回 SSE 流（StreamingResponse），Dream 实际跑 1-5 分钟。
-        # 不能用 client.post() 等响应完整 —— httpx 默认会把整个流读完才返回，
-        # timeout 设多大都可能不够；而且客户端断开会触发 FastAPI 端 generator 的
-        # CancelledError 把 Dream 中途杀掉。
-        # 正确做法：用 client.stream() 读到第一个 data: 事件就 return，
-        # 后续 Dream 在网关后台继续跑，让客户端用 get_dream_status 查进度。
-        async with httpx.AsyncClient(timeout=60, headers=GATEWAY_HEADERS) as client:
-            async with client.stream(
-                "POST",
-                f"{GATEWAY_BASE}/dream/start",
+        # 走 detached 端点：立即拿 JSON 返回，Dream 在网关后端独立跑完，不再"读一行 SSE
+        # 就断连、把刚起来的梦（FastAPI 端 generator）CancelledError 中途杀掉"。
+        # 已在做梦时返回 already_running（幂等）。进度仍可用 get_dream_status 查。
+        async with httpx.AsyncClient(timeout=15, headers=GATEWAY_HEADERS) as client:
+            resp = await client.post(
+                f"{GATEWAY_BASE}/dream/start-detached",
                 json={"trigger_type": "manual"},
-            ) as resp:
-                if resp.status_code != 200:
-                    body = (await resp.aread()).decode("utf-8", errors="ignore")[:300]
-                    return f"Dream 启动失败（HTTP {resp.status_code}）：{body}"
-
-                first_data = ""
-                async for line in resp.aiter_lines():
-                    line = (line or "").strip()
-                    if line.startswith("data:"):
-                        first_data = line[len("data:"):].strip()
-                        break
-
-        if not first_data:
-            return "🌙 Dream 已启动，可以用 get_dream_status 查看进度。"
-
-        # 错误事件
-        if first_data.startswith("{") and '"error"' in first_data.lower():
-            return f"Dream 启动失败：{first_data[:200]}"
-
-        return f"🌙 Dream 已启动：{first_data[:200]}\n后续可用 get_dream_status 查看进度。"
+            )
+        if resp.status_code != 200:
+            body = resp.text[:300]
+            return f"Dream 启动失败（HTTP {resp.status_code}）：{body}"
+        data = resp.json()
+        if data.get("status") == "already_running":
+            return "🌙 小斐已经在睡觉整理记忆了，可以用 get_dream_status 查看进度。"
+        return "🌙 Dream 已启动，可以用 get_dream_status 查看进度。"
 
     except httpx.TimeoutException:
-        # 60s 内连首个事件都没到, 但请求已发出, Dream 多半已在后台跑了
-        return "🌙 Dream 已启动（首事件超时未到，可用 get_dream_status 确认）"
+        # 15s 内没返回，但请求已发出，Dream 多半已在后台跑了
+        return "🌙 Dream 已启动（响应超时未到，可用 get_dream_status 确认）"
     except Exception as e:
         return f"启动出错：{type(e).__name__}: {e}"
 

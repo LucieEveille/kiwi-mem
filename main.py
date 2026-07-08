@@ -2620,16 +2620,32 @@ async def _stream_with_tools(messages, tools, tool_map, model, temperature, tool
 
             assistant_msg = final_text
             dream_triggered = detect_dream_trigger(assistant_msg)
-            # 记忆提取在流内同步等待，好让记忆行实时出现在聊天里
-            # （仅每隔 N 轮真正提取并调 LLM，平时是快速 skip，不显示也不卡）
-            if mem_enabled and user_message and assistant_msg:
-                _emo = merge_emotion_levels(detect_emotion_from_user_msg(user_message), detect_emotion_from_response(assistant_msg))
-                mem_result = await process_memories_background(session_id, user_message, assistant_msg, model, emotion_level=_emo, project_id=project_id, is_regenerate=is_regenerate)
-                if mem_result and mem_result.get("action") != "skip":
-                    yield f"data: {json.dumps({'ev_memory': mem_result}, ensure_ascii=False)}\n\n"
+
+            # ---- 收尾：数据必活，推送尽力（与转发路径 stream_and_capture 同一套）----
+            # 入库+提取提为独立后台 task：客户端断连时本生成器被取消，但该 task 独立跑完，
+            # 不再有"断连丢消息 / 计数器清了却没提取"的窗口。
+            _emo = merge_emotion_levels(detect_emotion_from_user_msg(user_message), detect_emotion_from_response(assistant_msg))
+            mem_task = _spawn_background_task(
+                _finalize_stream_memories(mem_enabled, session_id, user_message, assistant_msg, model, _emo, project_id, is_regenerate)
+            )
+            # Dream 兜底也提为独立 task（断连也能开梦）；在线时前端仍会先通过 /dream/start 启动并展示"陪看"进度
+            if dream_triggered:
+                _spawn_background_task(_dream_fallback_after_grace("auto"))
+
+            # 记忆行照旧实时出现在聊天里：连着就 await 拿结果推 ev_memory；断了就算（数据已落地）。
+            # shield 隔断"生成器被取消经 _fut_waiter 连带取消 mem_task"的传播（详见 stream_and_capture 同款注释）。
+            try:
+                mem_result = await asyncio.shield(mem_task)
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                print(f"⚠️ 收尾记忆 task 出错（不影响流收尾）: {e}")
+                mem_result = None
+            if mem_result and mem_result.get("action") != "skip":
+                yield f"data: {json.dumps({'ev_memory': mem_result}, ensure_ascii=False)}\n\n"
             # Dream 事件必须在 [DONE] 之前
             if dream_triggered:
-                print(f"🌙 检测到 Dream 标记，通知前端启动 Dream...")
+                print(f"🌙 检测到 Dream 标记，通知前端启动 Dream（后端已排兜底）...")
                 yield f"data: {json.dumps({'ev_dream': {'triggered': True}}, ensure_ascii=False)}\n\n"
             # [DONE] 作为流的最后一个事件
             yield "data: [DONE]\n\n"
@@ -2839,12 +2855,24 @@ def _estimate_tokens(text: str) -> int:
     return max(1, round(cjk / 1.5 + other / 4))
 
 
-def _launch_dream_from_marker():
-    """从聊天回复里的 Dream 标记启动一次后台 Dream。"""
+async def _dream_is_running() -> bool:
+    """当前是否有 Dream 在跑（兜底启动前的幂等判断）。查不到状态时保守返回 False。"""
+    try:
+        from database import get_dream_status
+        status = await get_dream_status()
+        return bool(status.get("current"))
+    except Exception:
+        return False
+
+
+def _launch_dream_detached(trigger_type: str = "manual"):
+    """detached 启动一次 Dream：run_dream 跑在独立后台 task 里（消费事件仅记日志），
+    不依赖任何客户端连接，客户端断连也能把梦做完。
+    run_dream 自带 _dream_running 同步并发保护，重复启动会被其拒绝（第二个 yield error 后返回）。"""
     async def _bg_dream():
         try:
             from dream import run_dream
-            async for event in run_dream(trigger_type="manual"):
+            async for event in run_dream(trigger_type=trigger_type):
                 if event["type"] == "error":
                     print(f"   🌙 Dream 出错: {event['data']}")
                 elif event["type"] == "complete":
@@ -2852,6 +2880,48 @@ def _launch_dream_from_marker():
         except Exception as e:
             print(f"   🌙 Dream 异常: {e}")
     _spawn_background_task(_bg_dream())
+
+
+def _launch_dream_from_marker():
+    """从聊天回复里的 Dream 标记启动一次后台 Dream（非流式路径用）。"""
+    _launch_dream_detached("manual")
+
+
+# 聊天里检测到 dream 标记后的 Dream 兜底策略：给在线前端一个宽限期，让它照旧通过
+# /dream/start 启动并展示"陪着看梦"的进度（既有体验不动）；宽限期后若仍无 Dream 在跑
+# （多半客户端已断连、前端没机会启动），后端兜底 detached 启动，保证"去睡吧然后关 App"
+# 也能把梦做完。run_dream 单次至少一次 LLM 调用、耗时远超宽限期，故不会误判成"没在跑"而双启。
+DREAM_HANDOFF_GRACE_SECONDS = 15
+
+
+async def _dream_fallback_after_grace(trigger_type: str = "auto", grace: float = DREAM_HANDOFF_GRACE_SECONDS):
+    """收尾 task 内的 Dream 兜底：独立后台协程，不随聊天连接取消。"""
+    try:
+        await asyncio.sleep(grace)
+    except asyncio.CancelledError:
+        raise
+    if await _dream_is_running():
+        return  # 在线前端已接手启动，或上次 Dream 仍在跑：不重复启动
+    print("🌙 Dream 兜底：宽限期内前端未接手（多半已断连），后端 detached 启动")
+    _launch_dream_detached(trigger_type)
+
+
+async def _finalize_stream_memories(mem_enabled, session_id, user_message, assistant_msg, model, emotion_level, project_id, is_regenerate):
+    """流式收尾的记忆工作（消息入库 + 情绪权重 + 按周期提取）。
+
+    独立成协程，供上层用 _spawn_background_task 提为独立后台 task：客户端断连时
+    生成器被取消，但本 task 作为独立任务仍跑完——消息入库、记忆提取、计数器清零都在
+    process_memories_background 内原子完成，消除"断连丢消息 / 丢提取 / 计数器清了但没提取"的窗口。
+
+    mem_enabled 由调用方传入（转发路径内联 get_memory_enabled()，工具路径用其 mem_enabled 参数，
+    后者已含 skip_prompt 覆盖），保持与各自原有判定完全一致。
+    """
+    if not (mem_enabled and user_message and assistant_msg):
+        return None
+    return await process_memories_background(
+        session_id, user_message, assistant_msg, model,
+        emotion_level=emotion_level, project_id=project_id, is_regenerate=is_regenerate,
+    )
 
 async def stream_and_capture(headers: dict, body: dict, session_id: str, user_message: str, model: str, tool_events: list = None, api_url: str = None, project_id: str = None, prompt_meta: dict = None, api_format: str = "openai", api_key: str = None, is_regenerate: bool = False):
     """流式响应 + 捕获完整回复 + 工具事件"""
@@ -2989,14 +3059,33 @@ async def stream_and_capture(headers: dict, body: dict, session_id: str, user_me
     # Dream 触发检测（在 strip 之前，用原始文本检测）
     dream_triggered = detect_dream_trigger(assistant_msg)
 
-    if await get_memory_enabled() and user_message and assistant_msg:
-        mem_result = await process_memories_background(session_id, user_message, assistant_msg, model, emotion_level=emotion_level, project_id=project_id, is_regenerate=is_regenerate)
-        if mem_result and mem_result.get("action") != "skip":
-            yield f"data: {json.dumps({'ev_memory': mem_result}, ensure_ascii=False)}\n\n".encode("utf-8")
-
-    # Dream 触发：在 [DONE] 之前推送，由前端连接 Dream SSE 获取进度
+    # ---- 收尾：数据必活，推送尽力 ----
+    # 入库+提取提为独立后台 task：客户端断连时本生成器被取消，但该 task 独立存活跑完，
+    # 消除"看完回复立刻锁屏/切走 → 这轮消息没入库、或计数器清了却没提取"的丢数据窗口。
+    _mem_on = await get_memory_enabled()
+    mem_task = _spawn_background_task(
+        _finalize_stream_memories(_mem_on, session_id, user_message, assistant_msg, model, emotion_level, project_id, is_regenerate)
+    )
+    # Dream 兜底也提为独立 task（断连也能开梦）；在线时前端仍会先通过 /dream/start 启动并展示"陪看"进度
     if dream_triggered:
-        print(f"🌙 检测到 Dream 标记，通知前端启动 Dream...")
+        _spawn_background_task(_dream_fallback_after_grace("auto"))
+
+    # 记忆行照旧实时出现在聊天里：连着就 await 拿结果推 ev_memory；断了就算（数据已在 task 里落地）。
+    # 必须 shield：裸 await mem_task 时，生成器被取消会经 _fut_waiter 连带取消 mem_task，反而丢数据；
+    # shield 隔断这一传播，mem_task 由 _background_tasks 持引用独立跑完，且其内部 try/except 不抛异常。
+    try:
+        mem_result = await asyncio.shield(mem_task)
+    except asyncio.CancelledError:
+        raise  # 生成器被取消：mem_task 已被 shield 保护、独立存活，不吞掉取消信号
+    except Exception as e:
+        print(f"⚠️ 收尾记忆 task 出错（不影响流收尾）: {e}")
+        mem_result = None
+    if mem_result and mem_result.get("action") != "skip":
+        yield f"data: {json.dumps({'ev_memory': mem_result}, ensure_ascii=False)}\n\n".encode("utf-8")
+
+    # Dream 触发：在 [DONE] 之前推送，前端据此启动 Dream 并展示进度（既有"陪看"体验不动）
+    if dream_triggered:
+        print(f"🌙 检测到 Dream 标记，通知前端启动 Dream（后端已排兜底）...")
         yield f"data: {json.dumps({'ev_dream': {'triggered': True}}, ensure_ascii=False)}\n\n".encode("utf-8")
 
     # [DONE] 作为流的最后一个事件（上游/适配器的 [DONE] 已在上面被抑制）
@@ -3701,21 +3790,17 @@ async def api_get_calendar_range(start: str = None, end: str = None, type: str =
 async def api_save_calendar_page(date: str, req: Request):
     """用户手动编辑/创建日历页面"""
     try:
-        from database import save_calendar_page
+        from database import update_calendar_page_user_edit
         body = await req.json()
         content = body.get("content", "")
         title = body.get("title", "")
         page_type = body.get("type", "day")
-        # 用户编辑的内容存入 diary 字段，sections 留空（用户不走分段逻辑）
-        page_id = await save_calendar_page(
+        # 用户编辑只写 diary（content）与 title；页面已有的 AI 内容
+        # （sections/keywords/summary/digest/model_used）一律保留，不再被空值覆盖。
+        page_id = await update_calendar_page_user_edit(
             date_str=date,
             page_type=page_type,
-            sections=[],
             diary=content,
-            keywords=[],
-            model_used="user_edit",
-            summary="",
-            digest="",
             title=title,
         )
         return {"status": "ok", "id": page_id}
@@ -3813,6 +3898,26 @@ async def api_dream_start(req: Request):
             yield f"event: {event_type}\ndata: {data}\n\n"
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
+
+
+@app.post("/dream/start-detached")
+async def api_dream_start_detached(req: Request):
+    """detached 触发 Dream：立即返回 JSON，不开 SSE，Dream 在后台独立跑完（不依赖本连接）。
+
+    供 MCP trigger_dream 工具等"只要把梦发起、不需要盯进度"的场景使用，避免读一行 SSE
+    就断连把刚起来的梦掐死。已有 Dream 在跑时返回 already_running（幂等）。
+    """
+    body = {}
+    try:
+        body = await req.json()
+    except Exception:
+        pass
+    trigger = body.get("trigger_type", "manual")
+
+    if await _dream_is_running():
+        return {"status": "already_running"}
+    _launch_dream_detached(trigger)
+    return {"status": "started"}
 
 
 @app.post("/dream/stop")
