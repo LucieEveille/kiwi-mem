@@ -2267,7 +2267,7 @@ async def chat_completions(request: Request):
     # ========== 正常转发模式 ==========
     if is_stream:
         return StreamingResponse(
-            stream_and_capture(headers, body, session_id, user_message, model, tool_events, api_url=chat_api_url, project_id=project_id, prompt_meta=prompt_meta, api_format=api_format, api_key=chat_api_key, is_regenerate=is_regenerate),
+            stream_and_capture(headers, body, session_id, user_message, model, tool_events, api_url=chat_api_url, project_id=project_id, prompt_meta=prompt_meta, api_format=api_format, api_key=chat_api_key, is_regenerate=is_regenerate, mem_enabled=mem_enabled),
             media_type="text/event-stream",
             headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"},
         )
@@ -2600,49 +2600,70 @@ async def _stream_with_tools(messages, tools, tool_map, model, temperature, tool
             else:
                 print(f"✅ 工具调用后最终回复：直接输出 {len(final_text)} 字符")
 
-            # 处理思考链
-            reasoning = message.get("reasoning_content") or message.get("reasoning") or ""
-            if reasoning and isinstance(reasoning, str):
-                for i in range(0, len(reasoning), 40):
-                    yield f"data: {json.dumps({'choices': [{'delta': {'reasoning_content': reasoning[i:i+40]}, 'finish_reason': None}], 'model': model}, ensure_ascii=False)}\n\n"
-
-            # 模拟流式输出正文
-            if final_text:
-                chunk_size = 20
-                for i in range(0, len(final_text), chunk_size):
-                    yield f"data: {json.dumps({'choices': [{'delta': {'content': final_text[i:i+chunk_size]}, 'finish_reason': None}], 'model': model}, ensure_ascii=False)}\n\n"
-                    await asyncio.sleep(0.008)
-
-            finish_payload = {'choices': [{'delta': {}, 'finish_reason': 'stop'}], 'model': model}
-            if usage_data:
-                finish_payload['usage'] = usage_data
-            yield f"data: {json.dumps(finish_payload, ensure_ascii=False)}\n\n"
-
             assistant_msg = final_text
             dream_triggered = detect_dream_trigger(assistant_msg)
 
-            # ---- 收尾：数据必活，推送尽力（与转发路径 stream_and_capture 同一套）----
-            # 入库+提取提为独立后台 task：客户端断连时本生成器被取消，但该 task 独立跑完，
-            # 不再有"断连丢消息 / 计数器清了却没提取"的窗口。
-            _emo = merge_emotion_levels(detect_emotion_from_user_msg(user_message), detect_emotion_from_response(assistant_msg))
-            mem_task = _spawn_background_task(
-                _finalize_stream_memories(mem_enabled, session_id, user_message, assistant_msg, model, _emo, project_id, is_regenerate)
-            )
-            # Dream 兜底也提为独立 task（断连也能开梦）；在线时前端仍会先通过 /dream/start 启动并展示"陪看"进度
-            if dream_triggered:
-                _spawn_background_task(_dream_fallback_after_grace("auto"))
+            # ---- 收尾补救（数据必活，与 stream_and_capture 同一套）----
+            # 模拟流式（yield + sleep）与思考链 yield 都是取消点；spawn 若写在流式之后，断连时永不执行
+            # → 丢消息/丢提取。把 spawn 收进 try/finally 的 finally（不 await；create_task 安全）。
+            # final_text 在模拟流式前已完整，断连也存完整消息。
+            _tool_finalize_spawned = False
+            _tool_dream_spawned = False
+            mem_task = None
 
-            # 记忆行照旧实时出现在聊天里：连着就 await 拿结果推 ev_memory；断了就算（数据已落地）。
-            # shield 隔断"生成器被取消经 _fut_waiter 连带取消 mem_task"的传播（详见 stream_and_capture 同款注释）。
+            def _tool_spawn_finalize():
+                nonlocal _tool_finalize_spawned, mem_task
+                if _tool_finalize_spawned:
+                    return
+                _tool_finalize_spawned = True
+                if not assistant_msg:
+                    return
+                _emo = merge_emotion_levels(detect_emotion_from_user_msg(user_message), detect_emotion_from_response(assistant_msg))
+                mem_task = _spawn_background_task(
+                    _finalize_stream_memories(mem_enabled, session_id, user_message, assistant_msg, model, _emo, project_id, is_regenerate)
+                )
+
+            def _tool_spawn_dream():
+                nonlocal _tool_dream_spawned
+                if _tool_dream_spawned:
+                    return
+                _tool_dream_spawned = True
+                if dream_triggered:
+                    _spawn_background_task(_dream_fallback_after_grace("auto"))
+
             try:
-                mem_result = await asyncio.shield(mem_task)
-            except asyncio.CancelledError:
-                raise
-            except Exception as e:
-                print(f"⚠️ 收尾记忆 task 出错（不影响流收尾）: {e}")
-                mem_result = None
-            if mem_result and mem_result.get("action") != "skip":
-                yield f"data: {json.dumps({'ev_memory': mem_result}, ensure_ascii=False)}\n\n"
+                # 处理思考链
+                reasoning = message.get("reasoning_content") or message.get("reasoning") or ""
+                if reasoning and isinstance(reasoning, str):
+                    for i in range(0, len(reasoning), 40):
+                        yield f"data: {json.dumps({'choices': [{'delta': {'reasoning_content': reasoning[i:i+40]}, 'finish_reason': None}], 'model': model}, ensure_ascii=False)}\n\n"
+
+                # 模拟流式输出正文
+                if final_text:
+                    chunk_size = 20
+                    for i in range(0, len(final_text), chunk_size):
+                        yield f"data: {json.dumps({'choices': [{'delta': {'content': final_text[i:i+chunk_size]}, 'finish_reason': None}], 'model': model}, ensure_ascii=False)}\n\n"
+                        await asyncio.sleep(0.008)
+
+                finish_payload = {'choices': [{'delta': {}, 'finish_reason': 'stop'}], 'model': model}
+                if usage_data:
+                    finish_payload['usage'] = usage_data
+                yield f"data: {json.dumps(finish_payload, ensure_ascii=False)}\n\n"
+            finally:
+                _tool_spawn_finalize()
+                _tool_spawn_dream()
+
+            # 下面仅正常完成执行（断连时异常已带走控制权）：推 ev_memory / ev_dream / [DONE]
+            if mem_task is not None:
+                try:
+                    mem_result = await asyncio.shield(mem_task)
+                except asyncio.CancelledError:
+                    raise
+                except Exception as e:
+                    print(f"⚠️ 收尾记忆 task 出错（不影响流收尾）: {e}")
+                    mem_result = None
+                if mem_result and mem_result.get("action") != "skip":
+                    yield f"data: {json.dumps({'ev_memory': mem_result}, ensure_ascii=False)}\n\n"
             # Dream 事件必须在 [DONE] 之前
             if dream_triggered:
                 print(f"🌙 检测到 Dream 标记，通知前端启动 Dream（后端已排兜底）...")
@@ -2923,7 +2944,7 @@ async def _finalize_stream_memories(mem_enabled, session_id, user_message, assis
         emotion_level=emotion_level, project_id=project_id, is_regenerate=is_regenerate,
     )
 
-async def stream_and_capture(headers: dict, body: dict, session_id: str, user_message: str, model: str, tool_events: list = None, api_url: str = None, project_id: str = None, prompt_meta: dict = None, api_format: str = "openai", api_key: str = None, is_regenerate: bool = False):
+async def stream_and_capture(headers: dict, body: dict, session_id: str, user_message: str, model: str, tool_events: list = None, api_url: str = None, project_id: str = None, prompt_meta: dict = None, api_format: str = "openai", api_key: str = None, is_regenerate: bool = False, mem_enabled: bool = True):
     """流式响应 + 捕获完整回复 + 工具事件"""
     _api_url = api_url or API_BASE_URL
 
@@ -2939,149 +2960,166 @@ async def stream_and_capture(headers: dict, body: dict, session_id: str, user_me
     _logged_first_delta = False
     _reasoning_chunks = 0
 
-    # Anthropic 格式：转换请求体，使用流式适配器
-    if api_format == "anthropic":
-        send_body = to_anthropic_request(body)
-        send_body["stream"] = True
-        _headers = to_anthropic_headers(api_key or API_KEY)
-        _headers["Accept-Encoding"] = "identity"
+    # ---- 收尾补救（数据必活）----
+    # 把"入库+提取"与"Dream 兜底"两个 spawn 收进闭包，由下方 try/finally 保证在任何退出路径
+    # （正常完成 / 客户端断连取消 / 上游错误 return）都同步补出生。这堵住 Codex 实测②的丢数据点：
+    # 客户端在正文最后一个字后立刻断开时，取消发生在"流收完 → 执行 spawn"之间的 await，
+    # 裸 shield 保护不到"尚未 spawn"的窗口。finally 里绝不 await；create_task 是同步调用，安全。
+    finalize_spawned = False
+    dream_fb_spawned = False
+    mem_task = None
 
-        async with httpx.AsyncClient(timeout=300) as client:
-            async with client.stream("POST", _api_url, headers=_headers, json=send_body) as response:
-                if response.status_code != 200:
-                    error_body = b""
-                    async for chunk in response.aiter_bytes():
-                        error_body += chunk
-                    print(f"❌ Anthropic 流式请求失败 [{response.status_code}]: {error_body[:500].decode('utf-8', errors='ignore')}")
-                    err_msg = f"⚠️ 请求失败 ({response.status_code})"
-                    err_payload = json.dumps({'choices': [{'delta': {'content': err_msg}, 'finish_reason': None}], 'model': model}, ensure_ascii=False)
-                    yield f"data: {err_payload}\n\n".encode("utf-8")
-                    yield b"data: [DONE]\n\n"
-                    return
+    def _spawn_finalize_if_needed():
+        nonlocal finalize_spawned, mem_task
+        if finalize_spawned:
+            return
+        _asmsg = "".join(full_response)
+        if not _asmsg:
+            finalize_spawned = True
+            return
+        _emo = merge_emotion_levels(detect_emotion_from_user_msg(user_message), detect_emotion_from_response(_asmsg))
+        mem_task = _spawn_background_task(
+            _finalize_stream_memories(mem_enabled, session_id, user_message, _asmsg, model, _emo, project_id, is_regenerate)
+        )
+        finalize_spawned = True
 
-                # 按 SSE 事件（\n\n）缓冲转发，并抑制上游 [DONE]——由本函数末尾统一发，保证它是流的最后一个事件
-                _ev_buf = ""
-                async for openai_chunk in anthropic_stream_to_openai(response, model):
-                    _ev_buf += openai_chunk.decode("utf-8", errors="ignore").replace("\r\n", "\n")
-                    while "\n\n" in _ev_buf:
-                        event, _ev_buf = _ev_buf.split("\n\n", 1)
-                        event = event.strip()
-                        if not event or event == "data: [DONE]":
-                            continue
-                        yield (event + "\n\n").encode("utf-8")
-                        try:
+    def _spawn_dream_fallback_if_needed():
+        nonlocal dream_fb_spawned
+        if dream_fb_spawned:
+            return
+        dream_fb_spawned = True
+        if detect_dream_trigger("".join(full_response)):
+            _spawn_background_task(_dream_fallback_after_grace("auto"))
+
+    try:
+        # Anthropic 格式：转换请求体，使用流式适配器
+        if api_format == "anthropic":
+            send_body = to_anthropic_request(body)
+            send_body["stream"] = True
+            _headers = to_anthropic_headers(api_key or API_KEY)
+            _headers["Accept-Encoding"] = "identity"
+
+            async with httpx.AsyncClient(timeout=300) as client:
+                async with client.stream("POST", _api_url, headers=_headers, json=send_body) as response:
+                    if response.status_code != 200:
+                        error_body = b""
+                        async for chunk in response.aiter_bytes():
+                            error_body += chunk
+                        print(f"❌ Anthropic 流式请求失败 [{response.status_code}]: {error_body[:500].decode('utf-8', errors='ignore')}")
+                        err_msg = f"⚠️ 请求失败 ({response.status_code})"
+                        err_payload = json.dumps({'choices': [{'delta': {'content': err_msg}, 'finish_reason': None}], 'model': model}, ensure_ascii=False)
+                        yield f"data: {err_payload}\n\n".encode("utf-8")
+                        yield b"data: [DONE]\n\n"
+                        return
+
+                    # 按 SSE 事件（\n\n）缓冲转发，并抑制上游 [DONE]——由本函数末尾统一发，保证它是流的最后一个事件
+                    _ev_buf = ""
+                    async for openai_chunk in anthropic_stream_to_openai(response, model):
+                        _ev_buf += openai_chunk.decode("utf-8", errors="ignore").replace("\r\n", "\n")
+                        while "\n\n" in _ev_buf:
+                            event, _ev_buf = _ev_buf.split("\n\n", 1)
+                            event = event.strip()
+                            if not event or event == "data: [DONE]":
+                                continue
+                            yield (event + "\n\n").encode("utf-8")
+                            try:
+                                for line in event.split("\n"):
+                                    line = line.strip()
+                                    if line.startswith("data: "):
+                                        data = json.loads(line[6:])
+                                        delta = data.get("choices", [{}])[0].get("delta", {})
+                                        content = delta.get("content", "")
+                                        if content:
+                                            full_response.append(content)
+                                        if delta.get("reasoning_content"):
+                                            _reasoning_chunks += 1
+                            except Exception:
+                                pass
+                    _tail = _ev_buf.strip()
+                    if _tail and _tail != "data: [DONE]":
+                        yield (_tail + "\n\n").encode("utf-8")
+        else:
+            # OpenAI 格式：直接转发
+            buffer = ""
+            async with httpx.AsyncClient(timeout=300) as client:
+                async with client.stream("POST", _api_url, headers=headers, json=body) as response:
+                    if response.status_code != 200:
+                        error_body = b""
+                        async for chunk in response.aiter_bytes():
+                            error_body += chunk
+                        print(f"❌ 流式请求失败 [{response.status_code}]: {error_body[:500].decode('utf-8', errors='ignore')}")
+                        err_msg = f"⚠️ 请求失败 ({response.status_code})"
+                        err_payload = json.dumps({'choices': [{'delta': {'content': err_msg}, 'finish_reason': None}], 'model': model}, ensure_ascii=False)
+                        yield f"data: {err_payload}\n\n".encode("utf-8")
+                        yield b"data: [DONE]\n\n"
+                        return
+
+                    # 按 SSE 事件（\n\n）缓冲转发，并抑制上游 [DONE]——由本函数末尾统一发，保证它是流的最后一个事件。
+                    # 以「整事件」为单位转发（而非裸字节），既能干净拦掉 [DONE]，又不破坏事件分帧。
+                    async for chunk in response.aiter_bytes(chunk_size=256):
+                        buffer += chunk.decode("utf-8", errors="ignore").replace("\r\n", "\n")
+                        while "\n\n" in buffer:
+                            event, buffer = buffer.split("\n\n", 1)
+                            event = event.strip()
+                            if not event or event == "data: [DONE]":
+                                continue
+                            yield (event + "\n\n").encode("utf-8")
                             for line in event.split("\n"):
                                 line = line.strip()
-                                if line.startswith("data: "):
+                                if not line.startswith("data: "):
+                                    continue
+                                try:
                                     data = json.loads(line[6:])
                                     delta = data.get("choices", [{}])[0].get("delta", {})
+
+                                    # 🔍 调试日志：记录第一个有效delta的所有字段
+                                    if not _logged_first_delta and delta:
+                                        keys = list(delta.keys())
+                                        if keys and keys != ['role']:
+                                            print(f"🔍 [流式调试] 首个delta字段: {keys}, 模型: {model}")
+                                            for k in ('reasoning_content', 'reasoning', 'reasoning_details'):
+                                                if k in delta:
+                                                    sample = str(delta[k])[:100]
+                                                    print(f"🔍 [流式调试] {k} 示例: {sample}")
+                                            _logged_first_delta = True
+
+                                    if delta.get('reasoning_content') or delta.get('reasoning') or delta.get('reasoning_details'):
+                                        _reasoning_chunks += 1
+
                                     content = delta.get("content", "")
                                     if content:
                                         full_response.append(content)
-                                    if delta.get("reasoning_content"):
-                                        _reasoning_chunks += 1
-                        except Exception:
-                            pass
-                _tail = _ev_buf.strip()
-                if _tail and _tail != "data: [DONE]":
-                    yield (_tail + "\n\n").encode("utf-8")
-    else:
-        # OpenAI 格式：直接转发
-        buffer = ""
-        async with httpx.AsyncClient(timeout=300) as client:
-            async with client.stream("POST", _api_url, headers=headers, json=body) as response:
-                if response.status_code != 200:
-                    error_body = b""
-                    async for chunk in response.aiter_bytes():
-                        error_body += chunk
-                    print(f"❌ 流式请求失败 [{response.status_code}]: {error_body[:500].decode('utf-8', errors='ignore')}")
-                    err_msg = f"⚠️ 请求失败 ({response.status_code})"
-                    err_payload = json.dumps({'choices': [{'delta': {'content': err_msg}, 'finish_reason': None}], 'model': model}, ensure_ascii=False)
-                    yield f"data: {err_payload}\n\n".encode("utf-8")
-                    yield b"data: [DONE]\n\n"
-                    return
+                                except (json.JSONDecodeError, KeyError, IndexError):
+                                    pass
+                    _tail = buffer.strip()
+                    if _tail and _tail != "data: [DONE]":
+                        yield (_tail + "\n\n").encode("utf-8")
+    finally:
+        # 断连（取消/GeneratorExit）或正常完成都在此把收尾 task 与 Dream 兜底同步补出生。
+        _spawn_finalize_if_needed()
+        _spawn_dream_fallback_if_needed()
 
-                # 按 SSE 事件（\n\n）缓冲转发，并抑制上游 [DONE]——由本函数末尾统一发，保证它是流的最后一个事件。
-                # 以「整事件」为单位转发（而非裸字节），既能干净拦掉 [DONE]，又不破坏事件分帧。
-                async for chunk in response.aiter_bytes(chunk_size=256):
-                    buffer += chunk.decode("utf-8", errors="ignore").replace("\r\n", "\n")
-                    while "\n\n" in buffer:
-                        event, buffer = buffer.split("\n\n", 1)
-                        event = event.strip()
-                        if not event or event == "data: [DONE]":
-                            continue
-                        yield (event + "\n\n").encode("utf-8")
-                        for line in event.split("\n"):
-                            line = line.strip()
-                            if not line.startswith("data: "):
-                                continue
-                            try:
-                                data = json.loads(line[6:])
-                                delta = data.get("choices", [{}])[0].get("delta", {})
-
-                                # 🔍 调试日志：记录第一个有效delta的所有字段
-                                if not _logged_first_delta and delta:
-                                    keys = list(delta.keys())
-                                    if keys and keys != ['role']:
-                                        print(f"🔍 [流式调试] 首个delta字段: {keys}, 模型: {model}")
-                                        for k in ('reasoning_content', 'reasoning', 'reasoning_details'):
-                                            if k in delta:
-                                                sample = str(delta[k])[:100]
-                                                print(f"🔍 [流式调试] {k} 示例: {sample}")
-                                        _logged_first_delta = True
-
-                                if delta.get('reasoning_content') or delta.get('reasoning') or delta.get('reasoning_details'):
-                                    _reasoning_chunks += 1
-
-                                content = delta.get("content", "")
-                                if content:
-                                    full_response.append(content)
-                            except (json.JSONDecodeError, KeyError, IndexError):
-                                pass
-                _tail = buffer.strip()
-                if _tail and _tail != "data: [DONE]":
-                    yield (_tail + "\n\n").encode("utf-8")
-
+    # 下面仅在正常完成时执行（断连时异常已带走控制权）：把 ev_memory / ev_dream / [DONE] 推给客户端
     assistant_msg = "".join(full_response)
-    
+
     # 🔍 流式完成汇总
     print(f"🔍 [流式完成] 模型={model}, 正文={len(assistant_msg)}字, 思考链chunks={_reasoning_chunks}")
     if _reasoning_chunks == 0 and '<think>' in assistant_msg:
         print(f"🔍 [流式完成] ⚠️ 思考链在正文中（<think>标签），前端需要解析")
-    
-    # 🩷 情绪检测（v5.2）
-    user_emotion = detect_emotion_from_user_msg(user_message)
-    response_emotion = detect_emotion_from_response(assistant_msg)
-    emotion_level = merge_emotion_levels(user_emotion, response_emotion)
-    if emotion_level != "normal":
-        print(f"🩷 情绪检测: user={user_emotion}, response={response_emotion} → {emotion_level}")
-    
-    # Dream 触发检测（在 strip 之前，用原始文本检测）
+
     dream_triggered = detect_dream_trigger(assistant_msg)
 
-    # ---- 收尾：数据必活，推送尽力 ----
-    # 入库+提取提为独立后台 task：客户端断连时本生成器被取消，但该 task 独立存活跑完，
-    # 消除"看完回复立刻锁屏/切走 → 这轮消息没入库、或计数器清了却没提取"的丢数据窗口。
-    _mem_on = await get_memory_enabled()
-    mem_task = _spawn_background_task(
-        _finalize_stream_memories(_mem_on, session_id, user_message, assistant_msg, model, emotion_level, project_id, is_regenerate)
-    )
-    # Dream 兜底也提为独立 task（断连也能开梦）；在线时前端仍会先通过 /dream/start 启动并展示"陪看"进度
-    if dream_triggered:
-        _spawn_background_task(_dream_fallback_after_grace("auto"))
-
-    # 记忆行照旧实时出现在聊天里：连着就 await 拿结果推 ev_memory；断了就算（数据已在 task 里落地）。
-    # 必须 shield：裸 await mem_task 时，生成器被取消会经 _fut_waiter 连带取消 mem_task，反而丢数据；
-    # shield 隔断这一传播，mem_task 由 _background_tasks 持引用独立跑完，且其内部 try/except 不抛异常。
-    try:
-        mem_result = await asyncio.shield(mem_task)
-    except asyncio.CancelledError:
-        raise  # 生成器被取消：mem_task 已被 shield 保护、独立存活，不吞掉取消信号
-    except Exception as e:
-        print(f"⚠️ 收尾记忆 task 出错（不影响流收尾）: {e}")
-        mem_result = None
-    if mem_result and mem_result.get("action") != "skip":
-        yield f"data: {json.dumps({'ev_memory': mem_result}, ensure_ascii=False)}\n\n".encode("utf-8")
+    # 记忆行照旧实时出现在聊天里：mem_task 已在 finally 里 spawn；仍用 shield（await 被取消不连带取消 mem_task）
+    if mem_task is not None:
+        try:
+            mem_result = await asyncio.shield(mem_task)
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            print(f"⚠️ 收尾记忆 task 出错（不影响流收尾）: {e}")
+            mem_result = None
+        if mem_result and mem_result.get("action") != "skip":
+            yield f"data: {json.dumps({'ev_memory': mem_result}, ensure_ascii=False)}\n\n".encode("utf-8")
 
     # Dream 触发：在 [DONE] 之前推送，前端据此启动 Dream 并展示进度（既有"陪看"体验不动）
     if dream_triggered:

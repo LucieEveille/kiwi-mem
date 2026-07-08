@@ -593,8 +593,8 @@ async def trigger_dream() -> str:
             return f"Dream 启动失败（HTTP {resp.status_code}）：{body}"
         data = resp.json()
         if data.get("status") == "already_running":
-            return "🌙 小斐已经在睡觉整理记忆了，可以用 get_dream_status 查看进度。"
-        return "🌙 Dream 已启动，可以用 get_dream_status 查看进度。"
+            return "🌙 Dream 已在进行中，可用 get_dream_status 查看进度。"
+        return "🌙 Dream 已启动，可用 get_dream_status 查看进度。"
 
     except httpx.TimeoutException:
         # 15s 内没返回，但请求已发出，Dream 多半已在后台跑了
