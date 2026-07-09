@@ -1045,7 +1045,7 @@ async def save_memory(content: str, importance: int = 5, source_session: str = "
     - 'user_explicit': 用户手动添加 / 明确陈述
     - 'ai_extracted': AI 从对话中自动提取
     - 'ai_digest': 每日整理合并生成
-    - 'seed_import': 种子记忆导入
+    - 'seed_import': （历史遗留，功能已移除，仅用于标识存量数据）
     
     emotional_weight: 情绪浓度 0-10，0=普通，越高越浓
     project_id: 项目ID，非空时为项目级记忆，空为全局记忆
@@ -1892,6 +1892,28 @@ async def get_all_memories_count():
         return row["cnt"]
 
 
+async def get_memories_count(category_id: int = None, project_id: str = None):
+    """当前筛选下的记忆总数。WHERE 与 get_recent_memories 一致：
+    排除 digested/dream_deleted、valid_until 过滤、可选分类/项目过滤。
+    用于 /debug/memories 分页的分母（裸 COUNT(*) 不随筛选变化，会让页数虚高）。"""
+    pool = await get_pool()
+    conditions = [
+        "COALESCE(memory_type, 'fragment') NOT IN ('digested', 'dream_deleted')",
+        "(valid_until IS NULL OR valid_until > NOW())",
+    ]
+    params: list = []
+    if category_id is not None:
+        params.append(category_id)
+        conditions.append(f"category_id = ${len(params)}")
+    if project_id:
+        params.append(project_id)
+        conditions.append(f"project_id = ${len(params)}")
+    where = " AND ".join(conditions)
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(f"SELECT COUNT(*) as cnt FROM memories WHERE {where}", *params)
+        return row["cnt"]
+
+
 # ============================================================
 # 记忆去重检测
 # ============================================================
@@ -2732,7 +2754,7 @@ async def sync_import_all(conversations: list, projects: list):
 # ============================================================
 
 import json as _json
-from datetime import datetime as _dt, timezone as _tz
+from datetime import datetime as _dt, timezone as _tz, timedelta as _td
 
 def _to_json(val):
     """将值转为 JSON 字符串（用于 JSONB 列），None 原样返回"""
@@ -2748,17 +2770,34 @@ def _to_json(val):
     return _json.dumps(val, ensure_ascii=False)
 
 
+# 东八区固定偏移（中国无夏令时，固定偏移即正确；slim 镜像无 tzdata，禁用 ZoneInfo）。
+TZ_CST = _tz(_td(hours=8))
+
+
+def _local_tz():
+    """本系统 naive 时间的本地时区，当前恒为东八区。
+    这是"用户可配置时区"功能的预留钩子（届时按用户配置返回时区），勿当作多余抽象删除。"""
+    return TZ_CST
+
+
 def _parse_time(val):
-    """将前端的 ISO 时间字符串转为 datetime 对象"""
+    """将前端的 ISO 时间字符串转为 datetime 对象。
+
+    naive（无时区）时间在本系统语义统一为"用户墙上时钟（东八区）"：模型经 MCP 传入的
+    裸时间即此类；前端导入串恒带 Z（JS toISOString）走 aware 分支、不受影响。
+    naive 一律本地化到东八区再入库，避免 asyncpg 按 UTC 编码导致触发晚 8 小时。"""
     if val is None:
         return _dt.now(_tz.utc)
     if isinstance(val, _dt):
-        return val
+        # datetime 直传：naive 按东八区解释，aware 原样
+        return val if val.tzinfo is not None else val.replace(tzinfo=_local_tz())
     try:
         # ISO 格式 "2026-03-28T10:30:00.000Z"
-        return _dt.fromisoformat(val.replace("Z", "+00:00"))
+        parsed = _dt.fromisoformat(val.replace("Z", "+00:00"))
     except (ValueError, AttributeError):
         return _dt.now(_tz.utc)
+    # 字符串解析出的 naive 同样按东八区解释
+    return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=_local_tz())
 
 
 def _safe_int(val):
@@ -3695,12 +3734,16 @@ async def invalidate_memory(memory_id: int, reason: str = ""):
     pool = await get_pool()
     async with pool.acquire() as conn:
         result = await conn.execute(
-            "UPDATE memories SET valid_until = NOW() WHERE id = $1 AND valid_until IS NULL",
+            "UPDATE memories SET valid_until = NOW() WHERE id = $1 AND (valid_until IS NULL OR valid_until > NOW())",
             memory_id,
         )
     reason_tag = f" | {reason}" if reason else ""
-    print(f"⏰ 记忆 #{memory_id} 已标记失效{reason_tag}")
-    return result == "UPDATE 1"
+    ok = result == "UPDATE 1"
+    if ok:
+        print(f"⏰ 记忆 #{memory_id} 已标记失效{reason_tag}")
+    else:
+        print(f"⚠️ 记忆 #{memory_id} 标记失效未命中（已失效或不存在）{reason_tag}")
+    return ok
 
 
 async def create_memory_edge(from_id: int, from_type: str, to_id: int, to_type: str, edge_type: str, reason: str = "", created_by: str = "system", validate_ids: bool = False):

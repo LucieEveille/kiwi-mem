@@ -140,22 +140,9 @@ Open `/admin` → click 🧠 Memories in the sidebar → **+ Add Memory** in the
 
 Best for a small number of memories. What you see is what you get.
 
-**Option 2: Bulk import (for lots of memories)**
+**Option 2: Bulk import**
 
-```bash
-# 1. Copy the example file
-cp seed_memories_example.py seed_memories.py
-
-# 2. Edit seed_memories.py — add your memories in this format:
-#    {"content": "User's favorite color is blue", "importance": 7}
-#    importance scale: 9-10 core identity / 7-8 important preferences / 5-6 interesting details
-
-# 3. Open your backend URL /import/seed-memories in a browser
-#    e.g. http://localhost:8080/import/seed-memories
-#    Duplicates are automatically skipped
-```
-
-Imported memories will appear in the admin panel's memory page.
+Memory import is being rebuilt and will return in a future version in a smarter form.
 
 ---
 
@@ -393,7 +380,6 @@ kiwi-mem/
 ├── web_search.py            # Web search
 ├── admin-panel/index.html   # Web admin panel
 ├── system_prompt.txt        # Default persona
-├── seed_memories_example.py # Seed memories example
 ├── Dockerfile
 ├── docker-compose.yml
 └── LICENSE                  # AGPL-3.0-or-later

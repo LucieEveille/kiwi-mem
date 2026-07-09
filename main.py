@@ -1342,7 +1342,8 @@ async def process_memories_background(session_id: str, user_msg: str, assistant_
             # 处理矛盾：标旧记忆失效 + 创建 supersedes edge
             if contradicted_ids and new_id:
                 for old_id in contradicted_ids:
-                    await invalidate_memory(old_id, reason=f"被新记忆 #{new_id} 替代")
+                    if not await invalidate_memory(old_id, reason=f"被新记忆 #{new_id} 替代"):
+                        print(f"⚠️ 记忆 #{old_id} 失效未命中，仍建 supersedes 边（矛盾计数可能偏高）")
                     await create_memory_edge(
                         new_id, "memory", old_id, "memory", "supersedes",
                         reason="提取时自动检测到信息更新", created_by="extractor"
@@ -2247,6 +2248,8 @@ async def chat_completions(request: Request):
                 tool_map=tool_map,
                 model=model,
                 temperature=body.get("temperature", 0.7),
+                top_p=body.get("top_p"),
+                max_tokens=body.get("max_tokens"),
                 tool_events=tool_events,
                 session_id=session_id,
                 user_message=user_message,
@@ -2490,7 +2493,7 @@ async def _execute_gateway_tool(tool_name: str, arguments: dict, tool_info: dict
     return f"未知的内置工具: {tool_name}", extra
 
 
-async def _stream_with_tools(messages, tools, tool_map, model, temperature, tool_events, session_id, user_message, mem_enabled, api_url=None, api_key=None, project_id=None, prompt_meta=None, api_format="openai", is_regenerate: bool = False, reasoning_effort: str = None, skip_prompt: bool = False):
+async def _stream_with_tools(messages, tools, tool_map, model, temperature, tool_events, session_id, user_message, mem_enabled, api_url=None, api_key=None, project_id=None, prompt_meta=None, api_format="openai", is_regenerate: bool = False, reasoning_effort: str = None, skip_prompt: bool = False, top_p=None, max_tokens=None):
     """
     工具 + 流式模式：tool call 轮次用非流式（需要完整看 tool_calls），
     最终回复直接输出已获得的内容（模拟流式），不再重复请求 LLM。
@@ -2538,6 +2541,11 @@ async def _stream_with_tools(messages, tools, tool_map, model, temperature, tool
             "temperature": temperature,
             "stream": False,
         }
+        # 条目九：透传采样参数（None 时不带该字段，交给上游默认）；top_p=0.0 合法，故用 is not None
+        if top_p is not None:
+            body["top_p"] = top_p
+        if max_tokens is not None:
+            body["max_tokens"] = max_tokens
         # 与转发路径同一套规则：尊重用户思考强度，并对各类供应商分流
         # （OpenRouter/Anthropic 用 reasoning 字段；其它 OpenAI 兼容供应商透传合法 effort）。
         _apply_reasoning(body, _is_openrouter, _is_anthropic_fmt, reasoning_effort, skip_prompt)
@@ -3180,7 +3188,9 @@ async def debug_memories(
                 memories.sort(key=lambda m: m.get("access_count", 0) or 0, reverse=True)
             memories = memories[offset:offset + limit]
 
-        total = await get_all_memories_count()
+        # 总数复用与列表相同的 WHERE（含类型排除、valid_until、分类过滤），作分页分母
+        from database import get_memories_count
+        total = await get_memories_count(category_id=category_id)
 
         return {
             "total_memories": total,
@@ -3392,9 +3402,9 @@ async def add_memory_manual(request: Request):
         if not content:
             return JSONResponse(status_code=400, content={"error": "content 不能为空"})
         
-        await save_memory(content=content, importance=importance, source_session="manual", title=title, category_id=category_id, source="user_explicit")
+        new_id = await save_memory(content=content, importance=importance, source_session="manual", title=title, category_id=category_id, source="user_explicit")
         total = await get_all_memories_count()
-        return {"status": "added", "content": content, "importance": importance, "title": title, "total": total}
+        return {"status": "added", "id": new_id, "content": content, "importance": importance, "title": title, "total": total}
     except Exception as e:
         return {"error": str(e)}
 
@@ -3422,40 +3432,6 @@ async def toggle_memory_permanent(memory_id: int):
             status = "locked" if new_val else "unlocked"
             print(f"🔒 记忆 #{memory_id} {'锁定' if new_val else '解锁'}")
             return {"status": status, "memory_id": memory_id, "is_permanent": new_val}
-    except Exception as e:
-        return {"error": str(e)}
-
-
-@app.get("/import/seed-memories")
-async def import_seed_memories():
-    """一次性导入预置记忆（从 seed_memories.py）"""
-    try:
-        from seed_memories import run_seed_import
-        result = await run_seed_import()
-        return result
-    except ImportError:
-        return {"error": "未找到 seed_memories.py，请参考 seed_memories_example.py 创建"}
-    except Exception as e:
-        return {"error": str(e)}
-
-
-@app.delete("/import/seed-memories")
-async def clear_seed_memories():
-    """清除所有种子记忆（source_session = 'seed-import'）"""
-    if not await get_memory_enabled():
-        return {"error": "记忆系统未启用"}
-    try:
-        pool = await get_pool()
-        async with pool.acquire() as conn:
-            result = await conn.execute(
-                "DELETE FROM memories WHERE source_session = 'seed-import'"
-            )
-        try:
-            deleted = int(result.split(" ")[-1]) if result else 0
-        except (ValueError, IndexError):
-            deleted = 0
-        total = await get_all_memories_count()
-        return {"status": "cleared", "deleted": deleted, "remaining": total}
     except Exception as e:
         return {"error": str(e)}
 

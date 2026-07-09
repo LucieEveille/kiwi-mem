@@ -181,13 +181,15 @@ def from_anthropic_response(anthropic_data: dict, model: str = "") -> dict:
     au = anthropic_data.get("usage", {})
     input_tokens = au.get("input_tokens", 0)
     output_tokens = au.get("output_tokens", 0)
-    usage = {
-        "prompt_tokens": input_tokens,
-        "completion_tokens": output_tokens,
-        "total_tokens": input_tokens + output_tokens,
-    }
     cache_creation = au.get("cache_creation_input_tokens", 0)
     cache_read = au.get("cache_read_input_tokens", 0)
+    # Anthropic 的 input_tokens 不含缓存读/写 token（三者互斥），相加才是真实 prompt 量
+    prompt_tokens = input_tokens + cache_creation + cache_read
+    usage = {
+        "prompt_tokens": prompt_tokens,
+        "completion_tokens": output_tokens,
+        "total_tokens": prompt_tokens + output_tokens,
+    }
     if cache_creation or cache_read:
         usage["prompt_tokens_details"] = {
             "cached_tokens": cache_read,
@@ -372,10 +374,12 @@ async def anthropic_stream_to_openai(response, model: str = "") -> AsyncGenerato
                 finish_map = {"end_turn": "stop", "max_tokens": "length",
                               "tool_use": "tool_calls", "stop_sequence": "stop"}
 
+                # Anthropic 的 input_tokens 不含缓存读/写 token（三者互斥），相加才是真实 prompt 量
+                prompt_tokens = input_tokens + cache_creation + cache_read
                 usage = {
-                    "prompt_tokens": input_tokens,
+                    "prompt_tokens": prompt_tokens,
                     "completion_tokens": output_tokens,
-                    "total_tokens": input_tokens + output_tokens,
+                    "total_tokens": prompt_tokens + output_tokens,
                 }
                 if cache_creation or cache_read:
                     usage["prompt_tokens_details"] = {

@@ -557,7 +557,7 @@ async def get_user_profile() -> str:
             resp = await client.get(f"{GATEWAY_BASE}/admin/config")
             data = resp.json()
 
-        profile = data.get("user_profile", {}).get("value", "")
+        profile = data.get("config", {}).get("user_profile", {}).get("value", "")
         if not profile:
             return "暂无用户画像。"
 
