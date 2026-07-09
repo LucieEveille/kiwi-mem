@@ -287,22 +287,9 @@ https://你的域名/admin
 
 适合少量记忆，所见即所得。
 
-**方式二：批量导入（记忆多的时候用）**
+**方式二：批量导入**
 
-```bash
-# 1. 复制示例文件
-cp seed_memories_example.py seed_memories.py
-
-# 2. 编辑 seed_memories.py，按格式填入你的记忆
-#    每条格式：{"content": "记忆内容", "importance": 7}
-#    importance 评分：9-10 核心信息 / 7-8 重要偏好 / 5-6 有趣细节
-
-# 3. 浏览器访问后端地址 /import/seed-memories
-#    比如 http://localhost:8080/import/seed-memories
-#    自动导入，重复的会跳过
-```
-
-导入完成后在管理面板的记忆页面就能看到了。
+记忆导入功能重构中，将在后续版本以更智能的方式提供。
 
 ---
 
@@ -540,7 +527,6 @@ kiwi-mem/
 ├── web_search.py            # 联网搜索
 ├── admin-panel/index.html   # Web 管理面板
 ├── system_prompt.txt        # 默认人设
-├── seed_memories_example.py # 预置记忆示例
 ├── Dockerfile
 ├── docker-compose.yml
 └── LICENSE                  # AGPL-3.0-or-later

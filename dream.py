@@ -361,7 +361,8 @@ async def run_dream(trigger_type: str = "manual", model_override: str = None):
                                     finished_at=datetime.now(TZ_CST),
                                     dream_narrative="取消于模型调用前")
             yield {"type": "complete", "data": {"dream_id": dream_id, "interrupted": True}}
-            await mark_memories_dreamed(processed_memory_ids)
+            # 条目五：取消时不标记 dreamed——processed_memory_ids 在模型调用前即为全部未处理碎片，
+            # 无法区分已消化/仅收集；标了会跳过整合直奔清理删除。宁可下次重复消化，不可跳过。
             return
 
         # v5.4：动态解析供应商端点
@@ -395,7 +396,7 @@ async def run_dream(trigger_type: str = "manual", model_override: str = None):
                                             finished_at=datetime.now(TZ_CST),
                                             dream_narrative="取消于模型调用后")
                     yield {"type": "complete", "data": {"dream_id": dream_id, "interrupted": True}}
-                    await mark_memories_dreamed(processed_memory_ids)
+                    # 条目五：取消时不标记 dreamed（理由同调用前分支）
                     return
 
                 if response.status_code != 200:
@@ -427,8 +428,8 @@ async def run_dream(trigger_type: str = "manual", model_override: str = None):
                                         dream_narrative=full_narrative, **stats)
                 yield {"type": "narrative", "data": "嗯……？怎么了……"}
                 yield {"type": "complete", "data": {"dream_id": dream_id, "interrupted": True, **stats}}
-                # 标记已处理的碎片
-                await mark_memories_dreamed(processed_memory_ids)
+                # 条目五：取消时不标记 dreamed（理由同调用前分支）——已被模型 merge/delete 的碎片
+                # memory_type 已翻转、会被 get_unprocessed_memories 过滤，未触碰的回到未处理池下次重做。
                 return
 
             line = line.strip()
@@ -667,7 +668,8 @@ async def _execute_dream_action(action: dict, dream_id: int, stats: dict) -> dic
 
                 # v5.3：supersedes/contradicts 时自动标旧记忆失效
                 if edge_type in ("supersedes", "contradicts") and to_type == "memory":
-                    await invalidate_memory(to_id, reason=f"Dream 标记 {edge_type} by #{from_id}")
+                    if not await invalidate_memory(to_id, reason=f"Dream 标记 {edge_type} by #{from_id}"):
+                        print(f"⚠️ Dream 标记记忆 #{to_id} 失效未命中（{edge_type}）")
 
                 result["from_id"] = from_id
                 result["to_id"] = to_id

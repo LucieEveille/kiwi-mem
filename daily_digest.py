@@ -1235,14 +1235,33 @@ async def check_and_generate_summaries():
     """
     v5.5 扫描式补生成——每天运行时检查有没有应该存在但还没生成的总结。
     即使错过了特定日期（如周一、1号），也会在后续运行时补上。
-    回看范围：周4周、月3个月、季度2个季度、年1年。
+    回看范围：日7天、周4周、月3个月、季度2个季度、年1年。
     """
-    from database import get_calendar_range, get_calendar_page
+    from database import get_calendar_range, get_calendar_page, get_chat_messages_for_date
     from datetime import date as date_cls
     import calendar as cal_mod
 
     now = datetime.now(TZ_CST)
     today = now.date()
+
+    # ── 日页面：检查最近7天（不含今天）──
+    # 日页面由当天聊天原文生成、素材长存；缺页还会堵住碎片清理（清理以"当日已有日页面"为前提）。
+    # 放在周段之前：本次补出的日页面能立即喂给随后同一次运行的周补生成。
+    for days_ago in range(1, 8):
+        day = today - timedelta(days=days_ago)
+        existing_day = await get_calendar_page(day.isoformat(), "day")
+        if existing_day:
+            continue
+        # 有当天聊天记录才值得补（get_chat_messages_for_date 排除项目对话）
+        day_msgs = await get_chat_messages_for_date(day.isoformat())
+        if not day_msgs:
+            continue
+        print(f"📅 发现缺失的日页面：{day}，补生成中…")
+        try:
+            result = await generate_day_page(day.isoformat())
+            print(f"📅 补生成日页面结果：{result}")
+        except Exception as e:
+            print(f"⚠️ 补生成日页面失败：{e}")
 
     # ── 周总结：检查最近4周 ──
     days_since_monday = today.weekday()  # 0=周一
