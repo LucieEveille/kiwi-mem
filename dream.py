@@ -698,8 +698,12 @@ async def get_drowsy_prompt() -> str:
     2. 距上次Dream超过7天
     3. 有3天以上的日页面未被Dream处理
     """
-    from config import get_config
+    from config import get_config, get_config_bool
     from database import get_unprocessed_memories, get_pool
+
+    # 梦境系统总开关：关闭时不再注入犯困提示（手动触发路径不走这里，不受影响）
+    if not await get_config_bool("dream_enabled", fallback=True):
+        return ""
 
     last_dream = await get_config("last_dream_date")
     drowsy_threshold = int(await get_config("dream_drowsy_threshold") or "30")
@@ -782,8 +786,12 @@ async def auto_dream_check():
     检查是否需要自动触发 Dream（24小时无活动）
     由定时任务每小时调用一次
     """
-    from config import get_config
+    from config import get_config, get_config_bool
     from database import get_pool, get_unprocessed_memories
+
+    # 梦境系统总开关：只拦自动触发；手动触发（"去睡吧"指令 / 前端按钮 / /dream 端点）无视此开关
+    if not await get_config_bool("dream_enabled", fallback=True):
+        return False
 
     # 跳过 0:00-1:00 时段，避免与 daily_digest_scheduler（0:05）竞争
     now_hour = datetime.now(TZ_CST).hour

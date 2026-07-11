@@ -58,6 +58,7 @@ export const CONFIG_META = {
   scene_inject_min_sim:   { label:'场景注入相似度', type:'float', def:'0.5', input:'float', desc:'场景与当前对话的最低相似度。' },
 
   // —— Dream ——
+  dream_enabled:          { label:'梦境系统', type:'bool', def:'true', input:'bool', desc:'AI 通过做梦融合记忆场景、生成前瞻。关闭后不再自动触发梦境（犯困提示一并静默）；「状态」页的手动开始 Dream 不受影响。' },
   dream_model:            { label:'Dream 模型', type:'text', def:'', input:'model', desc:'Dream 记忆整合用的模型。' },
   prompt_dream:           { label:'Dream 提示词', type:'text', def:'', input:'prompt', hasDefault:true, desc:'指导 Dream 如何清理、融合碎片并推断前瞻。留空用内置默认。' },
   dream_drowsy_threshold: { label:'犯困碎片阈值', type:'int', def:'30', input:'int', desc:'未处理碎片积累超过此数量后，AI 开始表现犯困、提示该睡了。' },
@@ -144,7 +145,7 @@ export const CONFIG_PAGES = {
   },
   dream: {
     groups: [
-      { title:'Dream 整合', keys:['dream_model','dream_drowsy_threshold','last_dream_date','prompt_dream'] },
+      { title:'Dream 整合', master:'dream_enabled', keys:['dream_model','dream_drowsy_threshold','last_dream_date','prompt_dream'] },
       { title:'🎬 场景注入', desc:'Dream 产出的叙事场景在聊天时自动注入。', master:'scene_inject_enabled', keys:['scene_inject_limit','scene_inject_min_sim'] },
     ],
   },

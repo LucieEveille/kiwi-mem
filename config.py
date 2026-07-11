@@ -51,6 +51,7 @@ CONFIG_SCHEMA = {
     "user_profile":          ("",                        "",     "用户画像",          "text"),
     "prompt_user_profile":   ("",                        "",     "画像更新提示词",    "text"),
     # Dream 记忆整合（v5.1）
+    "dream_enabled":         ("",                        "true", "梦境系统",          "bool"),
     "dream_model":           ("",                        "",     "Dream 模型",        "text"),
     "prompt_dream":          ("",                        "",     "Dream 提示词",      "text"),
     "prompt_daily_digest_page":("",                      "",     "日页面生成提示词",  "text"),
