@@ -21,6 +21,7 @@ export default {
         <b>外部 MCP 模式（mcp_mode）：</b>
         <code>off</code> 全部禁用 · <code>auto</code> 按对话语义自动路由展开 · <code>manual</code> 仅启用你手动选择的服务器。
       </div></div>
+      <div id="reminder-cfg"></div>
       <div id="cfg"></div>
       <div class="section-title mt24">🔌 外部 MCP 服务器</div>
       <p class="card-desc mb12">在这里维护外部 MCP server 列表（比手动改 JSON 友好）。每项含名称、地址、传输方式与开关。保存后会自动清空缓存并刷新外部抽屉。</p>
@@ -33,6 +34,10 @@ export default {
       root.querySelector('#cfg').innerHTML = `<div class="banner banner-warn"><span>⚠️</span><div>加载配置失败：${escHtml(e.message)}</div></div>`;
       this.cfg = {};
     }
+
+    const reminderCfgEl = root.querySelector('#reminder-cfg');
+    reminderCfgEl.innerHTML = renderConfigPage('reminderTools', this.cfg);
+    wireConfig(reminderCfgEl, this.cfg);
 
     const cfgEl = root.querySelector('#cfg');
     cfgEl.innerHTML = renderConfigPage('tools', this.cfg);

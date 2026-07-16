@@ -750,7 +750,16 @@ def _limit_external_matches(external_candidates, keyword_hits, scores, max_open)
     return kept
 
 
-async def route_tools(user_message, session_id, user_embedding=None, mem_enabled=True, search_enabled=False, project_id=None, mcp_mode="auto"):
+async def route_tools(
+    user_message,
+    session_id,
+    user_embedding=None,
+    mem_enabled=True,
+    search_enabled=False,
+    project_id=None,
+    mcp_mode="auto",
+    reminder_tools_enabled=True,
+):
     from database import cosine_similarity
     try:
         from config import get_config_float, get_config_int
@@ -786,7 +795,6 @@ async def route_tools(user_message, session_id, user_embedding=None, mem_enabled
         _cleanup_sessions()
 
     session = _get_session(session_id)
-    session["mcp_mode"] = mode
     category_order = _category_order_map(categories_snapshot)
     matched_categories = set()
     pinned_external = await _get_pinned_external_categories(external_categories_snapshot) if external_pinned else set()
@@ -842,6 +850,17 @@ async def route_tools(user_message, session_id, user_embedding=None, mem_enabled
         matched_categories.discard("memory")
         matched_categories.discard("conversation")
         _remove_expanded(session, {"memory", "conversation"})
+    if not reminder_tools_enabled:
+        matched_categories.discard("reminder")
+        _remove_expanded(session, {"reminder"})
+
+    disabled = set()
+    if not search_enabled:
+        disabled.add("search")
+    if not mem_enabled:
+        disabled.update({"memory", "conversation"})
+    if not reminder_tools_enabled:
+        disabled.add("reminder")
 
     _append_expanded_many(session, _sort_category_ids(matched_categories, category_order))
     active_categories = list(_get_expanded(session))
@@ -854,7 +873,13 @@ async def route_tools(user_message, session_id, user_embedding=None, mem_enabled
     openai_tools = list(meta_tools_snapshot)
     tool_map = {}
     for mt in meta_tools_snapshot:
-        tool_map[mt["function"]["name"]] = {"type": "meta", "handler": "drawer_meta"}
+        tool_map[mt["function"]["name"]] = {
+            "type": "meta",
+            "handler": "drawer_meta",
+            "disabled_categories": set(disabled),
+            "mcp_mode": mode,
+            "pinned_external": set(pinned_external),
+        }
 
     for cat_id in active_categories:
         cat = categories_snapshot.get(cat_id)
@@ -939,21 +964,38 @@ def _infer_handler(tool_name):
 # 11. Meta-tool Execution
 # ============================================================
 
-async def handle_meta_tool(tool_name, args, session_id):
+async def handle_meta_tool(
+    tool_name,
+    args,
+    session_id,
+    disabled_categories=None,
+    mcp_mode=None,
+    pinned_external=None,
+    approved_categories=None,
+):
     session = _get_session(session_id)
-    mode = str(session.get("mcp_mode") or "auto").strip().lower()
+    disabled = set(disabled_categories or ())
+    mode = str(mcp_mode or "auto").strip().lower()
     if mode not in ("off", "auto", "manual"):
         mode = "auto"
-    pinned_external = await _get_pinned_external_categories() if mode == "manual" else set()
+    pinned = set(pinned_external or ())
+
+    def _category_visible(cat_id, cat):
+        if cat_id in disabled:
+            return False
+        if cat.get("external"):
+            if mode == "off":
+                return False
+            if mode == "manual" and cat_id not in pinned:
+                return False
+        return True
+
     if tool_name == "list_tool_categories":
         cats = []
         for cat_id, cat in CATEGORIES.items():
+            if not _category_visible(cat_id, cat):
+                continue
             is_external = bool(cat.get("external"))
-            if is_external:
-                if mode == "off":
-                    continue
-                if mode == "manual" and cat_id not in pinned_external:
-                    continue
             cats.append({
                 "id": cat_id,
                 "label": cat.get("label", cat_id),
@@ -968,20 +1010,20 @@ async def handle_meta_tool(tool_name, args, session_id):
         if category not in CATEGORIES:
             visible_categories = []
             for cat_id, cat in CATEGORIES.items():
-                if cat.get("external"):
-                    if mode == "off":
-                        continue
-                    if mode == "manual" and cat_id not in pinned_external:
-                        continue
-                visible_categories.append(cat_id)
+                if _category_visible(cat_id, cat):
+                    visible_categories.append(cat_id)
             return f"未知类别：{category}。可用：{', '.join(visible_categories)}"
         cat = CATEGORIES[category]
+        if category in disabled:
+            return "该类工具当前已被用户设置关闭，无法展开"
         if cat.get("external"):
             if mode == "off":
                 return "外部 MCP 工具当前已被用户禁用，无法展开"
-            if mode == "manual" and category not in pinned_external:
+            if mode == "manual" and category not in pinned:
                 return "该外部工具未在手动列表中启用"
         _append_expanded(session, category)
+        if approved_categories is not None:
+            approved_categories.add(category)
         session["rounds_no_use"] = 0
         names = ", ".join(cat["tool_names"])
         print(f"\U0001f5c3\ufe0f  手动展开：{category}（{names}）")

@@ -116,6 +116,7 @@ CONFIG_SCHEMA = {
     # v6.3：工具抽屉（向量路由按需展开工具）。默认关闭——开启后内部工具走向量路由，
     #       外部 mcp_servers 仍走原路径并合并，对模型表现为一组完整工具
     "tool_drawer_enabled":   ("",                        "false","工具抽屉开关",      "bool"),
+    "reminder_tools_enabled":("",                        "true", "提醒工具",          "bool"),
 }
 
 

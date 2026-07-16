@@ -99,7 +99,7 @@ export const CONFIG_META = {
   mcp_manual_ids:         { label:'手动 MCP 选择', type:'text', def:'', input:'json', desc:'manual 模式下启用的 MCP 服务器 ID 列表（JSON 数组）。' },
   ext_drawer_threshold:   { label:'外部抽屉相似度阈值', type:'float', def:'0.40', input:'float', desc:'外部工具与对话内容的语义相似度门槛，低于此值不展开。' },
   ext_drawer_max_open:    { label:'外部抽屉同开上限', type:'int', def:'3', input:'int', desc:'单次对话最多同时展开几个外部工具抽屉。' },
-  drawer_auto_collapse_enabled:{ label:'抽屉自动收回', type:'bool', def:'false', input:'bool', desc:'开启后，已展开抽屉连续多轮未命中会自动收回。默认关闭以稳定 prompt cache。' },
+  reminder_tools_enabled:{ label:'提醒工具', type:'bool', def:'true', input:'bool', desc:'控制提醒系统的 4 个工具，关闭后传统模式与工具抽屉中均不可见。' },
 
   // —— 联网搜索 ——
   search_engine:          { label:'搜索引擎', type:'text', def:'', input:'engine', desc:'联网搜索使用的引擎。' },
@@ -176,8 +176,13 @@ export const CONFIG_PAGES = {
   tools: {
     master: 'tool_drawer_enabled',
     groups: [
-      { title:'外部 MCP 抽屉', desc:'外部工具按语义相关性自动展开。', keys:['mcp_mode','ext_drawer_threshold','ext_drawer_max_open','drawer_auto_collapse_enabled'] },
+      { title:'外部 MCP 抽屉', desc:'外部工具按语义相关性自动展开。', keys:['mcp_mode','ext_drawer_threshold','ext_drawer_max_open'] },
       { title:'高级（JSON）', keys:['mcp_manual_ids'] },
+    ],
+  },
+  reminderTools: {
+    groups: [
+      { title:'⏰ 提醒工具', desc:'独立于工具抽屉与记忆开关；关闭后两种工具模式都隐藏提醒工具。', keys:['reminder_tools_enabled'] },
     ],
   },
   websearch: {

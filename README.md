@@ -423,6 +423,7 @@ https://你的域名/admin
 | `mcp_servers` | 外部 MCP server JSON 数组（推荐在管理面板配置） | 空 |
 | `mcp_manual_ids` | 手动常驻展开的外部抽屉 ID / 名称 | 空 |
 | `mcp_mode` | 配置来源外部 MCP 模式（`off` / `auto` / `manual`） | `auto` |
+| `reminder_tools_enabled` | 提醒工具全局开关（传统模式与工具抽屉共用） | `true` |
 
 </details>
 

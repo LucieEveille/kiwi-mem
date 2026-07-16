@@ -276,6 +276,7 @@ Memory import is being rebuilt and will return in a future version in a smarter 
 | `mcp_servers` | External MCP server JSON array (recommended via admin panel) | empty |
 | `mcp_manual_ids` | External drawer IDs / names to pin open | empty |
 | `mcp_mode` | Config-source external MCP mode (`off` / `auto` / `manual`) | `auto` |
+| `reminder_tools_enabled` | Global reminder-tools switch shared by classic and drawer modes | `true` |
 
 </details>
 

@@ -1,5 +1,5 @@
 """
-AI Memory Gateway — 带记忆系统的 LLM 转发网关
+Kiwi-Mem — 带记忆系统的 LLM 转发网关
 =============================================
 让你的 AI 拥有长期记忆。
 
@@ -2024,6 +2024,7 @@ async def chat_completions(request: Request):
     openai_tools = []
     tool_map = {}
 
+    reminder_tools_enabled = await get_config_bool("reminder_tools_enabled", fallback=True)
     drawer_enabled = await get_config_bool("tool_drawer_enabled", fallback=False)
 
     if drawer_enabled:
@@ -2047,6 +2048,7 @@ async def chat_completions(request: Request):
                 search_enabled=bool(do_search_auto),
                 project_id=project_id,
                 mcp_mode=mcp_mode,
+                reminder_tools_enabled=reminder_tools_enabled,
             )
             openai_tools.extend(drawer_tools)
             tool_map.update(drawer_map)
@@ -2124,19 +2126,8 @@ async def chat_completions(request: Request):
         tool_map["_gateway_search_conversations"] = {"type": "gateway_builtin", "handler": "search_conversations", "project_id": project_id}
         print(f"🔍 对话搜索工具已注册")
 
-    # 提醒系统工具：仅在消息可能涉及提醒时注册（省 API 调用）
-    _REMINDER_TRIGGER_KEYWORDS = [
-        # 创建提醒
-        "提醒", "闹钟", "定时", "叫我", "别忘了", "不要忘", "记得提醒",
-        "到时候", "之后叫", "之后提醒", "点钟", "点半",
-        "每天", "每周", "每小时", "每隔",
-        # 查看/管理提醒
-        "有什么提醒", "哪些提醒", "设了什么", "取消提醒", "删除提醒",
-        "不用提醒", "提醒列表", "做完了", "回来了", "学完了",
-    ]
-    _need_reminder_tools = any(kw in user_message for kw in _REMINDER_TRIGGER_KEYWORDS)
-
-    if not drawer_enabled and _need_reminder_tools:
+    # 提醒系统工具：配置级常驻，独立于记忆开关。
+    if not drawer_enabled and reminder_tools_enabled:
         _reminder_tools = [
         {
             "type": "function",
@@ -2196,7 +2187,7 @@ async def chat_completions(request: Request):
         openai_tools.extend(_reminder_tools)
         for t in _reminder_tools:
             tool_map[t["function"]["name"]] = {"type": "gateway_builtin", "handler": "reminder"}
-        print(f"⏰ 提醒工具已注册（关键词命中：{user_message[:30]}）")
+        print("⏰ 提醒工具已注册（常驻）")
 
     tools_cache_applied = False
     if cache_on and openai_tools and is_stream:
@@ -2501,6 +2492,12 @@ async def _stream_with_tools(messages, tools, tool_map, model, temperature, tool
     """
     import httpx as _httpx
 
+    _request_meta_context = tool_map.get("_drawer_request_tools", {})
+    if _request_meta_context.get("type") == "meta":
+        _request_disabled_categories = set(_request_meta_context.get("disabled_categories") or ())
+    else:
+        _request_disabled_categories = set()
+
     # Legacy compatibility only: keep old model-emitted return calls inside the
     # drawer meta path, even if an external MCP tried to claim the same name.
     tool_map["_drawer_return_tools"] = {"type": "meta", "handler": "drawer_meta", "legacy": True}
@@ -2726,6 +2723,7 @@ async def _stream_with_tools(messages, tools, tool_map, model, temperature, tool
 
         tool_results = {}   # { call_id: result_text }
         tool_extras = {}    # { call_id: extra_metadata } — 并发安全，每个 call 独立
+        approved_categories = set()  # request-local; never infer from shared session state
 
         # 网关工具（联网搜索等）：各自并发
         async def _run_gw(p):
@@ -2750,7 +2748,16 @@ async def _stream_with_tools(messages, tools, tool_map, model, temperature, tool
         async def _run_meta(p):
             try:
                 from tool_drawer import handle_meta_tool
-                result_text = await handle_meta_tool(p["name"], p["args"], session_id)
+                tool_info = tool_map.get(p["name"], {})
+                result_text = await handle_meta_tool(
+                    p["name"],
+                    p["args"],
+                    session_id,
+                    disabled_categories=tool_info.get("disabled_categories"),
+                    mcp_mode=tool_info.get("mcp_mode"),
+                    pinned_external=tool_info.get("pinned_external"),
+                    approved_categories=approved_categories,
+                )
                 tool_results[p["id"]] = result_text
                 tool_extras[p["id"]] = {}
             except Exception as e:
@@ -2792,15 +2799,6 @@ async def _stream_with_tools(messages, tools, tool_map, model, temperature, tool
                 tool_results.update(r)
             tasks.append(_run_mcp())
 
-        # 工具循环内补入展开抽屉：记录 meta 执行前的 expanded 快照，执行后取差集补工具
-        _expanded_before = []
-        if meta_parsed:
-            try:
-                from tool_drawer import _get_session
-                _expanded_before = list(_get_session(session_id).get("expanded", []))
-            except Exception:
-                _expanded_before = []
-
         # 所有工具并发执行
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
@@ -2809,10 +2807,18 @@ async def _stream_with_tools(messages, tools, tool_map, model, temperature, tool
         # tools/tool_map，让模型「展开 → 同一次回复内下一步就能调用」，不必等下一轮对话。
         if meta_parsed:
             try:
-                from tool_drawer import _get_session, build_tools_for_category
-                _expanded_after = list(_get_session(session_id).get("expanded", []))
-                _before_set = set(_expanded_before)
-                _newly = [_cat for _cat in _expanded_after if _cat not in _before_set]
+                from tool_drawer import build_tools_for_category
+                _newly = []
+                for _meta_call in meta_parsed:
+                    if _meta_call["name"] != "_drawer_request_tools":
+                        continue
+                    _cat = _meta_call["args"].get("category")
+                    if (
+                        _cat in approved_categories
+                        and _cat not in _request_disabled_categories
+                        and _cat not in _newly
+                    ):
+                        _newly.append(_cat)
                 if _newly:
                     _existing = {t["function"]["name"] for t in tools if t.get("function")}
                     for _cat in _newly:
