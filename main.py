@@ -2501,6 +2501,10 @@ async def _stream_with_tools(messages, tools, tool_map, model, temperature, tool
     """
     import httpx as _httpx
 
+    # Legacy compatibility only: keep old model-emitted return calls inside the
+    # drawer meta path, even if an external MCP tried to claim the same name.
+    tool_map["_drawer_return_tools"] = {"type": "meta", "handler": "drawer_meta", "legacy": True}
+
     _api_url = api_url or API_BASE_URL
     _api_key = api_key or API_KEY
 
@@ -2742,7 +2746,7 @@ async def _stream_with_tools(messages, tools, tool_map, model, temperature, tool
                 tool_results[p["id"]] = f"[drawer_error] {p['name']}: {e}"
                 tool_extras[p["id"]] = {}
 
-        # Meta 工具（_drawer_request_tools / _drawer_return_tools）：单独走 handle_meta_tool
+        # Meta 工具（_drawer_request_tools / list_tool_categories）：单独走 handle_meta_tool
         async def _run_meta(p):
             try:
                 from tool_drawer import handle_meta_tool

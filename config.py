@@ -112,7 +112,6 @@ CONFIG_SCHEMA = {
     "reasoning_effort":      ("",                        "off",  "思考强度",          "text"),
     "ext_drawer_threshold":  ("EXT_DRAWER_THRESHOLD",   "0.40", "外部抽屉相似度阈值", "float"),
     "ext_drawer_max_open":   ("EXT_DRAWER_MAX_OPEN",    "3",    "外部抽屉同开上限",   "int"),
-    "drawer_auto_collapse_enabled": ("",                 "false", "抽屉自动收回",     "bool"),
     "theme_preference":      ("",                        "",     "主题偏好",          "text"),
     # v6.3：工具抽屉（向量路由按需展开工具）。默认关闭——开启后内部工具走向量路由，
     #       外部 mcp_servers 仍走原路径并合并，对模型表现为一组完整工具

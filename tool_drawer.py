@@ -109,7 +109,6 @@ def _build_meta_tools():
     cats = list(CATEGORIES.keys()) if CATEGORIES else list(CATEGORY_META.keys())
     return [
         {"type":"function","function":{"name":"_drawer_request_tools","description":"手动请求展开工具类别。可用：" + "/".join(cats),"parameters":{"type":"object","properties":{"category":{"type":"string","enum":cats,"description":"工具类别ID"}},"required":["category"]}}},
-        {"type":"function","function":{"name":"_drawer_return_tools","description":"归还当前展开的工具，释放token空间。","parameters":{"type":"object","properties":{}}}},
         {"type":"function","function":{"name":"list_tool_categories","description":"列出当前可展开的工具抽屉类别，包括外部 MCP 动态类别。","parameters":{"type":"object","properties":{}}}},
     ]
 
@@ -266,7 +265,6 @@ def get_directory_text():
         short = cat["description"].split("。")[0]
         lines.append(f"  - {cat['label']}（{cat_id}）：{short}")
     lines.append("如果自动路由没有展开你需要的工具，调用 _drawer_request_tools(category) 手动请求。")
-    lines.append("用完工具后调用 _drawer_return_tools() 归还。")
     return "\n".join(lines)
 
 # ============================================================
@@ -460,7 +458,9 @@ async def _refresh_external_drawers_impl(force=False):
         from mcp_client import get_tools_for_servers
 
         used_cat_ids = set(CATEGORIES.keys())
-        reserved_tool_names = set(TOOL_SCHEMAS.keys())
+        reserved_tool_names = set(TOOL_SCHEMAS.keys()) | {
+            "_drawer_request_tools", "list_tool_categories", "_drawer_return_tools",
+        }
         used_tool_names = set(TOOL_SCHEMAS.keys())
         registered = 0
 
@@ -656,7 +656,6 @@ def _keyword_match(user_message):
 
 _sessions = {}
 _SESSION_TTL = 7200
-_AUTO_COLLAPSE_ROUNDS = 3
 
 def _normalize_expanded(value):
     if isinstance(value, list):
@@ -754,14 +753,12 @@ def _limit_external_matches(external_candidates, keyword_hits, scores, max_open)
 async def route_tools(user_message, session_id, user_embedding=None, mem_enabled=True, search_enabled=False, project_id=None, mcp_mode="auto"):
     from database import cosine_similarity
     try:
-        from config import get_config_bool, get_config_float, get_config_int
+        from config import get_config_float, get_config_int
         ext_threshold = await get_config_float("ext_drawer_threshold", fallback=0.40)
         ext_max_open = max(0, await get_config_int("ext_drawer_max_open", fallback=3))
-        auto_collapse_enabled = await get_config_bool("drawer_auto_collapse_enabled", fallback=False)
     except Exception:
         ext_threshold = 0.40
         ext_max_open = 3
-        auto_collapse_enabled = False
 
     mode = str(mcp_mode or "auto").strip().lower()
     if mode not in ("off", "auto", "manual"):
@@ -845,16 +842,6 @@ async def route_tools(user_message, session_id, user_embedding=None, mem_enabled
         matched_categories.discard("memory")
         matched_categories.discard("conversation")
         _remove_expanded(session, {"memory", "conversation"})
-
-    # Auto-collapse
-    if auto_collapse_enabled and _get_expanded(session) and not matched_categories:
-        session["rounds_no_use"] += 1
-        if session["rounds_no_use"] >= _AUTO_COLLAPSE_ROUNDS:
-            print(f"\U0001f5c3\ufe0f  抽屉自动收回：{_get_expanded(session)}")
-            _clear_expanded(session)
-            session["rounds_no_use"] = 0
-    else:
-        session["rounds_no_use"] = 0
 
     _append_expanded_many(session, _sort_category_ids(matched_categories, category_order))
     active_categories = list(_get_expanded(session))
@@ -1001,14 +988,7 @@ async def handle_meta_tool(tool_name, args, session_id):
         return f"已展开『{cat['label']}』类工具：{names}。下一步即可直接调用。"
 
     if tool_name == "_drawer_return_tools":
-        expanded = _get_expanded(session)
-        if expanded:
-            returned = ", ".join(CATEGORIES[c]["label"] for c in expanded if c in CATEGORIES)
-            print(f"\U0001f5c3\ufe0f  主动归还：{expanded}")
-            _clear_expanded(session)
-            session["rounds_no_use"] = 0
-            return f"已归还工具：{returned}。"
-        return "当前没有展开的工具。"
+        return "工具抽屉已是常驻模式：本会话展开的工具会一直保持可用，无需归还。"
 
     return f"未知meta-tool：{tool_name}"
 
