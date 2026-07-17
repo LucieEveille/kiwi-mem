@@ -508,7 +508,7 @@ async def test_s4(client: httpx.AsyncClient) -> None:
     missing = 99999998
     response = await client.post(
         "/debug/memories/batch-delete",
-        json={"ids": [unlocked, locked, missing, unlocked]},
+        json={"ids": [unlocked, locked, missing, unlocked, locked]},
     )
     body = response.json()
     require(response.status_code == 200, response.text)

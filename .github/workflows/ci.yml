@@ -64,3 +64,6 @@ jobs:
 
       - name: 运行 S1-S6 永久真库行为守卫
         run: python scripts/test_kiwi_safety_sync.py
+
+      - name: 临时验证重复锁定 ID 去重守卫（交付前移除）
+        run: python scripts/_tmp_duplicate_locked_audit.py
