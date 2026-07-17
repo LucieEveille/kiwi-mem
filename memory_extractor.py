@@ -185,8 +185,7 @@ async def extract_memories(messages: List[Dict[str, str]], existing_memories: Li
             data = parse_background_response(response.json(), use_api_format)
             text = data.get("choices", [{}])[0].get("message", {}).get("content", "")
             
-            # 日志：打印模型原始返回（方便排查）
-            print(f"🔍 记忆提取模型返回（前200字）: {text[:200]}...")
+            print(f"🔍 记忆提取模型返回：{len(text)} 字符，待解析")
 
             # 清理可能的 markdown 格式
             text = text.strip()
