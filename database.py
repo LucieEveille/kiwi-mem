@@ -437,6 +437,10 @@ async def init_tables():
                 interrupted_at_memory_id INTEGER
             );
         """)
+        await conn.execute("""
+            ALTER TABLE dream_logs
+            ADD COLUMN IF NOT EXISTS deleted BOOLEAN NOT NULL DEFAULT FALSE
+        """)
 
         # dream_logs 表扩展 — 新增列自动迁移
         for col_name, col_def in [
@@ -1064,34 +1068,88 @@ async def save_memory(content: str, importance: int = 5, source_session: str = "
             content, importance, source_session, embedding_json, title, category_id, source, emotional_weight, project_id,
         )
     
-    title_tag = f"[{title}] " if title else ""
     emo_tag = f" 🩷emo={emotional_weight}" if emotional_weight > 0 else ""
     proj_tag = f" 📂proj={project_id}" if project_id else ""
-    if embedding:
-        print(f"💎 记忆已存储 #{new_id}（含向量，{len(embedding)}维{emo_tag}{proj_tag}）: {title_tag}{content[:50]}...")
-    else:
-        print(f"📝 记忆已存储 #{new_id}（无向量{emo_tag}{proj_tag}）: {title_tag}{content[:50]}...")
+    category_tag = f" category={category_id}" if category_id is not None else ""
+    vector_tag = f"含向量，{len(embedding)}维" if embedding else "无向量"
+    print(
+        f"💎 记忆已存储 #{new_id}（{vector_tag}，{len(content)}字符"
+        f"{category_tag}{emo_tag}{proj_tag}）"
+    )
     
     return new_id
 
 
-async def delete_memory(memory_id: int) -> bool:
-    """删除单条记忆，返回是否成功"""
+async def delete_memory(memory_id: int, force: bool = False) -> str:
+    """条件删除单条记忆，返回 deleted / protected / not_found。"""
     pool = await get_pool()
     async with pool.acquire() as conn:
-        result = await conn.execute(
-            "DELETE FROM memories WHERE id = $1", memory_id
-        )
-        return result == "DELETE 1"
+        async with conn.transaction():
+            row = await conn.fetchrow(
+                """
+                DELETE FROM memories
+                WHERE id = $1
+                  AND (COALESCE(is_permanent, FALSE) = FALSE OR $2)
+                RETURNING id
+                """,
+                memory_id,
+                force,
+            )
+            if row:
+                return "deleted"
+            exists = await conn.fetchval(
+                "SELECT EXISTS(SELECT 1 FROM memories WHERE id = $1)",
+                memory_id,
+            )
+            return "protected" if exists else "not_found"
+
+
+async def batch_delete_memories_guarded(ids: list, force: bool = False) -> dict:
+    """批量条件删除；返回数据库真实删除数与受保护/不存在的唯一 ID。"""
+    unique_ids = list(dict.fromkeys(ids))
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            rows = await conn.fetch(
+                """
+                DELETE FROM memories
+                WHERE id = ANY($1::int[])
+                  AND (COALESCE(is_permanent, FALSE) = FALSE OR $2)
+                RETURNING id
+                """,
+                unique_ids,
+                force,
+            )
+            deleted_ids = {row["id"] for row in rows}
+            unresolved = [memory_id for memory_id in unique_ids if memory_id not in deleted_ids]
+            existing_ids = set()
+            if unresolved:
+                existing = await conn.fetch(
+                    "SELECT id FROM memories WHERE id = ANY($1::int[])",
+                    unresolved,
+                )
+                existing_ids = {row["id"] for row in existing}
+
+    return {
+        "deleted": len(deleted_ids),
+        "rejected": [memory_id for memory_id in unresolved if memory_id in existing_ids],
+        "not_found": [memory_id for memory_id in unresolved if memory_id not in existing_ids],
+    }
 
 
 async def clear_all_memories() -> int:
-    """清空所有记忆，返回删除的条数"""
+    """清空所有记忆，返回数据库实际删除的行数。"""
     pool = await get_pool()
     async with pool.acquire() as conn:
-        count = await conn.fetchrow("SELECT COUNT(*) as cnt FROM memories")
-        await conn.execute("DELETE FROM memories")
-        return count["cnt"]
+        return await conn.fetchval(
+            """
+            WITH deleted AS (
+                DELETE FROM memories
+                RETURNING 1
+            )
+            SELECT COUNT(*) FROM deleted
+            """
+        )
 
 
 async def update_memory(memory_id: int, content: str = None, importance: int = None, title: str = None, category_id: object = "UNSET") -> bool:
@@ -2521,6 +2579,13 @@ async def set_system_prompt_in_db(content: str) -> bool:
 # 云端同步 — 对话 CRUD（v4.1）
 # ============================================================
 
+def _rowcount_nonzero(status: str) -> bool:
+    """解析 asyncpg 命令标签的末位行数；畸形标签一律按零变更处理。"""
+    try:
+        return int(status.split()[-1]) > 0
+    except (AttributeError, IndexError, TypeError, ValueError):
+        return False
+
 async def sync_get_conversations():
     """获取所有对话（不含消息体，侧边栏列表用）"""
     pool = await get_pool()
@@ -2594,7 +2659,7 @@ async def sync_delete_conversation(conv_id: str):
             await conn.execute(
                 "DELETE FROM compression_summaries WHERE conversation_id = $1", conv_id
             )
-        return "DELETE" in result
+        return _rowcount_nonzero(result)
 
 
 async def sync_upsert_messages(conv_id: str, messages: list):
@@ -2702,7 +2767,7 @@ async def sync_delete_project(proj_id: str):
         result = await conn.execute(
             "DELETE FROM chat_projects WHERE id = $1", proj_id
         )
-        return "DELETE" in result
+        return _rowcount_nonzero(result)
 
 
 # ============================================================
@@ -3118,7 +3183,7 @@ async def delete_calendar_page(date_str: str, page_type: str = "day"):
         result = await conn.execute(
             "DELETE FROM calendar_pages WHERE date = $1 AND type = $2", d, page_type
         )
-    return "DELETE" in result
+    return _rowcount_nonzero(result)
 
 
 async def get_calendar_for_injection(lookback_days: int = 365):
@@ -3131,7 +3196,7 @@ async def get_calendar_for_injection(lookback_days: int = 365):
     from datetime import date as date_cls, timedelta
     import calendar as cal_mod
     pool = await get_pool()
-    today = date_cls.today()
+    today = datetime.now(TZ_CST).date()
     start = today - timedelta(days=lookback_days)
 
     async with pool.acquire() as conn:
@@ -3625,7 +3690,7 @@ async def update_dream_log(dream_id: int, **kwargs):
     if not sets:
         return
     vals.append(dream_id)
-    sql = f"UPDATE dream_logs SET {', '.join(sets)} WHERE id = ${idx}"
+    sql = f"UPDATE dream_logs SET {', '.join(sets)} WHERE id = ${idx} AND NOT deleted"
     async with pool.acquire() as conn:
         await conn.execute(sql, *vals)
 
@@ -3636,16 +3701,16 @@ async def get_dream_status():
     async with pool.acquire() as conn:
         # 只认 4 小时内的 running 状态，超时视为崩溃
         running = await conn.fetchrow(
-            "SELECT * FROM dream_logs WHERE status = 'running' AND started_at > NOW() - INTERVAL '4 hours' ORDER BY started_at DESC LIMIT 1"
+            "SELECT * FROM dream_logs WHERE status = 'running' AND NOT deleted AND started_at > NOW() - INTERVAL '4 hours' ORDER BY started_at DESC LIMIT 1"
         )
         # 自动清理超时的 running 记录
         await conn.execute("""
             UPDATE dream_logs SET status = 'error', finished_at = NOW(),
                 dream_narrative = COALESCE(dream_narrative, '') || '\n[超时自动标记为失败]'
-            WHERE status = 'running' AND started_at <= NOW() - INTERVAL '4 hours'
+            WHERE status = 'running' AND NOT deleted AND started_at <= NOW() - INTERVAL '4 hours'
         """)
         last = await conn.fetchrow(
-            "SELECT * FROM dream_logs WHERE status IN ('completed', 'interrupted') ORDER BY started_at DESC LIMIT 1"
+            "SELECT * FROM dream_logs WHERE status IN ('completed', 'interrupted') AND NOT deleted ORDER BY started_at DESC LIMIT 1"
         )
     return {
         "is_running": running is not None,
@@ -3659,7 +3724,7 @@ async def get_dream_history(limit: int = 10):
     pool = await get_pool()
     async with pool.acquire() as conn:
         rows = await conn.fetch(
-            "SELECT * FROM dream_logs ORDER BY started_at DESC LIMIT $1", limit
+            "SELECT * FROM dream_logs WHERE NOT deleted ORDER BY started_at DESC LIMIT $1", limit
         )
     return [dict(r) for r in rows]
 

@@ -128,6 +128,8 @@ Visit `http://localhost:8080` — if you see `{"status":"running"}`, you're good
 - Point your chat client's API endpoint to `http://localhost:8080/v1`
 - Works with any OpenAI-format frontend: ChatBox, NextChat, SillyTavern, or your own
 
+> 🔓 **kiwi-mem has no built-in authentication.** If you expose it to the public Internet, protect the entire service with Cloudflare Access, reverse-proxy Basic Auth, or an IP allowlist. Pay special attention to `/admin`, `/sync/export` (which may export API keys in the full configuration backup), and `/sync/import-backup` (which restores the full configuration). These endpoints are not authenticated by kiwi-mem itself.
+
 > 💡 80+ parameters can be changed at runtime via the admin panel — no restart needed.
 
 ### Importing existing memories

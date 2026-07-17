@@ -120,6 +120,21 @@ CONFIG_SCHEMA = {
 }
 
 
+# 云端同步只承载用户/助手侧的轻量设置。顺序属于旧客户端契约；
+# 服务行为、模型、提示词与密钥等管理配置不得经 /sync/settings 修改。
+SYNC_SETTING_KEYS = (
+    "user_avatar",
+    "user_nickname",
+    "assistant_avatar",
+    "assistant_settings",
+    "custom_skills",
+    "quick_phrases",
+    "mcp_switches",
+    "theme_preference",
+    "reasoning_effort",
+)
+
+
 # ============================================================
 # 读取配置
 # ============================================================

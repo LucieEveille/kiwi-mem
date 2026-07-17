@@ -23,6 +23,44 @@ jobs:
       - name: 编译检查所有 .py 文件（有语法错误这步就会变红）
         run: python -m compileall -q .
 
-  # 注：开源版不随仓库携带 tests/（见提交 a0968f6「删除测试用文件」），
-  # 故这里不再跑 behavior-tests；语法自检即开源版 CI 的绿勾标准。
-  # 行为测试仍保留在私人后端 gateway 仓库里。
+  behavior-tests:
+    name: 安全同步批行为守卫（PostgreSQL 16）
+    runs-on: ubuntu-latest
+    needs: syntax-check
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      # 脚本只接受本机 disposable PostgreSQL，并会再创建/销毁随机测试数据库。
+      KIWI_TEST_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/postgres
+    steps:
+      - name: 拉取代码
+        uses: actions/checkout@v4
+
+      - name: 准备 Python 3.12（与 Dockerfile 一致）
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: 安装运行依赖
+        run: pip install -r requirements.txt
+
+      - name: 运行既有开源回归脚本
+        run: |
+          python scripts/test_drawer_stability.py
+          python scripts/test_gateway_tool_streaming.py
+
+      - name: 运行 S1-S6 永久真库行为守卫
+        run: python scripts/test_kiwi_safety_sync.py

@@ -29,7 +29,7 @@ from database import (
     init_tables, close_pool, get_pool, save_message, delete_latest_assistant_message, search_memories, save_memory,
     track_memory_recall, touch_permanent_memories, search_scenes,
     get_all_memories_count, get_recent_memories, get_recent_conversation, delete_memory,
-    clear_all_memories, update_memory, check_memory_duplicate,
+    batch_delete_memories_guarded, clear_all_memories, update_memory, check_memory_duplicate,
     migrate_embeddings, backfill_permanent_memory_embeddings, get_embedding_stats,
     # v5.3 时间有效期 + 矛盾检测
     invalidate_memory, create_memory_edge, detect_contradictions,
@@ -45,6 +45,7 @@ from database import (
     create_reminder, get_reminders, update_reminder, delete_reminder, get_due_reminders, fire_reminder,
 )
 from config import (
+    SYNC_SETTING_KEYS,
     get_all_config, set_config, get_config, get_config_int, get_config_bool, get_config_float,
 )
 from memory_extractor import extract_memories
@@ -3229,43 +3230,43 @@ async def debug_memories(
 
 
 @app.delete("/debug/memories/{memory_id}")
-async def delete_single_memory(memory_id: int):
-    """删除单条记忆"""
+async def delete_single_memory(memory_id: int, force: bool = False):
+    """删除单条记忆；锁定记忆默认受保护，显式 force 才放行。"""
     if not await get_memory_enabled():
         return {"error": "记忆系统未启用"}
     
     try:
-        success = await delete_memory(memory_id)
-        if success:
+        status = await delete_memory(memory_id, force=force)
+        if status == "deleted":
             total = await get_all_memories_count()
             return {"status": "deleted", "memory_id": memory_id, "remaining": total}
-        else:
-            return JSONResponse(status_code=404, content={"error": f"记忆 #{memory_id} 不存在"})
+        if status == "protected":
+            return JSONResponse(
+                status_code=403,
+                content={"error": f"记忆 #{memory_id} 已锁定，请先解锁或显式使用 force=true"},
+            )
+        return JSONResponse(status_code=404, content={"error": f"记忆 #{memory_id} 不存在"})
     except Exception as e:
         return {"error": str(e)}
 
 
 @app.post("/debug/memories/batch-delete")
 async def batch_delete_memories(request: Request):
-    """批量删除记忆（一次请求，一条 SQL）"""
+    """批量删除记忆；只有 JSON 布尔 true 可强制删除锁定记忆。"""
     if not await get_memory_enabled():
         return {"error": "记忆系统未启用"}
     try:
         body = await request.json()
         ids = body.get("ids", [])
+        force = body.get("force") is True
         if not ids:
             return {"error": "ids 不能为空"}
-        pool = await get_pool()
-        async with pool.acquire() as conn:
-            result = await conn.execute(
-                "DELETE FROM memories WHERE id = ANY($1::int[])", ids
-            )
-        try:
-            deleted = int(result.split(" ")[-1]) if result else 0
-        except (ValueError, IndexError):
-            deleted = 0
+        result = await batch_delete_memories_guarded(ids, force=force)
         total = await get_all_memories_count()
-        return {"status": "deleted", "deleted": deleted, "remaining": total}
+        response = {"status": "deleted", "remaining": total, **result}
+        if result["rejected"]:
+            response["rejected_reason"] = "锁定记忆需先解锁或显式使用 JSON force=true"
+        return response
     except Exception as e:
         return {"error": str(e)}
 
@@ -3319,12 +3320,26 @@ async def batch_update_memories(request: Request):
 
 
 @app.delete("/debug/memories")
-async def clear_memories():
-    """清空所有记忆"""
+async def clear_memories(request: Request):
+    """清空全部记忆；必须同时通过严格 force 与确认短语双闸。"""
     if not await get_memory_enabled():
         return {"error": "记忆系统未启用"}
     
     try:
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        if not isinstance(body, dict) or not (
+            body.get("force") is True
+            and body.get("confirm") == "DELETE_ALL_MEMORIES"
+        ):
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "error": "清空全部记忆需同时携带 JSON force=true 与 confirm='DELETE_ALL_MEMORIES'"
+                },
+            )
         count = await clear_all_memories()
         return {"status": "cleared", "deleted_count": count}
     except Exception as e:
@@ -4029,17 +4044,32 @@ async def api_get_scenes():
 
 @app.delete("/admin/dream/{dream_id}")
 async def api_delete_dream(dream_id: int):
-    """删除一条 Dream 日志及其关联的场景"""
+    """软删除一条 Dream 日志，并在同一事务内软删除其来源场景。"""
     try:
         from database import get_pool
         pool = await get_pool()
         async with pool.acquire() as conn:
-            # 先删关联的场景
-            await conn.execute("DELETE FROM mem_scenes WHERE created_by_dream_id = $1", dream_id)
-            # 再删 dream 日志本身
-            result = await conn.execute("DELETE FROM dream_logs WHERE id = $1", dream_id)
-        if "DELETE 0" in result:
-            return {"error": f"Dream #{dream_id} 不存在"}
+            async with conn.transaction():
+                row = await conn.fetchrow(
+                    """
+                    UPDATE dream_logs
+                    SET deleted = TRUE
+                    WHERE id = $1 AND NOT deleted
+                    RETURNING id
+                    """,
+                    dream_id,
+                )
+                if not row:
+                    return {"error": f"Dream #{dream_id} 不存在或已删除"}
+                await conn.execute(
+                    """
+                    UPDATE mem_scenes
+                    SET status = 'deleted'
+                    WHERE created_by_dream_id = $1
+                      AND status <> 'deleted'
+                    """,
+                    dream_id,
+                )
         return {"status": "ok", "deleted": dream_id}
     except Exception as e:
         return {"error": str(e)}
@@ -5093,12 +5123,8 @@ async def api_sync_import(request: Request):
 @app.get("/sync/settings")
 async def api_sync_get_settings():
     """获取所有同步配置（头像、昵称、助手设置等）"""
-    sync_keys = [
-        "user_avatar", "user_nickname", "assistant_avatar", "assistant_settings",
-        "custom_skills", "quick_phrases", "mcp_switches", "theme_preference", "reasoning_effort",
-    ]
     result = {}
-    for key in sync_keys:
+    for key in SYNC_SETTING_KEYS:
         val = await get_config(key)
         result[key] = val or ""
     return result
@@ -5111,9 +5137,12 @@ async def api_sync_put_settings(request: Request):
         data = await request.json()
         updated, rejected = [], []
         for key, value in data.items():
+            if key not in SYNC_SETTING_KEYS:
+                rejected.append(key)
+                continue
             ok = await set_config(key, str(value) if value is not None else "")
             (updated if ok else rejected).append(key)
-        # rejected = set_config 拒收的键（不在 CONFIG_SCHEMA / 类型校验失败）。
+        # rejected = 同步白名单拒收，或白名单内键被 set_config 校验拒收。
         # 必须如实回报，否则前端批量同步对"被静默丢弃的设置"毫无察觉
         # （例如网关版本过旧、还没有某个新配置键时，对应设置会一直存不进却无任何提示）。
         if rejected:
@@ -5161,10 +5190,8 @@ async def api_sync_export():
             config_flat[k] = v.get("value", "") if isinstance(v, dict) else v
 
         # 同步设置
-        sync_keys = ["user_avatar", "user_nickname", "assistant_avatar", "assistant_settings",
-                      "custom_skills", "quick_phrases", "mcp_switches", "theme_preference", "reasoning_effort"]
         settings = {}
-        for key in sync_keys:
+        for key in SYNC_SETTING_KEYS:
             val = await get_config(key)
             settings[key] = val or ""
 
@@ -5305,9 +5332,7 @@ async def api_sync_reset(request: Request):
             await conn.execute("DELETE FROM compression_summaries")
 
             # 清除同步设置
-            sync_keys = ["user_avatar", "user_nickname", "assistant_avatar", "assistant_settings",
-                          "custom_skills", "quick_phrases", "mcp_switches", "theme_preference", "reasoning_effort"]
-            for key in sync_keys:
+            for key in SYNC_SETTING_KEYS:
                 await conn.execute("DELETE FROM gateway_config WHERE key = $1", key)
 
         print("⚠️ 数据重置完成")
