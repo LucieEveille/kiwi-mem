@@ -34,22 +34,38 @@ MUTATIONS = (
     Mutation(
         "M-S1 settings whitelist short-circuit",
         "main.py",
-        """            if key not in SYNC_SETTING_KEYS:\n+                rejected.append(key)\n+                continue\n+""",
-        """            if False and key not in SYNC_SETTING_KEYS:\n+                rejected.append(key)\n+                continue\n+""",
+        """            if key not in SYNC_SETTING_KEYS:
+                rejected.append(key)
+                continue
+""",
+        """            if False and key not in SYNC_SETTING_KEYS:
+                rejected.append(key)
+                continue
+""",
         "wrong updated set",
     ),
     Mutation(
         "M-S2a memory title/content log",
         "database.py",
-        """    return new_id\n+\n+\n+async def delete_memory""",
-        """    print(content, title)\n+    return new_id\n+\n+\n+async def delete_memory""",
+        """    return new_id
+
+
+async def delete_memory""",
+        """    print(content, title)
+    return new_id
+
+
+async def delete_memory""",
         "memory log leaked content",
     ),
     Mutation(
         "M-S2b extraction text[:200] log",
         "memory_extractor.py",
-        """            text = text.strip()\n+            if text.startswith(\"```json\")""",
-        """            print(text[:200])\n+            text = text.strip()\n+            if text.startswith(\"```json\")""",
+        """            text = text.strip()
+            if text.startswith("```json")""",
+        """            print(text[:200])
+            text = text.strip()
+            if text.startswith("```json")""",
         "raw extraction response leaked",
     ),
     Mutation(
@@ -77,22 +93,36 @@ MUTATIONS = (
     Mutation(
         "M-S4c remove clear confirmation gate",
         "main.py",
-        """body.get(\"force\") is True\n+            and body.get(\"confirm\") == \"DELETE_ALL_MEMORIES\"""",
-        """body.get(\"force\") is True""",
+        '''body.get("force") is True
+            and body.get("confirm") == "DELETE_ALL_MEMORIES"''',
+        'body.get("force") is True',
         "invalid clear gate passed",
     ),
     Mutation(
         "M-S5a bare DELETE substring helper",
         "database.py",
-        """    try:\n+        return int(status.split()[-1]) > 0\n+    except (AttributeError, IndexError, TypeError, ValueError):\n+        return False\n+""",
-        """    return \"DELETE\" in status if status is not None else False\n+""",
+        """    try:
+        return int(status.split()[-1]) > 0
+    except (AttributeError, IndexError, TypeError, ValueError):
+        return False
+""",
+        """    return "DELETE" in status if status is not None else False
+""",
         "rowcount mismatch",
     ),
     Mutation(
         "M-S5b gateway malformed-tag helper",
         "database.py",
-        """    try:\n+        return int(status.split()[-1]) > 0\n+    except (AttributeError, IndexError, TypeError, ValueError):\n+        return False\n+""",
-        """    try:\n+        return status.split()[-1] != \"0\"\n+    except (AttributeError, IndexError, TypeError, ValueError):\n+        return False\n+""",
+        """    try:
+        return int(status.split()[-1]) > 0
+    except (AttributeError, IndexError, TypeError, ValueError):
+        return False
+""",
+        """    try:
+        return status.split()[-1] != "0"
+    except (AttributeError, IndexError, TypeError, ValueError):
+        return False
+""",
         "DELETE nope",
     ),
     Mutation(
@@ -105,8 +135,15 @@ MUTATIONS = (
     Mutation(
         "M-S6a hard-delete Dream log",
         "main.py",
-        """                    UPDATE dream_logs\n+                    SET deleted = TRUE\n+                    WHERE id = $1 AND NOT deleted\n+                    RETURNING id\n+""",
-        """                    DELETE FROM dream_logs\n+                    WHERE id = $1 AND NOT deleted\n+                    RETURNING id\n+""",
+        """                    UPDATE dream_logs
+                    SET deleted = TRUE
+                    WHERE id = $1 AND NOT deleted
+                    RETURNING id
+""",
+        """                    DELETE FROM dream_logs
+                    WHERE id = $1 AND NOT deleted
+                    RETURNING id
+""",
         "in test_s6",
     ),
     Mutation(
