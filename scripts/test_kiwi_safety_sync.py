@@ -592,8 +592,8 @@ async def test_s5(client: httpx.AsyncClient) -> None:
         "INSERT 0 1": True,
         None: False,
         "": False,
-        "DELETE": False,
         "DELETE nope": False,
+        "DELETE": False,
         "DELETE -1": False,
     }
     for status, expected in truth_table.items():
