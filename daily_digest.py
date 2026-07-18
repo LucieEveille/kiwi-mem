@@ -1476,7 +1476,7 @@ async def generate_week_summary(start: str, end: str, model_override: str = None
 
     use_model = model_override or await get_config("default_digest_model") or await get_config("default_compress_model") or DIGEST_MODEL
 
-    result_json = await _call_model_for_json(prompt, f"请生成 {start} 至 {end} 的周总结。", use_model, max_tokens=2000)
+    result_json = await _call_model_for_json(prompt, f"请生成 {start} 至 {end} 的周总结。", use_model, max_tokens=6000)
     if not result_json:
         return {"status": "error", "error": "model returned invalid format"}
 
@@ -1562,7 +1562,7 @@ async def generate_month_summary(start: str, end: str, month_str: str, model_ove
 
     use_model = model_override or await get_config("default_digest_model") or await get_config("default_compress_model") or DIGEST_MODEL
 
-    result_json = await _call_model_for_json(prompt, f"请生成 {month_str} 的月总结。", use_model, max_tokens=2000)
+    result_json = await _call_model_for_json(prompt, f"请生成 {month_str} 的月总结。", use_model, max_tokens=3500)
     if not result_json:
         return {"status": "error", "error": "model returned invalid format"}
 
@@ -1667,7 +1667,7 @@ async def generate_period_summary(start: str, end: str, period_type: str,
 
     use_model = model_override or await get_config("default_digest_model") or await get_config("default_compress_model") or DIGEST_MODEL
 
-    result_json = await _call_model_for_json(prompt, f"请生成{label}的{period_type}总结。", use_model, max_tokens=2000)
+    result_json = await _call_model_for_json(prompt, f"请生成{label}的{period_type}总结。", use_model, max_tokens=2500)
     if not result_json:
         return {"status": "error", "error": "model returned invalid format"}
 
@@ -1720,7 +1720,18 @@ async def _call_model_for_json(prompt: str, user_msg: str, model: str, max_token
                 return None
 
             data = parse_background_response(response.json(), use_api_format)
-            text = data.get("choices", [{}])[0].get("message", {}).get("content", "")
+            choices = data.get("choices") or [{}]
+            choice = choices[0] if isinstance(choices[0], dict) else {}
+            message = choice.get("message") or {}
+            text = message.get("content") or ""
+            if choice.get("finish_reason") == "length":
+                usage = data.get("usage") or {}
+                print(
+                    "   ⚠️ 模型输出达到 token 上限："
+                    f"finish_reason=length completion_tokens={usage.get('completion_tokens')} "
+                    f"text_chars={len(text)} max_tokens={max_tokens}"
+                )
+                return None
             text = text.strip()
             if text.startswith("```json"):
                 text = text[7:]
