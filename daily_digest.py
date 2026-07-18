@@ -1150,7 +1150,7 @@ async def _generate_day_page_impl(target_date: str = None, model_override: str =
             use_api_key, use_api_format, _body,
             referer="https://midsummer-gateway.local", title="Day Page Generation",
         )
-        async with httpx.AsyncClient(timeout=120) as client:
+        async with httpx.AsyncClient(timeout=400) as client:
             response = await client.post(use_api_url, headers=_headers, json=_send_body)
 
             if response.status_code != 200:
@@ -1713,7 +1713,7 @@ async def _call_model_for_json(prompt: str, user_msg: str, model: str, max_token
             use_api_key, use_api_format, _body,
             referer="https://midsummer-gateway.local", title="Memory Summary",
         )
-        async with httpx.AsyncClient(timeout=120) as client:
+        async with httpx.AsyncClient(timeout=400) as client:
             response = await client.post(use_api_url, headers=_headers, json=_send_body)
             if response.status_code != 200:
                 print(f"   ⚠️ 模型请求失败: {response.status_code}")
