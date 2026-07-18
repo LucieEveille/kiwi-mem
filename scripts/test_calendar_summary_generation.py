@@ -46,7 +46,7 @@ class _FakeResponse:
 def _fake_async_client(payload, request_bodies):
     class FakeAsyncClient:
         def __init__(self, *args, **kwargs):
-            pass
+            assert kwargs.get("timeout") == 400
 
         async def __aenter__(self):
             return self
