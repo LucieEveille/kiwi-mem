@@ -5,6 +5,7 @@ upstream HTTP client used inside the gateway. It never opens a database or
 network connection.
 """
 
+import ast
 import asyncio
 import contextvars
 import copy
@@ -12,6 +13,7 @@ import json
 import os
 import sys
 from collections import defaultdict
+from pathlib import Path
 from unittest.mock import patch
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -39,6 +41,22 @@ MCP_BATCH_CALLS = 0
 def check(condition, message):
     if not condition:
         raise AssertionError(message)
+
+
+def case_tool_loop_limit_source_contract():
+    tree = ast.parse((Path(ROOT) / "main.py").read_text(encoding="utf-8"))
+    tool_loop = next(
+        node for node in tree.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == "_stream_with_tools"
+    )
+    values = [
+        node.value.value
+        for node in ast.walk(tool_loop)
+        if isinstance(node, ast.Assign)
+        and any(isinstance(target, ast.Name) and target.id == "max_rounds" for target in node.targets)
+        and isinstance(node.value, ast.Constant)
+    ]
+    check(values == [30], "tool-loop max_rounds must remain exactly 30")
 
 
 def tool_call(name, arguments=None, call_id=None):
@@ -245,6 +263,18 @@ def names_for(body):
     return [item["function"]["name"] for item in body.get("tools", [])]
 
 
+def streamed_text(response):
+    chunks = []
+    for line in response.text.splitlines():
+        if not line.startswith("data: ") or line == "data: [DONE]":
+            continue
+        payload = json.loads(line[6:])
+        choices = payload.get("choices") or []
+        if choices:
+            chunks.append(choices[0].get("delta", {}).get("content", ""))
+    return "".join(chunks)
+
+
 def assert_only_appends(captured):
     name_lists = [names_for(body) for body in captured]
     for names in name_lists:
@@ -284,6 +314,46 @@ async def case_normal_four_rounds(client, controller):
     session = td._get_session(sid)
     check("probe" in session["expanded"], "legacy return must preserve expanded categories")
     check("_drawer_return_tools" not in td.get_directory_text(), "directory must not instruct models to return tools")
+
+
+async def case_long_valid_loop_and_hard_stop(client, controller):
+    release_key = "long-release"
+    release_sid = "stream-long-release"
+    td._sessions.pop(release_sid, None)
+    release_rounds = [
+        tool_response(tool_call("_drawer_return_tools", {}, f"long-release-{index}"))
+        for index in range(1, 17)
+    ]
+    controller.add_plan(release_key, *release_rounds, final_response("long valid loop complete"))
+
+    released = await post_gateway(
+        client,
+        release_key,
+        release_sid,
+        {"drawer_enabled": True, "reminder_tools_enabled": True},
+    )
+    controller.assert_consumed(release_key)
+    check(streamed_text(released) == "long valid loop complete", "16 valid tool rounds must reach the final answer")
+    check(len(controller.captured[release_key]) == 17, "16 tool rounds plus final answer must use 17 model rounds")
+
+    cap_key = "hard-stop"
+    cap_sid = "stream-hard-stop"
+    td._sessions.pop(cap_sid, None)
+    cap_rounds = [
+        tool_response(tool_call("_drawer_return_tools", {}, f"hard-stop-{index}"))
+        for index in range(1, 31)
+    ]
+    controller.add_plan(cap_key, *cap_rounds)
+
+    capped = await post_gateway(
+        client,
+        cap_key,
+        cap_sid,
+        {"drawer_enabled": True, "reminder_tools_enabled": True},
+    )
+    controller.assert_consumed(cap_key)
+    check(len(controller.captured[cap_key]) == 30, "tool-loop hard stop must remain exactly 30 model rounds")
+    check("工具调用轮次过多，已停止" in streamed_text(capped), "round 30 must still trigger the safety stop")
 
 
 async def case_classic_legacy_return(client, controller):
@@ -469,7 +539,9 @@ async def main():
     try:
         for item in patches:
             item.start()
+        case_tool_loop_limit_source_contract()
         await case_normal_four_rounds(asgi_client, controller)
+        await case_long_valid_loop_and_hard_stop(asgi_client, controller)
         await case_classic_legacy_return(asgi_client, controller)
         await case_route_exception_with_request_mcp(asgi_client, controller)
         await case_concurrent_request_isolation(asgi_client, controller)
