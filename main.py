@@ -2531,7 +2531,7 @@ async def _stream_with_tools(messages, tools, tool_map, model, temperature, tool
         _apply_aihubmix_cache_headers(headers, _api_url)
 
     current_messages = list(messages)
-    max_rounds = 10
+    max_rounds = 30
 
     for round_num in range(max_rounds):
         # ── tool call 轮：非流式请求，检测是否有工具调用 ──
