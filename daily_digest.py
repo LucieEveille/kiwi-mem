@@ -1534,10 +1534,31 @@ MONTH_SUMMARY_PROMPT = """你是用户的 AI 伴侣。请根据这个月的周�
 {week_summaries}"""
 
 
+def _month_gap_days(month_start, month_end, week_starts) -> list:
+    """补缺法：算出 [month_start, month_end] 内没有被任何归属周覆盖的日子。
+
+    周页面按「周一所在月」归属整周，所以月初最多有 6 天躺在上个月的周总结里。
+    这些天的内容不该在本月总结里缺席——调用方拿它们的日页面补进素材，
+    让月总结的素材范围严格等于自然月。返回升序 date 列表。
+    """
+    covered = set()
+    for w_start in week_starts:
+        for offset in range(7):
+            covered.add(w_start + timedelta(days=offset))
+    gaps = []
+    d = month_start
+    while d <= month_end:
+        if d not in covered:
+            gaps.append(d)
+        d += timedelta(days=1)
+    return gaps
+
+
 async def generate_month_summary(start: str, end: str, month_str: str, model_override: str = None):
     """从周总结生成月总结"""
     from database import get_calendar_range, save_calendar_page
     from config import get_config
+    from datetime import date as date_cls
 
     week_pages = await get_calendar_range(start, end, "week")
     if not week_pages:
@@ -1550,6 +1571,20 @@ async def generate_month_summary(start: str, end: str, month_str: str, model_ove
         summaries_text = _format_day_pages_brief(day_pages)
     else:
         summaries_text = _format_week_summaries(week_pages)
+        # 补缺：跨月周整周归属周一所在月，月初被上月带走的日子单独补日页面
+        gap_days = _month_gap_days(
+            date_cls.fromisoformat(start),
+            date_cls.fromisoformat(end),
+            [p["date"] for p in week_pages],
+        )
+        if gap_days:
+            gap_set = set(gap_days)
+            gap_pages = [p for p in await get_calendar_range(start, end, "day") if p["date"] in gap_set]
+            if gap_pages:
+                summaries_text += (
+                    "\n### 补充：本月未被以上周总结覆盖的日子（其所属自然周归属上个月）\n"
+                    + _format_day_pages_brief(gap_pages)
+                )
 
     prompt = MONTH_SUMMARY_PROMPT.replace("{month}", month_str).replace(
         "{week_summaries}", summaries_text)
