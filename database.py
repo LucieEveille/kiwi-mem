@@ -3274,17 +3274,26 @@ async def get_calendar_for_injection(lookback_days: int = 365):
             result.append({**p, "label": f"{m_start.year}年{m_start.month}月总结"})
 
     # 周总结：覆盖周一~周日（date 字段存的是周一）
+    # 自然周与自然月不嵌套，与月/季/年的重叠按三态处理：
+    #   七天全未被高层覆盖 → 整周入选并认领七天；
+    #   七天全被覆盖 → 跳过整周（高层总结已包含），天数计入 week_covered_dates；
+    #   部分覆盖（跨月周撞上月/季/年总结）→ 跳过整周且不认领任何日子——
+    #   否则未被高层覆盖的那几天会被这张不注入的周"占位"，
+    #   等它们离开最近几天窗口后日页面也不再入选，形成记忆空洞。
     week_covered_dates = set()  # 单独追踪周总结覆盖的日期
     for p in by_type.get("week", []):
         w_start = p["date"]
-        is_covered_by_higher = w_start in covered_dates
-        for d_offset in range(7):
-            d = w_start + timedelta(days=d_offset)
-            if d not in covered_dates:
-                covered_dates.add(d)
-            week_covered_dates.add(d)
         w_end = w_start + timedelta(days=6)
-        if not is_covered_by_higher and has_source_day(w_start, w_end):
+        week_days = [w_start + timedelta(days=i) for i in range(7)]
+        covered_count = sum(1 for d in week_days if d in covered_dates)
+        if covered_count == 7:
+            week_covered_dates.update(week_days)
+            continue
+        if covered_count > 0:
+            continue
+        covered_dates.update(week_days)
+        week_covered_dates.update(week_days)
+        if has_source_day(w_start, w_end):
             result.append({**p, "label": f"{w_start.strftime('%m/%d')}-{w_end.strftime('%m/%d')}周总结"})
 
     # ── 日页面三级注入（v6.1）──

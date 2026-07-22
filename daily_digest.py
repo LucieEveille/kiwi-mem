@@ -12,7 +12,7 @@ import os
 import json
 import asyncio
 import httpx
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 
 # ============================================================
 # API 配置 —— 记忆整理用独立 key，避免和聊天抢额度
@@ -1534,22 +1534,95 @@ MONTH_SUMMARY_PROMPT = """你是用户的 AI 伴侣。请根据这个月的周�
 {week_summaries}"""
 
 
+def _coerce_date(value) -> date:
+    """calendar_pages 的 date 在真库（asyncpg）是 date 对象、在测试假库是 ISO 字符串，统一成 date。"""
+    return value if isinstance(value, date) else date.fromisoformat(str(value))
+
+
+def _month_gap_days(month_start, month_end, week_starts) -> list:
+    """补缺法：算出 [month_start, month_end] 内没有被任何归属周覆盖的日子。
+
+    周页面按「周一所在月」归属整周，所以月初最多有 6 天躺在上个月的周总结里。
+    这些天的内容不该在本月总结里缺席——调用方拿它们的日页面补进素材，
+    让月总结的素材范围严格等于自然月。返回升序 date 列表。
+    """
+    covered = set()
+    for w_start in week_starts:
+        w_start = _coerce_date(w_start)
+        for offset in range(7):
+            covered.add(w_start + timedelta(days=offset))
+    gaps = []
+    d = _coerce_date(month_start)
+    month_end = _coerce_date(month_end)
+    while d <= month_end:
+        if d not in covered:
+            gaps.append(d)
+        d += timedelta(days=1)
+    return gaps
+
+
 async def generate_month_summary(start: str, end: str, month_str: str, model_override: str = None):
-    """从周总结生成月总结"""
-    from database import get_calendar_range, save_calendar_page
+    """从周总结 + 边缘日页面生成月总结（素材范围严格等于自然月）。
+
+    素材规则（自然周与自然月不嵌套，跨月周不串账）：
+    - 只整张采用「完整落在本月内」的自然周总结（周一、周日都在月内）；
+    - 跨越月界的两端自然周不采用——无论生成时它存不存在，结果都一致，
+      延迟生成或手动重建不会把下月头几天混进本月；
+    - 月首尾跨月段与月中缺失周段，一律用属于本月的日页面补齐。
+    缺口日子按三态处理：ready（日页面存在）/ empty（当天确认无聊天素材）/
+    missing（有素材但日页面缺失）。出现 missing 时延迟成文——月总结成文后
+    扫描永久跳过，此时缺的日子会被固化为永久缺失，宁可等日页面补齐。
+    """
+    from database import get_calendar_range, save_calendar_page, get_chat_messages_for_date
     from config import get_config
 
+    m_start = _coerce_date(start)
+    m_end = _coerce_date(end)
+
     week_pages = await get_calendar_range(start, end, "week")
-    if not week_pages:
-        # 没有周总结的话，尝试直接从日页面生成
-        day_pages = await get_calendar_range(start, end, "day")
-        if not day_pages:
-            print(f"   📭 {month_str} 没有周总结也没有日页面，跳过月总结")
-            return {"status": "skipped", "reason": "no data"}
-        # 用日页面的摘要代替
-        summaries_text = _format_day_pages_brief(day_pages)
-    else:
-        summaries_text = _format_week_summaries(week_pages)
+    full_weeks = [
+        p for p in week_pages
+        if _coerce_date(p["date"]) + timedelta(days=6) <= m_end
+    ]
+
+    gap_days = _month_gap_days(m_start, m_end, [p["date"] for p in full_weeks])
+    gap_pages = []
+    missing_days = []
+    if gap_days:
+        day_by_date = {
+            _coerce_date(p["date"]): p
+            for p in await get_calendar_range(start, end, "day")
+        }
+        for d in gap_days:
+            page = day_by_date.get(d)
+            if page:
+                gap_pages.append(page)
+                continue
+            if await get_chat_messages_for_date(d.isoformat()):
+                missing_days.append(d)
+
+    if missing_days:
+        days_str = "、".join(d.isoformat() for d in missing_days)
+        print(f"   ⏸️ {month_str} 有 {len(missing_days)} 天有聊天素材但日页面缺失（{days_str}），延迟生成月总结")
+        return {
+            "status": "skipped",
+            "reason": "missing_day_pages",
+            "missing_dates": [d.isoformat() for d in missing_days],
+        }
+
+    if not full_weeks and not gap_pages:
+        print(f"   📭 {month_str} 没有周总结也没有日页面，跳过月总结")
+        return {"status": "skipped", "reason": "no data"}
+
+    parts = []
+    if full_weeks:
+        parts.append(_format_week_summaries(full_weeks))
+    if gap_pages:
+        parts.append(
+            "\n### 补充：本月未被以上周总结覆盖的日子（跨月周两端与缺失周由日页面补齐）\n"
+            + _format_day_pages_brief(gap_pages)
+        )
+    summaries_text = "".join(parts)
 
     prompt = MONTH_SUMMARY_PROMPT.replace("{month}", month_str).replace(
         "{week_summaries}", summaries_text)
@@ -1783,21 +1856,35 @@ def _format_week_summaries(week_pages: list) -> str:
     return text
 
 
+def _day_page_brief_text(p: dict) -> str:
+    """日页面兜底素材的正文选择：summary → diary → digest → sections 正文。
+
+    手写页（user_edit）往往只有 diary，旧数据可能只有 sections 正文；
+    只读 summary 会把这些页面写成「无记录」，正文被静默丢弃。
+    """
+    for key in ("summary", "diary", "digest"):
+        v = p.get(key)
+        if v and str(v).strip():
+            return str(v).strip()
+    parts = []
+    sections = p.get("sections") or []
+    for sec in (sections if isinstance(sections, list) else []):
+        if not isinstance(sec, dict):
+            continue
+        t = (sec.get("title") or "").strip()
+        c = (sec.get("content") or "").strip()
+        if t and c:
+            parts.append(f"{t}：{c}")
+        elif t or c:
+            parts.append(t or c)
+    return "；".join(parts)
+
+
 def _format_day_pages_brief(day_pages: list) -> str:
-    """格式化日页面为简要文本（异常降级用：没有周总结时，月总结直接从日页面生成的兜底路径）"""
+    """格式化日页面为简要文本（月总结缺口补齐与无周总结时的兜底路径）"""
     text = ""
     for p in day_pages:
         date_str = str(p["date"])
-        summary = p.get("summary", "")
-        if summary:
-            text += f"\n**{date_str}**：{summary}\n"
-        else:
-            # 没有概要（旧数据兼容）：从 sections 提取 title
-            sections = p.get("sections") or []
-            titles = []
-            for sec in (sections if isinstance(sections, list) else []):
-                t = sec.get("title", "")
-                if t:
-                    titles.append(t)
-            text += f"\n**{date_str}**：{'、'.join(titles) if titles else '（无记录）'}\n"
+        body = _day_page_brief_text(p)
+        text += f"\n**{date_str}**：{body if body else '（无记录）'}\n"
     return text
