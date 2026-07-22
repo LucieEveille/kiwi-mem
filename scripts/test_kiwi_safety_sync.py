@@ -171,16 +171,38 @@ async def _config_row(key: str) -> Any:
     return await _pool_fetchval("SELECT value FROM gateway_config WHERE key = $1", key)
 
 
-async def _seed_memory(content: str, *, locked: bool = False, title: str = "") -> int:
+async def _seed_memory(
+    content: str,
+    *,
+    locked: bool = False,
+    title: str = "",
+    project_id: str | None = None,
+    memory_type: str = "fragment",
+    source: str = "safety_test",
+    created_at: Any = None,
+    dream_processed: bool = False,
+    valid_until: Any = None,
+) -> int:
+    created_at = created_at or StdDateTime.now(database.TZ_CST)
+    dream_processed_at = created_at if dream_processed else None
     return await _pool_fetchval(
         """
-        INSERT INTO memories (content, title, importance, is_permanent, source)
-        VALUES ($1, $2, 5, $3, 'safety_test')
+        INSERT INTO memories (
+            content, title, importance, is_permanent, source, project_id,
+            memory_type, created_at, dream_processed_at, valid_until
+        )
+        VALUES ($1, $2, 5, $3, $4, $5, $6, $7, $8, $9)
         RETURNING id
         """,
         content,
         title,
         locked,
+        source,
+        project_id,
+        memory_type,
+        created_at,
+        dream_processed_at,
+        valid_until,
     )
 
 
@@ -883,6 +905,148 @@ async def test_s6(client: httpx.AsyncClient) -> None:
     passed("T-S6-8 row-lock interleaving blocks late lifecycle writes; active control updates")
 
 
+async def test_w1_01() -> None:
+    print("\nW1-01 project isolation and Dream permanent-memory protection")
+    import importlib
+
+    daily_digest = importlib.import_module("daily_digest")
+    issues: list[str] = []
+
+    # Dream 的输入池只能看见全局、未锁定的普通碎片。项目碎片与永久记忆都必须留在原位。
+    await _truncate("memories", "calendar_pages")
+    global_normal = await _seed_memory("dream-global-normal")
+    project_a = await _seed_memory("dream-project-a", project_id="project-a")
+    project_b = await _seed_memory("dream-project-b", project_id="project-b")
+    global_locked = await _seed_memory("dream-global-locked", locked=True)
+    candidate_ids = {row["id"] for row in await database.get_unprocessed_memories()}
+    expected_candidates = {global_normal}
+    if candidate_ids != expected_candidates:
+        issues.append(
+            "Dream candidates escaped scope/lock guard: "
+            f"expected {sorted(expected_candidates)}, got {sorted(candidate_ids)}; "
+            f"project ids={[project_a, project_b]}, locked id={global_locked}"
+        )
+
+    # 主清理候选：只能删除有日页面兜底的全局普通碎片。
+    await _truncate("memories", "calendar_pages")
+    old_at = StdDateTime.now(database.TZ_CST) - timedelta(days=40)
+    await _pool_execute(
+        "INSERT INTO calendar_pages (date, type, diary) VALUES ($1, 'day', 'safety-day')",
+        old_at.date(),
+    )
+    cleanup_global = await _seed_memory(
+        "cleanup-global", created_at=old_at, dream_processed=True
+    )
+    cleanup_project_a = await _seed_memory(
+        "cleanup-project-a", project_id="project-a", created_at=old_at, dream_processed=True
+    )
+    cleanup_project_b = await _seed_memory(
+        "cleanup-project-b", project_id="project-b", created_at=old_at, dream_processed=True
+    )
+    cleanup_locked = await _seed_memory(
+        "cleanup-locked", locked=True, created_at=old_at, dream_processed=True
+    )
+    await daily_digest.cleanup_expired_fragments()
+    remaining_cleanup = {
+        row["id"] for row in await _pool_fetch("SELECT id FROM memories ORDER BY id")
+    }
+    expected_cleanup = {cleanup_project_a, cleanup_project_b, cleanup_locked}
+    if remaining_cleanup != expected_cleanup or cleanup_global in remaining_cleanup:
+        issues.append(
+            "expired-fragment cleanup crossed project/lock boundary: "
+            f"expected remaining {sorted(expected_cleanup)}, got {sorted(remaining_cleanup)}"
+        )
+
+    # dream_merge 的最小保留数只按全局 merge 计算；项目 merge 不能放大可删除额度。
+    await _truncate("memories", "calendar_pages")
+    await _upsert_config("merge_retention_days", "0")
+    await _upsert_config("merge_min_keep", "2")
+    global_merges = {
+        await _seed_memory(
+            f"merge-global-{index}",
+            source="dream_merge",
+            memory_type="daily_digest",
+            created_at=old_at,
+            dream_processed=True,
+        )
+        for index in range(3)
+    }
+    project_merges = {
+        await _seed_memory(
+            f"merge-project-{index}",
+            project_id="project-a" if index % 2 == 0 else "project-b",
+            source="dream_merge",
+            memory_type="daily_digest",
+            created_at=old_at,
+            dream_processed=True,
+        )
+        for index in range(4)
+    }
+    await daily_digest.cleanup_expired_fragments()
+    remaining_global_merges = {
+        row["id"]
+        for row in await _pool_fetch(
+            "SELECT id FROM memories WHERE source='dream_merge' AND project_id IS NULL"
+        )
+    }
+    remaining_project_merges = {
+        row["id"]
+        for row in await _pool_fetch(
+            "SELECT id FROM memories WHERE source='dream_merge' AND project_id IS NOT NULL"
+        )
+    }
+    if len(remaining_global_merges) != 2 or remaining_project_merges != project_merges:
+        issues.append(
+            "dream_merge retention counted or deleted project rows: "
+            f"global before={sorted(global_merges)}, global after={sorted(remaining_global_merges)}, "
+            f"project before={sorted(project_merges)}, project after={sorted(remaining_project_merges)}"
+        )
+
+    # 两条 30 天硬删路径都只能触碰全局普通行；项目行和永久行必须保留。
+    await _truncate("memories", "calendar_pages")
+    deleted_global = await _seed_memory(
+        "deleted-global", memory_type="dream_deleted", created_at=old_at
+    )
+    deleted_project = await _seed_memory(
+        "deleted-project", project_id="project-a", memory_type="dream_deleted", created_at=old_at
+    )
+    deleted_locked = await _seed_memory(
+        "deleted-locked", locked=True, memory_type="dream_deleted", created_at=old_at
+    )
+    expired_at = StdDateTime.now(database.TZ_CST) - timedelta(days=31)
+    invalid_global = await _seed_memory(
+        "invalid-global", created_at=old_at, valid_until=expired_at
+    )
+    invalid_project = await _seed_memory(
+        "invalid-project", project_id="project-b", created_at=old_at, valid_until=expired_at
+    )
+    invalid_locked = await _seed_memory(
+        "invalid-locked", locked=True, created_at=old_at, valid_until=expired_at
+    )
+    await daily_digest.cleanup_expired_fragments()
+    remaining_hard_delete = {
+        row["id"] for row in await _pool_fetch("SELECT id FROM memories ORDER BY id")
+    }
+    expected_hard_delete = {
+        deleted_project,
+        deleted_locked,
+        invalid_project,
+        invalid_locked,
+    }
+    if remaining_hard_delete != expected_hard_delete:
+        issues.append(
+            "30-day hard delete crossed project/lock boundary: "
+            f"expected remaining {sorted(expected_hard_delete)}, got {sorted(remaining_hard_delete)}; "
+            f"allowed deletions={[deleted_global, invalid_global]}"
+        )
+
+    require(not issues, " | ".join(issues))
+    passed("T-W1-01-1 Dream candidates are global and non-permanent")
+    passed("T-W1-01-2 expired-fragment cleanup preserves projects and locks")
+    passed("T-W1-01-3 dream_merge retention counts only global rows")
+    passed("T-W1-01-4 hard-delete paths preserve projects and locks")
+
+
 async def run_suite(test_dsn: str) -> None:
     global database, config, app_module, memory_extractor
 
@@ -919,6 +1083,7 @@ async def run_suite(test_dsn: str) -> None:
         await test_s4(client)
         await test_s5(client)
         await test_s6(client)
+        await test_w1_01()
 
 
 async def async_main() -> int:
@@ -928,7 +1093,11 @@ async def async_main() -> int:
         database_name, test_dsn = await _create_disposable_database(admin_dsn)
         print(f"Created disposable PostgreSQL database: {database_name}")
         await run_suite(test_dsn)
-        print(f"\nPASS: {len(PASSED)} permanent S1-S6 behavior guards")
+        legacy_passed = [name for name in PASSED if name.startswith("T-S")]
+        w1_01_passed = [name for name in PASSED if name.startswith("T-W1-01-")]
+        print(f"\nPASS: {len(legacy_passed)} permanent S1-S6 behavior guards")
+        print(f"PASS: {len(w1_01_passed)} W1-01 isolation/permanent guards")
+        print(f"PASS: {len(PASSED)} total permanent behavior guards")
         print("Real database path: disposable PostgreSQL verified")
         print("Real model/API path: not called; embedding/model/HTTP boundaries were mocked")
         return 0
