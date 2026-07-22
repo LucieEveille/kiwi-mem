@@ -3551,7 +3551,7 @@ async def search_scenes(query_embedding: list, limit: int = 2, min_sim: float = 
 
 
 async def get_unprocessed_memories():
-    """获取未被Dream处理过的碎片记忆（仅全局，排除项目碎片）"""
+    """获取未被 Dream 处理过的全局普通碎片（排除项目与永久记忆）。"""
     pool = await get_pool()
     async with pool.acquire() as conn:
         rows = await conn.fetch("""
@@ -3560,6 +3560,7 @@ async def get_unprocessed_memories():
             FROM memories
             WHERE dream_processed_at IS NULL
               AND memory_type IN ('fragment', 'daily_digest')
+              AND COALESCE(is_permanent, false) = FALSE
               AND (valid_until IS NULL OR valid_until > NOW())
               AND project_id IS NULL
             ORDER BY created_at ASC

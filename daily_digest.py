@@ -818,6 +818,7 @@ async def cleanup_expired_fragments():
         # 安全检查：
         # 1. 该碎片所在日期已有日页面（日页面没生成的不删）
         # 2. 该碎片已被 Dream 处理过（Dream 还没看的不删）
+        # 3. 只清理全局普通记忆（项目记忆和永久记忆不参与全局代谢）
         candidates = await conn.fetch("""
             SELECT id, memory_type, source, importance, emotional_weight, access_count,
                    created_at, last_accessed, access_query_hashes,
@@ -826,6 +827,7 @@ async def cleanup_expired_fragments():
             WHERE COALESCE(is_permanent, FALSE) = FALSE
               AND (valid_until IS NULL OR valid_until <= NOW())
               AND dream_processed_at IS NOT NULL
+              AND project_id IS NULL
               AND (
                     (memory_type = 'fragment'
                      AND importance < 8
@@ -856,6 +858,7 @@ async def cleanup_expired_fragments():
             FROM memories
             WHERE source = 'dream_merge'
               AND COALESCE(is_permanent, FALSE) = FALSE
+              AND project_id IS NULL
         """)
         merge_total = int(merge_total or 0)
         if candidates:
@@ -912,6 +915,8 @@ async def cleanup_expired_fragments():
             DELETE FROM memories
             WHERE memory_type = 'dream_deleted'
               AND created_at < NOW() - INTERVAL '30 days'
+              AND COALESCE(is_permanent, FALSE) = FALSE
+              AND project_id IS NULL
         """)
         try:
             count3 = int(result3.split()[-1]) if result3 else 0
@@ -925,6 +930,7 @@ async def cleanup_expired_fragments():
             WHERE valid_until IS NOT NULL
               AND valid_until < NOW() - INTERVAL '30 days'
               AND memory_type = 'fragment'
+              AND COALESCE(is_permanent, FALSE) = FALSE
               AND project_id IS NULL
         """)
         try:
