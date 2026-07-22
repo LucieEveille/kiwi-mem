@@ -12,7 +12,7 @@ import os
 import json
 import asyncio
 import httpx
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 
 # ============================================================
 # API 配置 —— 记忆整理用独立 key，避免和聊天抢额度
@@ -1534,6 +1534,11 @@ MONTH_SUMMARY_PROMPT = """你是用户的 AI 伴侣。请根据这个月的周�
 {week_summaries}"""
 
 
+def _coerce_date(value) -> date:
+    """calendar_pages 的 date 在真库（asyncpg）是 date 对象、在测试假库是 ISO 字符串，统一成 date。"""
+    return value if isinstance(value, date) else date.fromisoformat(str(value))
+
+
 def _month_gap_days(month_start, month_end, week_starts) -> list:
     """补缺法：算出 [month_start, month_end] 内没有被任何归属周覆盖的日子。
 
@@ -1543,10 +1548,12 @@ def _month_gap_days(month_start, month_end, week_starts) -> list:
     """
     covered = set()
     for w_start in week_starts:
+        w_start = _coerce_date(w_start)
         for offset in range(7):
             covered.add(w_start + timedelta(days=offset))
     gaps = []
-    d = month_start
+    d = _coerce_date(month_start)
+    month_end = _coerce_date(month_end)
     while d <= month_end:
         if d not in covered:
             gaps.append(d)
@@ -1558,7 +1565,6 @@ async def generate_month_summary(start: str, end: str, month_str: str, model_ove
     """从周总结生成月总结"""
     from database import get_calendar_range, save_calendar_page
     from config import get_config
-    from datetime import date as date_cls
 
     week_pages = await get_calendar_range(start, end, "week")
     if not week_pages:
@@ -1572,14 +1578,10 @@ async def generate_month_summary(start: str, end: str, month_str: str, model_ove
     else:
         summaries_text = _format_week_summaries(week_pages)
         # 补缺：跨月周整周归属周一所在月，月初被上月带走的日子单独补日页面
-        gap_days = _month_gap_days(
-            date_cls.fromisoformat(start),
-            date_cls.fromisoformat(end),
-            [p["date"] for p in week_pages],
-        )
+        gap_days = _month_gap_days(start, end, [p["date"] for p in week_pages])
         if gap_days:
             gap_set = set(gap_days)
-            gap_pages = [p for p in await get_calendar_range(start, end, "day") if p["date"] in gap_set]
+            gap_pages = [p for p in await get_calendar_range(start, end, "day") if _coerce_date(p["date"]) in gap_set]
             if gap_pages:
                 summaries_text += (
                     "\n### 补充：本月未被以上周总结覆盖的日子（其所属自然周归属上个月）\n"
