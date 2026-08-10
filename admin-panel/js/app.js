@@ -1,10 +1,20 @@
 // ============================================================
-// app.js — 应用外壳：侧栏 / 路由 / 主题 / 移动端
+// app.js — 应用外壳：侧栏 / 路由 / 主题 / 移动端（v1.6.1 改版）
 // 哈希路由 #/<key> → 懒加载 js/pages/<key>.js，调用 default.mount(root)
+//
+// 本次改版：
+//   · 顶栏挂载全局参数搜索（search.js）；路由完成后 tryHighlight()
+//     完成「搜索 → 跳页 → 高亮参数行」闭环。
+//   · 每页顶部渲染讲解条（routes.js 的 LEDES），页面自身的
+//     .page-intro 由 CSS 隐藏，页面文件无需改动。
+//   · REMOVED 增加 prompts（提示词回归各功能页）。
+//   · boot 时检查是否需要首次配置向导（wizard.js）。
 // ============================================================
-import { NAV, ROUTE_INDEX } from './routes.js';
+import { NAV, ROUTE_INDEX, LEDES } from './routes.js';
 import { errorBlock, loadingBlock } from './ui.js';
 import { get } from './api.js';
+import { initSearch, tryHighlight } from './search.js';
+import { maybeShowWizard } from './wizard.js';
 
 const DEFAULT_ROUTE = 'dashboard';
 
@@ -16,6 +26,11 @@ const REMOVED = {
   comments: '评论',
   search: '对话搜索',
   phrases: '指令与短语',
+  prompts: '提示词模板',
+};
+// 移除页的去处说明（比「已交给客户端」更具体）
+const REMOVED_HINT = {
+  prompts: '提示词已跟随各自的功能页：记忆提取在「记忆碎片」、Dream 在「Dream」、各级总结在「日历与整理」……用顶栏搜索「提示词」能列出全部。',
 };
 
 // ---------- 主题 ----------
@@ -68,6 +83,17 @@ async function refreshShellStatus() {
   }
 }
 
+// 每页讲解条（LEDES 有数据才渲染）
+function ledeHtml(key) {
+  const lede = LEDES[key];
+  const meta = ROUTE_INDEX[key];
+  if (!lede || !meta) return '';
+  return `<div class="page-lede">
+    <span class="page-lede-ico">${meta.icon}</span>
+    <div><div class="page-lede-t">${lede[0]}</div><div class="page-lede-s">${lede[1]}</div></div>
+  </div>`;
+}
+
 let currentMod = null;
 async function route() {
   const key = (location.hash.replace(/^#\/?/, '') || DEFAULT_ROUTE).split('?')[0];
@@ -76,7 +102,6 @@ async function route() {
   const titleEl = document.getElementById('page-title');
   const crumbEl = document.getElementById('page-crumb');
 
-  // 已移除的旧路由：给明确提示并提供返回链接，而非静默跳仪表盘。
   if (REMOVED[key]) {
     highlight('');
     titleEl.textContent = '页面已移除';
@@ -86,7 +111,8 @@ async function route() {
     closeSidebar();
     try { currentMod?.unmount?.(); } catch {}
     currentMod = null;
-    content.innerHTML = `<div class="banner banner-info"><span>💡</span><div>「${REMOVED[key]}」已从管理面板移除（相关功能已交给客户端）。<a href="#/${DEFAULT_ROUTE}">返回仪表盘</a></div></div>`;
+    const hint = REMOVED_HINT[key] || '相关功能已交给客户端。';
+    content.innerHTML = `<div class="banner banner-info"><span>💡</span><div>「${REMOVED[key]}」已从管理面板移除。${hint} <a href="#/${DEFAULT_ROUTE}">返回仪表盘</a></div></div>`;
     return;
   }
 
@@ -100,18 +126,18 @@ async function route() {
   content.innerHTML = loadingBlock();
   closeSidebar();
 
-  // 卸载上一个页面
   try { currentMod?.unmount?.(); } catch {}
   currentMod = null;
 
   try {
     const mod = (await import(`./pages/${key}.js`)).default;
     currentMod = mod;
-    content.innerHTML = '';
+    content.innerHTML = ledeHtml(key);
     const wrap = document.createElement('div');
     wrap.className = 'fade-in';
     content.appendChild(wrap);
     await mod.mount(wrap, { key });
+    tryHighlight(); // 搜索跳转来的：滚动 + 高亮目标参数行
   } catch (e) {
     console.error(e);
     content.innerHTML = errorBlock(`页面加载失败：${e.message}。该模块可能尚未实现或后端不可用。`);
@@ -126,6 +152,7 @@ function closeSidebar() { document.getElementById('sidebar')?.classList.remove('
 function boot() {
   initTheme();
   renderSidebar();
+  initSearch(document.getElementById('global-search'));
   document.getElementById('theme-btn')?.addEventListener('click', () => {
     applyTheme(document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark');
   });
@@ -135,6 +162,7 @@ function boot() {
   if (!location.hash) location.hash = '#/' + DEFAULT_ROUTE;
   refreshShellStatus();
   route();
+  maybeShowWizard(); // 首次使用 & 没有供应商时弹三步向导（可跳过）
 }
 
 boot();

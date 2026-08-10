@@ -13,7 +13,7 @@
   <aside class="sidebar" id="sidebar">
     <div class="sidebar-head">
       <span class="logo">🥝</span>
-      <div><h1>Kiwi-Mem</h1><div class="sub">管理面板</div></div>
+      <div><h1>Kiwi-Mem</h1><div class="sub">记忆网关管理面板</div></div>
     </div>
     <nav class="sidebar-nav" id="sidebar-nav"></nav>
     <div class="sidebar-foot">
@@ -26,13 +26,15 @@
   <!-- Main -->
   <div class="main">
     <header class="topbar">
-      <div class="flex center gap12">
+      <div class="flex center gap12 topbar-left">
         <button class="btn btn-icon btn-ghost menu-btn" id="menu-btn">☰</button>
-        <div>
+        <div class="topbar-titles">
           <div class="crumb" id="page-crumb">kiwi-mem</div>
           <div class="title" id="page-title">仪表盘</div>
         </div>
       </div>
+      <!-- 全局参数搜索（search.js 挂载） -->
+      <div class="gs-wrap" id="global-search"></div>
       <div class="actions">
         <span id="status-pill" class="badge badge-muted">连接中…</span>
         <button class="btn btn-icon btn-ghost" id="theme-btn" title="切换主题">🌙</button>

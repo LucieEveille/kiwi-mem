@@ -1,16 +1,19 @@
 // ============================================================
-// config-schema.js — 全部配置项的权威登记表（单一事实源）
+// config-schema.js — 全部配置项的权威登记表（单一事实源）v1.6.1 改版
 //
 // 与后端 config.py 的 CONFIG_SCHEMA 一一对应。每个 key 都登记：
-//   label  中文标签
-//   type   值类型 bool|int|float|text
-//   def    默认值（字符串）
-//   input  控件形态 bool|int|float|text|model|prompt|json|longtext|engine
-//   desc   人话说明（解决「忘了这参数干嘛」）
-//   hasDefault  prompt 类是否可「恢复默认」（对应 /admin/default-prompts 的 8 个）
+//   label / type / def / input / desc / hasDefault（可恢复默认的 prompt）
 //
-// CONFIG_PAGES 把 key 编排到各功能页：master（总开关）+ 分组旋钮。
-// 任何 META 里有、却没编排进任何页的 key 会被「全部配置」页兜底列出。
+// 本次改版（归类修正）：
+//   · 新登记 reasoning_effort（思考强度）→ 网关「对话行为」组
+//     —— 后端一直有，此前面板任何页面都改不了。
+//   · 新登记 openrouter_provider_order_enabled → 供应商「默认模型与路由」组
+//   · default_title_model / prompt_title_summary：供应商页 → 网关「对话行为」组
+//     —— 标题生成与供应商无关，是网关的对话层功能。
+//   · merge_retention_days / merge_min_keep：记忆机制 → Dream「产物清理」组
+//     —— 它们管的是 Dream merge 产物。
+//   · last_dream_date 移出 Dream 参数组（它是运行状态，不是旋钮）；
+//     未编排 → 自动落入「全部配置」的兜底区，仍可查看。
 // ============================================================
 
 export const CONFIG_META = {
@@ -49,7 +52,9 @@ export const CONFIG_META = {
   autolock_emo_diversity: { label:'自动锁定·高情绪多样性', type:'int', def:'3', input:'int', desc:'高情绪碎片被多少个不同话题召回后自动锁定。' },
   lock_retire_enabled:    { label:'锁定退役', type:'bool', def:'true', input:'bool', desc:'长期未召回的「自动锁定」碎片是否自动退役（解锁但不删除，让出注入空间）。手动锁定永不退役。' },
   lock_retire_days:       { label:'锁定退役天数', type:'int', def:'90', input:'int', desc:'自动锁定碎片超过多少天未召回则退役。' },
-  merge_retention_days:   { label:'合并保留天数', type:'int', def:'90', input:'int', desc:'被 Dream 合并后的旧碎片保留多少天后清理。' },
+
+  // —— Dream 产物清理（从「记忆机制」移入 Dream 页）——
+  merge_retention_days:   { label:'合并产物保留天数', type:'int', def:'90', input:'int', desc:'被 Dream 合并后的旧碎片保留多少天后清理。' },
   merge_min_keep:         { label:'合并保留下限', type:'int', def:'20', input:'int', desc:'即便符合清理条件，也至少保留多少条碎片。' },
 
   // —— 场景注入（Dream 产出）——
@@ -62,7 +67,7 @@ export const CONFIG_META = {
   dream_model:            { label:'Dream 模型', type:'text', def:'', input:'model', desc:'Dream 记忆整合用的模型。' },
   prompt_dream:           { label:'Dream 提示词', type:'text', def:'', input:'prompt', hasDefault:true, desc:'指导 Dream 如何清理、融合碎片并推断前瞻。留空用内置默认。' },
   dream_drowsy_threshold: { label:'犯困碎片阈值', type:'int', def:'30', input:'int', desc:'未处理碎片积累超过此数量后，AI 开始表现犯困、提示该睡了。' },
-  last_dream_date:        { label:'上次 Dream 日期', type:'text', def:'', input:'text', desc:'自动更新，一般无需手动改。' },
+  last_dream_date:        { label:'上次 Dream 日期', type:'text', def:'', input:'text', desc:'运行状态，自动更新。在 Dream「状态」页查看，一般无需手动改。' },
 
   // —— 用户/助手画像 ——
   user_profile:           { label:'用户画像', type:'text', def:'', input:'prompt', hasDefault:false, desc:'AI 对用户的整体认知，注入 system prompt。由每日整理自动更新，也可手动编辑。' },
@@ -99,17 +104,21 @@ export const CONFIG_META = {
   mcp_manual_ids:         { label:'手动 MCP 选择', type:'text', def:'', input:'json', desc:'manual 模式下启用的 MCP 服务器 ID 列表（JSON 数组）。' },
   ext_drawer_threshold:   { label:'外部抽屉相似度阈值', type:'float', def:'0.40', input:'float', desc:'外部工具与对话内容的语义相似度门槛，低于此值不展开。' },
   ext_drawer_max_open:    { label:'外部抽屉同开上限', type:'int', def:'3', input:'int', desc:'单次对话最多同时展开几个外部工具抽屉。' },
-  reminder_tools_enabled:{ label:'提醒工具', type:'bool', def:'true', input:'bool', desc:'控制提醒系统的 4 个工具，关闭后传统模式与工具抽屉中均不可见。' },
+  reminder_tools_enabled: { label:'提醒工具', type:'bool', def:'true', input:'bool', desc:'控制提醒系统的 4 个工具，关闭后传统模式与工具抽屉中均不可见。' },
 
   // —— 联网搜索 ——
   search_engine:          { label:'搜索引擎', type:'text', def:'', input:'engine', desc:'联网搜索使用的引擎。' },
   search_api_key:         { label:'搜索 API Key', type:'text', def:'', input:'pass', desc:'所选搜索引擎的 API Key（local 类型引擎无需）。' },
   search_max_results:     { label:'搜索结果条数', type:'int', def:'5', input:'int', desc:'每次搜索返回多少条结果。' },
 
-  // —— 模型默认（通用）——
+  // —— 模型默认与路由 ——
   default_chat_model:     { label:'默认聊天模型', type:'text', def:'', input:'model', desc:'未在前端指定时使用的默认聊天模型。' },
+  openrouter_provider_order_enabled: { label:'OpenRouter 锁定 Anthropic', type:'bool', def:'false', input:'bool', desc:'走 OpenRouter 时优先路由到 Anthropic 官方 provider，Claude 模型更稳定。（v1.6.1 新登记：此前只能改数据库）' },
+
+  // —— 网关 / 对话行为 ——
   default_title_model:    { label:'标题生成模型', type:'text', def:'', input:'model', desc:'自动生成对话标题用的模型。建议小模型。' },
   prompt_title_summary:   { label:'标题生成提示词', type:'text', def:'', input:'prompt', hasDefault:false, desc:'指导如何生成对话标题。留空用内置默认。' },
+  reasoning_effort:       { label:'思考强度', type:'text', def:'off', input:'select', options:['off','low','medium','high'], desc:'转发时附带的推理强度，仅对支持 reasoning 的模型生效。off=不传。（v1.6.1 新登记：此前面板上改不了）' },
 
   // —— 网关 / 性能 ——
   prompt_cache_enabled:   { label:'Prompt 缓存', type:'bool', def:'true', input:'bool', desc:'Claude 模型的显式缓存：重复的 system prompt 前缀只收 1/10 费用。非 Claude 自动跳过。' },
@@ -140,13 +149,14 @@ export const CONFIG_PAGES = {
     groups: [
       { title:'🔥 热度系统', desc:'热度决定碎片如何被注入（全文/摘要/跳过）以及何时被淡忘。', keys:['heat_half_life_normal','heat_half_life_important','heat_recall_extend','heat_threshold_high','heat_threshold_medium','heat_importance_line','heat_emotion_line','heat_medium_truncate','cleanup_heat_threshold'] },
       { title:'🌫️ 自动软化', desc:'模拟人脑遗忘：老碎片细节褪色、要点保留。', master:'auto_soften_enabled', keys:['auto_soften_daily_limit','auto_soften_min_age','soften_cooldown_days'] },
-      { title:'🔒 自动锁定与退役', desc:'反复跨话题召回的碎片自动锁定保护；长期不用的自动锁定碎片可退役。', master:'lock_retire_enabled', keys:['autolock_access_count','autolock_diversity','autolock_emo_access','autolock_emo_diversity','lock_retire_days','merge_retention_days','merge_min_keep'] },
+      { title:'🔒 自动锁定与退役', desc:'反复跨话题召回的碎片自动锁定保护；长期不用的自动锁定碎片可退役。', master:'lock_retire_enabled', keys:['autolock_access_count','autolock_diversity','autolock_emo_access','autolock_emo_diversity','lock_retire_days'] },
     ],
   },
   dream: {
     groups: [
-      { title:'Dream 整合', master:'dream_enabled', keys:['dream_model','dream_drowsy_threshold','last_dream_date','prompt_dream'] },
+      { title:'Dream 整合', master:'dream_enabled', keys:['dream_model','dream_drowsy_threshold','prompt_dream'] },
       { title:'🎬 场景注入', desc:'Dream 产出的叙事场景在聊天时自动注入。', master:'scene_inject_enabled', keys:['scene_inject_limit','scene_inject_min_sim'] },
+      { title:'🧹 Dream 产物清理', desc:'合并产物的保留策略。（从「记忆机制」页移来——它们管的是 Dream 的产物）', keys:['merge_retention_days','merge_min_keep'] },
     ],
   },
   profile: {
@@ -171,7 +181,7 @@ export const CONFIG_PAGES = {
   },
   handoff: {
     master: 'handoff_enabled',
-    groups: [ { title:'参数', keys:['handoff_tail_count','handoff_summary_model'] } ],
+    groups: [ { title:'衔接参数', keys:['handoff_tail_count','handoff_summary_model'] } ],
   },
   tools: {
     master: 'tool_drawer_enabled',
@@ -189,10 +199,13 @@ export const CONFIG_PAGES = {
     groups: [ { title:'搜索配置', keys:['search_engine','search_api_key','search_max_results'] } ],
   },
   providers: {
-    groups: [ { title:'默认模型', desc:'未指定时的兜底模型。', keys:['default_chat_model','default_title_model','prompt_title_summary'] } ],
+    groups: [ { title:'默认模型与路由', desc:'未指定时的兜底模型与路由行为。', keys:['default_chat_model','openrouter_provider_order_enabled'] } ],
   },
   gateway: {
-    groups: [ { title:'性能', keys:['prompt_cache_enabled','prompt_cache_ttl'] } ],
+    groups: [
+      { title:'对话行为', desc:'网关转发对话时的行为：标题生成与思考强度。', keys:['default_title_model','prompt_title_summary','reasoning_effort'] },
+      { title:'性能', keys:['prompt_cache_enabled','prompt_cache_ttl'] },
+    ],
   },
 };
 
@@ -202,7 +215,7 @@ export const RESTORABLE_PROMPTS = [
   'prompt_weekly_summary','prompt_monthly_summary','prompt_period_summary','prompt_dream',
 ];
 
-// 返回未被任何页编排的 key（兜底用）
+// 返回未被任何页编排的 key（兜底用；last_dream_date 与客户端同步项会落在这里）
 export function orphanKeys() {
   const placed = new Set();
   for (const pg of Object.values(CONFIG_PAGES)) {
