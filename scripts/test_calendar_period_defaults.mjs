@@ -1,4 +1,4 @@
-import { previousCompletePeriods } from '../admin-panel/js/calendar-periods.js';
+import { previousCompletePeriods } from '../admin-panel/js/calendar-periods.mjs';
 
 function check(condition, message) {
   if (!condition) throw new Error(message);

@@ -3,6 +3,7 @@ import { get, escAttr, todayStr } from '../api.js';
 import { loadingBlock, toast, delegate, setBusy, masterSwitch } from '../ui.js';
 import { loadConfig, renderConfigGroups, wireConfig, ensureModelDatalist } from '../config.js';
 import { CONFIG_META } from '../config-schema.js';
+import { previousCompletePeriods } from '../calendar-periods.mjs';
 
 export default {
   title: '日历与整理',
@@ -64,10 +65,7 @@ export default {
   renderGenerate() {
     const today = todayStr(0);
     const yest = todayStr(-1);
-    const monthStr = today.slice(0, 7);
-    const y = today.slice(0, 4);
-    const q = Math.floor(new Date(today).getMonth() / 3) + 1;
-    const monStart = todayStr(-6);
+    const completed = previousCompletePeriods(today);
     this.root.querySelector('#panel-generate').innerHTML = `
       <div class="banner banner-info"><span>⏳</span><div>下面每个都是后台长任务（调用模型，可能需要几十秒）。点击后按钮会转圈，完成后弹出结果状态。</div></div>
 
@@ -93,8 +91,8 @@ export default {
         <div class="card-title">🗓️ 周总结</div>
         <div class="card-desc">汇总一周的日页面成周总结。</div>
         <div class="toolbar mt8">
-          <label class="text-sm muted">起</label><input type="date" id="d-week-start" value="${escAttr(monStart)}">
-          <label class="text-sm muted">止</label><input type="date" id="d-week-end" value="${escAttr(today)}">
+          <label class="text-sm muted">起</label><input type="date" id="d-week-start" value="${escAttr(completed.weekStart)}">
+          <label class="text-sm muted">止</label><input type="date" id="d-week-end" value="${escAttr(completed.weekEnd)}">
           <button class="btn btn-primary" data-act="gen-week">生成周总结</button>
         </div>
       </div>
@@ -102,7 +100,7 @@ export default {
       <div class="card mt16">
         <div class="card-title">📆 月总结</div>
         <div class="toolbar mt8">
-          <input type="month" id="d-month" value="${escAttr(monthStr)}">
+          <input type="month" id="d-month" value="${escAttr(completed.month)}">
           <button class="btn btn-primary" data-act="gen-month">生成月总结</button>
         </div>
       </div>
@@ -111,14 +109,14 @@ export default {
         <div class="card">
           <div class="card-title">📊 季度总结</div>
           <div class="toolbar mt8">
-            <input type="text" id="d-quarter" value="${escAttr(y + '-Q' + q)}" placeholder="YYYY-QN" style="width:130px">
+            <input type="text" id="d-quarter" value="${escAttr(completed.quarter)}" placeholder="YYYY-QN" style="width:130px">
             <button class="btn btn-primary" data-act="gen-quarter">生成季度</button>
           </div>
         </div>
         <div class="card">
           <div class="card-title">🎍 年度总结</div>
           <div class="toolbar mt8">
-            <input type="number" id="d-year" value="${escAttr(y)}" step="1" style="width:130px">
+            <input type="number" id="d-year" value="${escAttr(completed.year)}" step="1" style="width:130px">
             <button class="btn btn-primary" data-act="gen-year">生成年度</button>
           </div>
         </div>

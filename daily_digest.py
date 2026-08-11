@@ -1650,8 +1650,11 @@ WEEK_SUMMARY_PROMPT = """你是用户的 AI 伴侣。请根据这一周的日页
 
 async def generate_week_summary(start: str, end: str, model_override: str = None):
     """从日页面生成周总结"""
+    from calendar_periods import validate_calendar_period_identity
     from database import get_calendar_range, save_calendar_page
     from config import get_config
+
+    validate_calendar_period_identity(start, "week", end_value=end)
 
     # 读取这一周的日页面
     day_pages = await get_calendar_range(start, end, "day")
@@ -1795,13 +1798,20 @@ async def generate_month_summary(start: str, end: str, month_str: str, model_ove
     missing（有素材但日页面缺失）。出现 missing 时延迟成文——月总结成文后
     扫描永久跳过，此时缺的日子会被固化为永久缺失，宁可等日页面补齐。
     """
+    from calendar_periods import filter_valid_calendar_period_pages, validate_calendar_period_identity
     from database import get_calendar_range, save_calendar_page, get_chat_messages_for_date
     from config import get_config
+
+    period = validate_calendar_period_identity(start, "month", end_value=end)
+    if month_str != period.start.strftime("%Y-%m"):
+        raise ValueError(f"month 必须与 start 对应：{period.start.strftime('%Y-%m')}")
 
     m_start = _coerce_date(start)
     m_end = _coerce_date(end)
 
-    week_pages = await get_calendar_range(start, end, "week")
+    week_pages = filter_valid_calendar_period_pages(
+        await get_calendar_range(start, end, "week"), "week"
+    )
     full_weeks = [
         p for p in week_pages
         if _coerce_date(p["date"]) + timedelta(days=6) <= m_end
@@ -1917,16 +1927,24 @@ PERIOD_SUMMARY_PROMPT = """你是用户的 AI 伴侣。请根据下面的{source
 async def generate_period_summary(start: str, end: str, period_type: str,
                                    label: str, source_type: str, model_override: str = None):
     """通用的季度/年度总结生成"""
+    from calendar_periods import filter_valid_calendar_period_pages, validate_calendar_period_identity
     from database import get_calendar_range, save_calendar_page
     from config import get_config
 
+    if period_type not in {"quarter", "year"}:
+        raise ValueError("generate_period_summary 只允许 quarter/year")
+    validate_calendar_period_identity(start, period_type, end_value=end)
+
     # 根据 source_type 决定读取什么
     if source_type == "月总结":
-        pages = await get_calendar_range(start, end, "month")
+        source_page_type = "month"
     elif source_type == "季度总结":
-        pages = await get_calendar_range(start, end, "quarter")
+        source_page_type = "quarter"
     else:
-        pages = await get_calendar_range(start, end, "week")
+        source_page_type = "week"
+    pages = filter_valid_calendar_period_pages(
+        await get_calendar_range(start, end, source_page_type), source_page_type
+    )
 
     if not pages:
         print(f"   📭 {label} 没有{source_type}数据，跳过")
