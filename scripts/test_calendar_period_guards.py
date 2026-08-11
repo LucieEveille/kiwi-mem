@@ -94,6 +94,7 @@ async def check_shared_period_contract():
 
     invalid = (
         ("unknown type", lambda: periods.validate_calendar_period_identity("2026-08-01", "fortnight", today=fixed_today)),
+        ("non-string type", lambda: periods.validate_calendar_period_identity("2026-08-01", ["week"], today=fixed_today)),
         ("week start", lambda: periods.validate_calendar_period_identity("2026-08-04", "week", end_value="2026-08-10", today=fixed_today)),
         ("week end", lambda: periods.validate_calendar_period_identity("2026-08-03", "week", end_value="2026-08-08", today=fixed_today)),
         ("reversed week", lambda: periods.validate_calendar_period_identity("2026-08-03", "week", end_value="2026-08-02", today=fixed_today)),
@@ -281,6 +282,10 @@ async def check_http_boundaries():
                 f"/admin/calendar/{today.isoformat()}", json={"type": "fortnight", "content": "bad"}
             )
             check(response.status_code == 400, "unknown manual page type must return 400")
+            response = await client.put(
+                f"/admin/calendar/{today.isoformat()}", json={"type": ["week"], "content": "bad"}
+            )
+            check(response.status_code == 400, "non-string manual page type must return 400")
             response = await client.put(
                 f"/admin/calendar/{(p['week'][0] + timedelta(days=1)).isoformat()}",
                 json={"type": "week", "content": "bad"},
