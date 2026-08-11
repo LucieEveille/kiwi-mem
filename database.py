@@ -3170,19 +3170,19 @@ async def delete_calendar_page(date_str: str, page_type: str = "day"):
     pool = await get_pool()
     d = date_cls.fromisoformat(date_str)
     async with pool.acquire() as conn:
-        # 先查出 page id，用于删评论
-        row = await conn.fetchrow(
-            "SELECT id FROM calendar_pages WHERE date = $1 AND type = $2", d, page_type
-        )
-        if row:
-            # 删除关联评论
-            await conn.execute(
-                "DELETE FROM comments WHERE target_type = 'calendar_page' AND target_id = $1", row['id']
+        async with conn.transaction():
+            # 页面与关联评论必须同成同败。评论自身的回复树继续由
+            # comments.parent_id ON DELETE CASCADE 清理。
+            row = await conn.fetchrow(
+                "SELECT id FROM calendar_pages WHERE date = $1 AND type = $2", d, page_type
             )
-        # 删除页面
-        result = await conn.execute(
-            "DELETE FROM calendar_pages WHERE date = $1 AND type = $2", d, page_type
-        )
+            if row:
+                await conn.execute(
+                    "DELETE FROM comments WHERE target_type = 'calendar_page' AND target_id = $1", row['id']
+                )
+            result = await conn.execute(
+                "DELETE FROM calendar_pages WHERE date = $1 AND type = $2", d, page_type
+            )
     return _rowcount_nonzero(result)
 
 
