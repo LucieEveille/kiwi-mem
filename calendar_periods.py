@@ -71,7 +71,7 @@ def validate_calendar_period_identity(
     Summary pages are authoritative only after their entire canonical period has
     ended in Asia/Taipei. Day pages remain writable for any valid date.
     """
-    if page_type not in ALLOWED_CALENDAR_PAGE_TYPES:
+    if not isinstance(page_type, str) or page_type not in ALLOWED_CALENDAR_PAGE_TYPES:
         raise CalendarPeriodValidationError(
             "type 只允许 day/week/month/quarter/year"
         )
