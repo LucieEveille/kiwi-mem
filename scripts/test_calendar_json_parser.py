@@ -159,7 +159,7 @@ async def _run_week(text):
         patch.object(daily_digest.httpx, "AsyncClient", _fake_async_client(text)),
     ):
         result = await daily_digest.generate_week_summary(
-            "2026-07-01", "2026-07-07", model_override="test-model"
+            "2026-06-29", "2026-07-05", model_override="test-model"
         )
     return result, saves
 

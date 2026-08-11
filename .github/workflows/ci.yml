@@ -68,6 +68,8 @@ jobs:
           python scripts/test_compression_reasoning.py
           python scripts/test_calendar_delete_atomicity.py
           python scripts/test_mcp_calendar_sections.py
+          python scripts/test_calendar_period_guards.py
+          node scripts/test_calendar_period_defaults.mjs
 
       - name: 运行 S1-S6 永久真库行为守卫
         run: python scripts/test_kiwi_safety_sync.py

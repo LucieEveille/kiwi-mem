@@ -111,7 +111,7 @@ async def _calendar_range(start, end, page_type):
         }],
         "quarter": [{
             "type": "quarter",
-            "date": "2026-01-01",
+            "date": "2025-01-01",
             "sections": [{"emotion": "quarter source"}],
             "diary": "",
         }],
@@ -170,7 +170,7 @@ async def run_budget_contract():
         patch.object(daily_digest, "_call_model_for_json", fake_model),
     ):
         await daily_digest.generate_week_summary(
-            "2026-07-01", "2026-07-07", model_override="test-model"
+            "2026-06-29", "2026-07-05", model_override="test-model"
         )
         await daily_digest.generate_month_summary(
             "2026-07-01", "2026-07-31", "2026-07", model_override="test-model"
@@ -180,7 +180,7 @@ async def run_budget_contract():
             model_override="test-model",
         )
         await daily_digest.generate_period_summary(
-            "2026-01-01", "2026-12-31", "year", "2026", "季度总结",
+            "2025-01-01", "2025-12-31", "year", "2025", "季度总结",
             model_override="test-model",
         )
 
@@ -214,7 +214,7 @@ async def run_length_contract():
         redirect_stdout(output),
     ):
         result = await daily_digest.generate_week_summary(
-            "2026-07-01", "2026-07-07", model_override="test-model"
+            "2026-06-29", "2026-07-05", model_override="test-model"
         )
 
     log = output.getvalue()
