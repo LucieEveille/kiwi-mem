@@ -476,16 +476,17 @@ async def test_s3() -> None:
     await _pool_execute(
         """
         INSERT INTO calendar_pages (date, type, digest, summary)
-        VALUES ('2026-01-01', 'year', 'year', 'year'),
+        VALUES ('2025-01-01', 'year', 'year', 'year'),
+               ('2025-07-16', 'day', 'year-source', 'year-source'),
                ('2026-07-01', 'quarter', 'quarter', 'quarter'),
                ('2026-07-01', 'month', 'month', 'month')
         """
     )
     tz_calls.clear()
     with patch.object(database, "datetime", FixedDateTime):
-        hierarchical = await database.get_calendar_for_injection(lookback_days=365)
+        hierarchical = await database.get_calendar_for_injection(lookback_days=800)
     require(tz_calls == [database.TZ_CST], f"hierarchy path did not request TZ_CST: {tz_calls}")
-    require(any(item.get("label") == "2026年总结" for item in hierarchical), "date_cls hierarchy path broke")
+    require(any(item.get("label") == "2025年总结" for item in hierarchical), "date_cls hierarchy path broke")
     source = inspect.getsource(database.get_calendar_for_injection)
     require("datetime.now(TZ_CST).date()" in source, "CST anchor missing")
     require("date_cls.today()" not in source, "local container date anchor remains")
