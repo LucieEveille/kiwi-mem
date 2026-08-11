@@ -905,6 +905,119 @@ async def test_s6(client: httpx.AsyncClient) -> None:
     passed("T-S6-8 row-lock interleaving blocks late lifecycle writes; active control updates")
 
 
+async def test_w1_06() -> None:
+    print("\nW1-06 calendar page/comment delete atomicity")
+    await _truncate("calendar_pages", "comments")
+
+    target_id = await _pool_fetchval(
+        "INSERT INTO calendar_pages (date, type) VALUES ('2026-07-18', 'day') RETURNING id"
+    )
+    target_comment = await _pool_fetchval(
+        """
+        INSERT INTO comments (target_type, target_id, content)
+        VALUES ('calendar_page', $1, 'target') RETURNING id
+        """,
+        target_id,
+    )
+    await _pool_execute(
+        """
+        INSERT INTO comments (target_type, target_id, parent_id, content)
+        VALUES ('calendar_page', $1, $2, 'reply')
+        """,
+        target_id,
+        target_comment,
+    )
+
+    await _pool_execute(
+        """
+        CREATE OR REPLACE FUNCTION w1_06_fail_calendar_delete()
+        RETURNS trigger LANGUAGE plpgsql AS $$
+        BEGIN
+            RAISE EXCEPTION 'forced W1-06 page delete failure';
+        END;
+        $$
+        """
+    )
+    await _pool_execute(
+        """
+        CREATE TRIGGER w1_06_fail_calendar_delete_trigger
+        BEFORE DELETE ON calendar_pages
+        FOR EACH ROW WHEN (OLD.date = DATE '2026-07-18')
+        EXECUTE FUNCTION w1_06_fail_calendar_delete()
+        """
+    )
+    try:
+        try:
+            await database.delete_calendar_page("2026-07-18", "day")
+        except asyncpg.PostgresError:
+            pass
+        else:
+            raise AssertionError("forced page delete failure did not escape")
+        require(
+            await _pool_fetchval("SELECT COUNT(*) FROM calendar_pages WHERE id=$1", target_id) == 1,
+            "failed deletion removed the calendar page",
+        )
+        require(
+            await _pool_fetchval(
+                "SELECT COUNT(*) FROM comments WHERE target_type='calendar_page' AND target_id=$1",
+                target_id,
+            ) == 2,
+            "failed deletion did not restore calendar comments",
+        )
+    finally:
+        await _pool_execute("DROP TRIGGER IF EXISTS w1_06_fail_calendar_delete_trigger ON calendar_pages")
+        await _pool_execute("DROP FUNCTION IF EXISTS w1_06_fail_calendar_delete()")
+    passed("T-W1-06-1 injected second-step failure preserves page and comments")
+
+    keep_page_id = await _pool_fetchval(
+        "INSERT INTO calendar_pages (date, type) VALUES ('2026-07-19', 'day') RETURNING id"
+    )
+    keep_comment_id = await _pool_fetchval(
+        """
+        INSERT INTO comments (target_type, target_id, content)
+        VALUES ('calendar_page', $1, 'keep-page') RETURNING id
+        """,
+        keep_page_id,
+    )
+    other_target_id = await _pool_fetchval(
+        """
+        INSERT INTO comments (target_type, target_id, content)
+        VALUES ('memory', $1, 'keep-type') RETURNING id
+        """,
+        target_id,
+    )
+
+    require(await database.delete_calendar_page("2026-07-18", "day"), "existing page was not deleted")
+    require(
+        await _pool_fetchval("SELECT COUNT(*) FROM calendar_pages WHERE id=$1", target_id) == 0,
+        "target page survived successful delete",
+    )
+    require(
+        await _pool_fetchval(
+            "SELECT COUNT(*) FROM comments WHERE target_type='calendar_page' AND target_id=$1",
+            target_id,
+        ) == 0,
+        "target comments/replies survived successful delete",
+    )
+    passed("T-W1-06-2 successful delete removes page and its comment tree")
+
+    require(
+        await _pool_fetchval("SELECT COUNT(*) FROM comments WHERE id=$1", keep_comment_id) == 1,
+        "another page's comment was deleted",
+    )
+    require(
+        await _pool_fetchval("SELECT COUNT(*) FROM comments WHERE id=$1", other_target_id) == 1,
+        "another target type with the same numeric id was deleted",
+    )
+    passed("T-W1-06-3 unrelated comments remain untouched")
+
+    require(
+        not await database.delete_calendar_page("2026-07-18", "day"),
+        "repeated delete did not report not_found",
+    )
+    passed("T-W1-06-4 repeated delete is idempotent")
+
+
 async def test_w1_01() -> None:
     print("\nW1-01 project isolation and Dream permanent-memory protection")
     import importlib
@@ -1083,6 +1196,7 @@ async def run_suite(test_dsn: str) -> None:
         await test_s4(client)
         await test_s5(client)
         await test_s6(client)
+        await test_w1_06()
         await test_w1_01()
 
 
@@ -1095,8 +1209,10 @@ async def async_main() -> int:
         await run_suite(test_dsn)
         legacy_passed = [name for name in PASSED if name.startswith("T-S")]
         w1_01_passed = [name for name in PASSED if name.startswith("T-W1-01-")]
+        w1_06_passed = [name for name in PASSED if name.startswith("T-W1-06-")]
         print(f"\nPASS: {len(legacy_passed)} permanent S1-S6 behavior guards")
         print(f"PASS: {len(w1_01_passed)} W1-01 isolation/permanent guards")
+        print(f"PASS: {len(w1_06_passed)} W1-06 calendar-delete atomicity guards")
         print(f"PASS: {len(PASSED)} total permanent behavior guards")
         print("Real database path: disposable PostgreSQL verified")
         print("Real model/API path: not called; embedding/model/HTTP boundaries were mocked")
