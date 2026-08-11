@@ -40,20 +40,21 @@ SUMMARY_RESULT = {
 class _FakeResponse:
     status_code = 200
 
-    def __init__(self, text):
+    def __init__(self, text, finish_reason="stop"):
         self._text = text
+        self._finish_reason = finish_reason
 
     def json(self):
         return {
             "choices": [{
                 "message": {"content": self._text},
-                "finish_reason": "stop",
+                "finish_reason": self._finish_reason,
             }],
             "usage": {"completion_tokens": 100},
         }
 
 
-def _fake_async_client(text):
+def _fake_async_client(text, finish_reason="stop"):
     class FakeAsyncClient:
         def __init__(self, *args, **kwargs):
             pass
@@ -65,7 +66,7 @@ def _fake_async_client(text):
             return False
 
         async def post(self, *args, **kwargs):
-            return _FakeResponse(text)
+            return _FakeResponse(text, finish_reason)
 
     return FakeAsyncClient
 
@@ -116,7 +117,7 @@ async def _calendar_range(start, end, page_type):
     }]
 
 
-async def _run_day(text, save_hook=None):
+async def _run_day(text, save_hook=None, finish_reason="stop"):
     saves = []
 
     async def fake_save(*args, **kwargs):
@@ -131,7 +132,11 @@ async def _run_day(text, save_hook=None):
         patch.object(database, "resolve_model_endpoint", _model_endpoint),
         patch.object(database, "save_calendar_page", fake_save),
         patch.object(config, "get_config", _empty_config),
-        patch.object(daily_digest.httpx, "AsyncClient", _fake_async_client(text)),
+        patch.object(
+            daily_digest.httpx,
+            "AsyncClient",
+            _fake_async_client(text, finish_reason),
+        ),
     ):
         result = await daily_digest.generate_day_page(
             "2026-07-01", model_override="test-model"
@@ -195,6 +200,12 @@ async def case_truncated_json_rejected():
     assert result["status"] == "error" and saves == []
 
 
+async def case_length_finish_rejected_even_when_parseable():
+    text = json.dumps(DAY_RESULT, ensure_ascii=False)
+    result, saves = await _run_day(text, finish_reason="length")
+    assert result["status"] == "error" and saves == []
+
+
 async def case_empty_response_rejected():
     result, saves = await _run_day("   ")
     assert result["status"] == "error" and saves == []
@@ -245,6 +256,7 @@ async def main():
         case_explanatory_text_with_braces,
         case_raw_content_quotes,
         case_truncated_json_rejected,
+        case_length_finish_rejected_even_when_parseable,
         case_empty_response_rejected,
         case_day_field_types_rejected,
         case_summary_field_types_rejected,
