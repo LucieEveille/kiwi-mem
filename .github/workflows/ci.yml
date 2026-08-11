@@ -61,6 +61,7 @@ jobs:
         run: |
           python scripts/test_drawer_stability.py
           python scripts/test_gateway_tool_streaming.py
+          python scripts/test_stream_capture.py
           python scripts/test_calendar_summary_generation.py
 
       - name: 运行 S1-S6 永久真库行为守卫
