@@ -330,11 +330,20 @@ async def get_day_page(date: str, type: str = "day") -> str:
             lines.append(f"【概要】{summary}\n")
 
         if isinstance(sections, list):
+            # 日页面 sections 用 period/title/content；周/月/季/年总结用
+            # emotion/life/growth 三块，两种结构都要能读出来。
+            summary_labels = (("emotion", "情感与陪伴"), ("life", "生活与日常"), ("growth", "项目与成长"))
             for sec in sections:
-                period = sec.get("period", "")
-                sec_title = sec.get("title", "")
+                if not isinstance(sec, dict):
+                    continue
                 content = sec.get("content", "")
-                lines.append(f"**{period} — {sec_title}**\n{content}\n")
+                if content or sec.get("period") or sec.get("title"):
+                    period = sec.get("period", "")
+                    sec_title = sec.get("title", "")
+                    lines.append(f"**{period} — {sec_title}**\n{content}\n")
+                for key, label in summary_labels:
+                    if sec.get(key):
+                        lines.append(f"**{label}**\n{sec[key]}\n")
 
         if diary:
             lines.append(f"📝 AI 的日记：{diary}")
