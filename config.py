@@ -205,7 +205,12 @@ async def get_all_config() -> dict:
 # 写入配置
 # ============================================================
 
-_ENUM_VALUES = {"mcp_mode": {"off", "auto", "manual"}}
+REASONING_EFFORT_VALUES = ("off", "auto", "low", "medium", "high")
+
+_ENUM_VALUES = {
+    "mcp_mode": {"off", "auto", "manual"},
+    "reasoning_effort": set(REASONING_EFFORT_VALUES),
+}
 
 
 def _mask_secret(value: str) -> str:
