@@ -3051,6 +3051,8 @@ async def save_calendar_page(date_str: str, page_type: str, sections: list, diar
                               title: str = ""):
     """保存或更新日历页面（upsert），v5.4 summary / v5.5 digest / v6.0 title"""
     from datetime import date as date_cls
+    from calendar_periods import validate_calendar_period_identity
+    validate_calendar_period_identity(date_str, page_type)
     pool = await get_pool()
     d = date_cls.fromisoformat(date_str)
     kw = json.dumps(keywords or [], ensure_ascii=False)
@@ -3060,6 +3062,7 @@ async def save_calendar_page(date_str: str, page_type: str, sections: list, diar
             INSERT INTO calendar_pages (date, type, sections, diary, keywords, model_used, summary, digest, title, updated_at)
             VALUES ($1, $2, $3::jsonb, $4, $5::jsonb, $6, $7, $8, $9, NOW())
             ON CONFLICT (date, type) DO UPDATE SET
+                created_at = NOW(),
                 sections = EXCLUDED.sections,
                 diary = EXCLUDED.diary,
                 keywords = EXCLUDED.keywords,
@@ -3081,6 +3084,8 @@ async def update_calendar_page_user_edit(date_str: str, page_type: str, diary: s
     model_used 记为 user_edit。返回页面 id。
     """
     from datetime import date as date_cls
+    from calendar_periods import validate_calendar_period_identity
+    validate_calendar_period_identity(date_str, page_type)
     pool = await get_pool()
     d = date_cls.fromisoformat(date_str)
     empty_json = json.dumps([], ensure_ascii=False)
@@ -3201,7 +3206,7 @@ async def get_calendar_for_injection(lookback_days: int = 365):
 
     async with pool.acquire() as conn:
         rows = await conn.fetch("""
-            SELECT date, type, digest, summary, keywords
+            SELECT date, type, digest, summary, keywords, created_at
             FROM calendar_pages
             WHERE date >= $1
             ORDER BY date ASC
@@ -3210,7 +3215,15 @@ async def get_calendar_for_injection(lookback_days: int = 365):
     if not rows:
         return []
 
-    pages = [_calendar_row_to_dict(r) for r in rows]
+    from calendar_periods import is_calendar_period_identity_valid
+    pages = [
+        page for page in (_calendar_row_to_dict(r) for r in rows)
+        if page.get("type") == "day"
+        or is_calendar_period_identity_valid(
+            page.get("date"), page.get("type"), today=today,
+            created_at=page.get("created_at"),
+        )
+    ]
 
     # 按类型分组
     by_type = {}
@@ -3338,6 +3351,39 @@ async def get_calendar_for_injection(lookback_days: int = 365):
     result.sort(key=lambda x: x["date"])
 
     return result
+
+
+async def get_invalid_calendar_period_pages():
+    """只读诊断存量非法总结页；不重锚、不改写、不删除。"""
+    from calendar_periods import calendar_period_invalid_reason
+
+    pool = await get_pool()
+    today = datetime.now(TZ_CST).date()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch("""
+            SELECT id, date, type, title, created_at, updated_at
+            FROM calendar_pages
+            WHERE type <> 'day'
+            ORDER BY date ASC, type ASC
+        """)
+
+    invalid = []
+    for row in rows:
+        item = dict(row)
+        reason = calendar_period_invalid_reason(
+            item.get("date"), item.get("type"), today=today,
+            created_at=item.get("created_at"),
+        )
+        if not reason:
+            continue
+        item["date"] = str(item.get("date"))
+        if item.get("created_at"):
+            item["created_at"] = item["created_at"].isoformat()
+        if item.get("updated_at"):
+            item["updated_at"] = item["updated_at"].isoformat()
+        item["reason"] = reason
+        invalid.append(item)
+    return invalid
 
 
 async def get_chat_messages_for_date(date_str: str):

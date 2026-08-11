@@ -3706,10 +3706,13 @@ async def api_generate_day_page(date: str = None):
 
 @app.get("/admin/week-summary")
 async def api_generate_week_summary(start: str = None, end: str = None):
-    """手动触发周总结 ?start=2026-03-31&end=2026-04-06"""
+    """手动触发周总结 ?start=2026-03-30&end=2026-04-05"""
     try:
+        from calendar_periods import validate_calendar_period_identity
         from daily_digest import generate_week_summary
-        if not start or not end:
+        if (start is None) != (end is None):
+            return JSONResponse(status_code=400, content={"error": "start 与 end 必须同时提供或同时省略"})
+        if start is None and end is None:
             from datetime import timedelta as td, timezone as tz_mod, datetime as dt_cls
             TZ = tz_mod(td(hours=8))
             now = dt_cls.now(TZ)
@@ -3719,8 +3722,11 @@ async def api_generate_week_summary(start: str = None, end: str = None):
             last_sunday = last_monday + td(days=6)
             start = last_monday.strftime("%Y-%m-%d")
             end = last_sunday.strftime("%Y-%m-%d")
+        validate_calendar_period_identity(start, "week", end_value=end)
         result = await generate_week_summary(start, end)
         return {"status": "ok", **result}
+    except ValueError as e:
+        return JSONResponse(status_code=400, content={"error": str(e)})
     except Exception as e:
         return {"error": str(e)}
 
@@ -3729,6 +3735,7 @@ async def api_generate_week_summary(start: str = None, end: str = None):
 async def api_generate_month_summary(month: str = None):
     """手动触发月总结 ?month=2026-03"""
     try:
+        from calendar_periods import validate_calendar_period_identity
         from daily_digest import generate_month_summary
         if not month:
             from datetime import timedelta as td, timezone as tz_mod, datetime as dt_cls
@@ -3742,8 +3749,11 @@ async def api_generate_month_summary(month: str = None):
         last_day = cal_mod.monthrange(int(year), int(mon))[1]
         start = f"{month}-01"
         end = f"{month}-{last_day:02d}"
+        validate_calendar_period_identity(start, "month", end_value=end)
         result = await generate_month_summary(start, end, month)
         return {"status": "ok", **result}
+    except ValueError as e:
+        return JSONResponse(status_code=400, content={"error": str(e)})
     except Exception as e:
         return {"error": str(e)}
 
@@ -3752,6 +3762,7 @@ async def api_generate_month_summary(month: str = None):
 async def api_generate_quarter_summary(quarter: str = None):
     """手动触发季度总结 ?quarter=2026-Q1"""
     try:
+        from calendar_periods import validate_calendar_period_identity
         from daily_digest import generate_period_summary
         import calendar as cal_mod
         from datetime import timedelta as td, timezone as tz_mod, datetime as dt_cls
@@ -3781,8 +3792,11 @@ async def api_generate_quarter_summary(quarter: str = None):
         end = f"{year}-{q_end_month:02d}-{q_end_day:02d}"
         label = f"{year}Q{q}"
 
+        validate_calendar_period_identity(start, "quarter", end_value=end)
         result = await generate_period_summary(start, end, "quarter", label, "月总结")
         return {"status": "ok", **result}
+    except ValueError as e:
+        return JSONResponse(status_code=400, content={"error": str(e)})
     except Exception as e:
         return {"error": str(e)}
 
@@ -3791,6 +3805,7 @@ async def api_generate_quarter_summary(quarter: str = None):
 async def api_generate_year_summary(year: str = None):
     """手动触发年度总结 ?year=2025"""
     try:
+        from calendar_periods import validate_calendar_period_identity
         from daily_digest import generate_period_summary
         from datetime import timedelta as td, timezone as tz_mod, datetime as dt_cls
 
@@ -3803,8 +3818,11 @@ async def api_generate_year_summary(year: str = None):
         start = f"{y}-01-01"
         end = f"{y}-12-31"
 
+        validate_calendar_period_identity(start, "year", end_value=end)
         result = await generate_period_summary(start, end, "year", str(y), "季度总结")
         return {"status": "ok", **result}
+    except ValueError as e:
+        return JSONResponse(status_code=400, content={"error": str(e)})
     except Exception as e:
         return {"error": str(e)}
 
@@ -3908,15 +3926,28 @@ async def api_get_calendar_range(start: str = None, end: str = None, type: str =
         return {"error": str(e)}
 
 
+@app.get("/admin/calendar-period-audit")
+async def api_calendar_period_audit():
+    """只读列出存量非法周期页；隔离不等于迁移或删除。"""
+    try:
+        from database import get_invalid_calendar_period_pages
+        pages = await get_invalid_calendar_period_pages()
+        return {"status": "ok", "pages": pages, "count": len(pages)}
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": str(e)})
+
+
 @app.put("/admin/calendar/{date}")
 async def api_save_calendar_page(date: str, req: Request):
     """用户手动编辑/创建日历页面"""
     try:
+        from calendar_periods import validate_calendar_period_identity
         from database import update_calendar_page_user_edit
         body = await req.json()
         content = body.get("content", "")
         title = body.get("title", "")
         page_type = body.get("type", "day")
+        validate_calendar_period_identity(date, page_type)
         # 用户编辑只写 diary（content）与 title；页面已有的 AI 内容
         # （sections/keywords/summary/digest/model_used）一律保留，不再被空值覆盖。
         page_id = await update_calendar_page_user_edit(
@@ -3926,6 +3957,8 @@ async def api_save_calendar_page(date: str, req: Request):
             title=title,
         )
         return {"status": "ok", "id": page_id}
+    except ValueError as e:
+        return JSONResponse(status_code=400, content={"error": str(e)})
     except Exception as e:
         return {"error": str(e)}
 

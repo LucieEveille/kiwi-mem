@@ -476,16 +476,17 @@ async def test_s3() -> None:
     await _pool_execute(
         """
         INSERT INTO calendar_pages (date, type, digest, summary)
-        VALUES ('2026-01-01', 'year', 'year', 'year'),
+        VALUES ('2025-01-01', 'year', 'year', 'year'),
+               ('2025-07-16', 'day', 'year-source', 'year-source'),
                ('2026-07-01', 'quarter', 'quarter', 'quarter'),
                ('2026-07-01', 'month', 'month', 'month')
         """
     )
     tz_calls.clear()
     with patch.object(database, "datetime", FixedDateTime):
-        hierarchical = await database.get_calendar_for_injection(lookback_days=365)
+        hierarchical = await database.get_calendar_for_injection(lookback_days=800)
     require(tz_calls == [database.TZ_CST], f"hierarchy path did not request TZ_CST: {tz_calls}")
-    require(any(item.get("label") == "2026年总结" for item in hierarchical), "date_cls hierarchy path broke")
+    require(any(item.get("label") == "2025年总结" for item in hierarchical), "date_cls hierarchy path broke")
     source = inspect.getsource(database.get_calendar_for_injection)
     require("datetime.now(TZ_CST).date()" in source, "CST anchor missing")
     require("date_cls.today()" not in source, "local container date anchor remains")
@@ -1018,6 +1019,140 @@ async def test_w1_06() -> None:
     passed("T-W1-06-4 repeated delete is idempotent")
 
 
+async def test_w1_08() -> None:
+    print("\nW1-08 calendar period identity and legacy isolation")
+    import importlib
+
+    periods = importlib.import_module("calendar_periods")
+    today = StdDateTime.now(database.TZ_CST).date()
+    current_monday = today - timedelta(days=today.weekday())
+    previous_week_end = current_monday - timedelta(days=1)
+    previous_week_start = previous_week_end - timedelta(days=6)
+    previous_month_end = today.replace(day=1) - timedelta(days=1)
+    previous_month_start = previous_month_end.replace(day=1)
+
+    await _truncate("calendar_pages", "comments")
+    invalid_factories = (
+        lambda: database.save_calendar_page(today.replace(day=1).isoformat(), "month", []),
+        lambda: database.save_calendar_page((previous_week_start + timedelta(days=1)).isoformat(), "week", []),
+        lambda: database.save_calendar_page(previous_week_start.isoformat(), "fortnight", []),
+        lambda: database.update_calendar_page_user_edit(today.replace(day=1).isoformat(), "month", diary="bad"),
+    )
+    for make_awaitable in invalid_factories:
+        try:
+            await make_awaitable()
+        except periods.CalendarPeriodValidationError:
+            pass
+        else:
+            raise AssertionError("invalid/incomplete calendar identity crossed the DB write boundary")
+    require(
+        await _pool_fetchval("SELECT COUNT(*) FROM calendar_pages") == 0,
+        "rejected calendar identities left rows behind",
+    )
+    passed("T-W1-08-1 DB writes reject unknown, misanchored, and incomplete periods")
+
+    await database.save_calendar_page(today.isoformat(), "day", [])
+    await database.save_calendar_page(previous_week_start.isoformat(), "week", [])
+    await database.update_calendar_page_user_edit(
+        previous_month_start.isoformat(), "month", diary="valid manual summary"
+    )
+    require(
+        await _pool_fetchval("SELECT COUNT(*) FROM calendar_pages") == 3,
+        "valid day/completed summaries did not remain writable",
+    )
+    passed("T-W1-08-2 valid day and completed canonical periods remain writable")
+
+    await _truncate("calendar_pages", "comments")
+    bad_week_date = previous_week_start - timedelta(days=13)  # Tuesday, safely older than seven days.
+    bad_month_date = previous_month_start + timedelta(days=1)
+    bad_week_id = await _pool_fetchval(
+        "INSERT INTO calendar_pages (date, type, digest) VALUES ($1, 'week', 'BAD_WEEK') RETURNING id",
+        bad_week_date,
+    )
+    bad_month_id = await _pool_fetchval(
+        "INSERT INTO calendar_pages (date, type, digest) VALUES ($1, 'month', 'BAD_MONTH') RETURNING id",
+        bad_month_date,
+    )
+    bad_type_id = await _pool_fetchval(
+        "INSERT INTO calendar_pages (date, type, digest) VALUES ($1, 'fortnight', 'BAD_TYPE') RETURNING id",
+        previous_month_start,
+    )
+    premature_created_at = StdDateTime(
+        previous_week_end.year, previous_week_end.month, previous_week_end.day,
+        12, 0, tzinfo=database.TZ_CST,
+    )
+    premature_week_id = await _pool_fetchval(
+        """
+        INSERT INTO calendar_pages (date, type, digest, created_at, updated_at)
+        VALUES ($1, 'week', 'PREMATURE_WEEK', $2, $2) RETURNING id
+        """,
+        previous_week_start,
+        premature_created_at,
+    )
+    source_dates = {bad_week_date, bad_month_date, previous_week_start}
+    for index, source_date in enumerate(sorted(source_dates), start=1):
+        await _pool_execute(
+            """
+            INSERT INTO calendar_pages (date, type, digest)
+            VALUES ($1, 'day', $2)
+            ON CONFLICT (date, type) DO UPDATE SET digest=EXCLUDED.digest
+            """,
+            source_date,
+            f"GOOD_DAY_{index}",
+        )
+
+    count_before = await _pool_fetchval("SELECT COUNT(*) FROM calendar_pages")
+    audited = await database.get_invalid_calendar_period_pages()
+    count_after = await _pool_fetchval("SELECT COUNT(*) FROM calendar_pages")
+    require(count_before == count_after, "legacy period audit mutated stored pages")
+    audited_ids = {row["id"] for row in audited}
+    require(
+        {bad_week_id, bad_month_id, bad_type_id, premature_week_id} <= audited_ids,
+        f"legacy audit missed invalid identities: {audited_ids}",
+    )
+    passed("T-W1-08-3 read-only audit diagnoses legacy invalid pages without mutation")
+
+    injected = await database.get_calendar_for_injection(lookback_days=400)
+    require(
+        not any(row["type"] in {"week", "month", "fortnight"} for row in injected),
+        "invalid legacy summaries entered injection or claimed coverage",
+    )
+    injected_digests = {row.get("digest") for row in injected}
+    expected_day_digests = {f"GOOD_DAY_{i}" for i in range(1, len(source_dates) + 1)}
+    require(
+        expected_day_digests <= injected_digests,
+        f"invalid summaries hid their source days: {injected_digests}",
+    )
+    passed("T-W1-08-4 invalid legacy summaries cannot inject or claim day coverage")
+
+    for source_date in source_dates:
+        require(
+            await _pool_fetchval(
+                "SELECT COUNT(*) FROM calendar_pages WHERE date=$1 AND type='day'", source_date
+            ) == 1,
+            "legacy isolation moved or deleted a source day",
+        )
+    passed("T-W1-08-5 legacy isolation preserves original rows for explicit rebuild")
+
+    await database.save_calendar_page(
+        previous_week_start.isoformat(), "week", [], digest="REBUILT_WEEK"
+    )
+    rebuilt = await _pool_fetchrow(
+        "SELECT created_at, digest FROM calendar_pages WHERE id=$1", premature_week_id
+    )
+    require(
+        rebuilt["created_at"].astimezone(database.TZ_CST).date() > previous_week_end
+        and rebuilt["digest"] == "REBUILT_WEEK",
+        "explicit regeneration did not refresh the quarantined authorship epoch",
+    )
+    audited_after_rebuild = await database.get_invalid_calendar_period_pages()
+    require(
+        premature_week_id not in {row["id"] for row in audited_after_rebuild},
+        "explicit canonical rebuild did not restore period eligibility",
+    )
+    passed("T-W1-08-6 explicit regeneration releases premature-page quarantine")
+
+
 async def test_w1_01() -> None:
     print("\nW1-01 project isolation and Dream permanent-memory protection")
     import importlib
@@ -1197,6 +1332,7 @@ async def run_suite(test_dsn: str) -> None:
         await test_s5(client)
         await test_s6(client)
         await test_w1_06()
+        await test_w1_08()
         await test_w1_01()
 
 
@@ -1210,9 +1346,11 @@ async def async_main() -> int:
         legacy_passed = [name for name in PASSED if name.startswith("T-S")]
         w1_01_passed = [name for name in PASSED if name.startswith("T-W1-01-")]
         w1_06_passed = [name for name in PASSED if name.startswith("T-W1-06-")]
+        w1_08_passed = [name for name in PASSED if name.startswith("T-W1-08-")]
         print(f"\nPASS: {len(legacy_passed)} permanent S1-S6 behavior guards")
         print(f"PASS: {len(w1_01_passed)} W1-01 isolation/permanent guards")
         print(f"PASS: {len(w1_06_passed)} W1-06 calendar-delete atomicity guards")
+        print(f"PASS: {len(w1_08_passed)} W1-08 calendar-period guards")
         print(f"PASS: {len(PASSED)} total permanent behavior guards")
         print("Real database path: disposable PostgreSQL verified")
         print("Real model/API path: not called; embedding/model/HTTP boundaries were mocked")
