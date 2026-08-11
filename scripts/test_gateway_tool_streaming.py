@@ -391,7 +391,10 @@ async def case_route_exception_with_request_mcp(client, controller):
     MCP_BATCH_CALLS = 0
     controller.add_plan(
         key,
-        tool_response(tool_call("_drawer_return_tools", {}, "exception-return")),
+        tool_response(
+            tool_call("_drawer_request_tools", {"category": "memory"}, "exception-memory"),
+            tool_call("_drawer_return_tools", {}, "exception-return"),
+        ),
         final_response("exception final"),
     )
 
@@ -413,9 +416,106 @@ async def case_route_exception_with_request_mcp(client, controller):
 
     controller.assert_consumed(key)
     name_lists = assert_only_appends(controller.captured[key])
+    forbidden = {
+        name for name, category in td._tool_to_category.items()
+        if category in {"search", "memory", "conversation", "reminder"}
+    }
+    allowed_internal = {
+        name for name, category in td._tool_to_category.items()
+        if category in {"calendar", "dream", "profile"}
+    }
+    check(all(not (set(names) & forbidden) for names in name_lists), "fallback must obey every disabled internal gate")
+    allowed_categories = {td._tool_to_category.get(name) for name in name_lists[0]}
+    check(
+        {"calendar", "dream", "profile"} <= allowed_categories,
+        "route exception must retain every allowed internal base category",
+    )
     check(all("request_mcp_probe" in names for names in name_lists), "request-body MCP must force entry into the tool loop")
+    second_messages = json.dumps(controller.captured[key][1].get("messages", []), ensure_ascii=False)
+    check("该类工具当前已被用户设置关闭，无法展开" in second_messages, "fallback meta expansion must obey memory gate")
     check(RETURN_MESSAGE in response.text, "route-exception legacy call must still hit the meta tombstone")
     check(MCP_BATCH_CALLS == 0, "legacy return must not fall through to MCP batch execution")
+
+
+async def case_empty_route_uses_gated_fallback(client, controller):
+    key = "empty-route-fallback"
+    sid = "stream-empty-route"
+    td._sessions.pop(sid, None)
+    controller.add_plan(
+        key,
+        tool_response(tool_call("list_tool_categories", {}, "empty-list")),
+        final_response("empty route final"),
+    )
+
+    async def empty_route(*_args, **_kwargs):
+        return [], {}
+
+    with patch.object(td, "route_tools", empty_route):
+        response = await post_gateway(
+            client,
+            key,
+            sid,
+            {"drawer_enabled": True, "reminder_tools_enabled": False},
+        )
+
+    controller.assert_consumed(key)
+    name_lists = assert_only_appends(controller.captured[key])
+    check(streamed_text(response) == "empty route final", "empty route fallback must finish normally")
+    check(name_lists[0] == name_lists[1], "full fallback schemas must stay a stable prefix without reshuffle")
+    check("list_tool_categories" in name_lists[0], "empty route fallback must retain meta tools")
+    first_categories = {td._tool_to_category.get(name) for name in name_lists[0]}
+    check(
+        {"calendar", "dream", "profile"} <= first_categories,
+        "empty route fallback must retain every allowed base category",
+    )
+    check(not (first_categories & {"search", "memory", "conversation", "reminder"}), "empty route fallback must keep disabled categories hidden")
+    second_messages = json.dumps(controller.captured[key][1].get("messages", []), ensure_ascii=False)
+    check('"id": "memory"' not in second_messages, "fallback category listing must hide disabled memory")
+    check('"id": "reminder"' not in second_messages, "fallback category listing must hide disabled reminders")
+
+
+async def case_external_mcp_failure_keeps_internal_fallback(client, controller):
+    key = "external-mcp-failure-fallback"
+    sid = "stream-external-failure"
+    td._sessions.pop(sid, None)
+    controller.add_plan(
+        key,
+        tool_response(tool_call("list_tool_categories", {}, "external-list")),
+        final_response("external failure final"),
+    )
+
+    async def empty_route(*_args, **_kwargs):
+        return [], {}
+
+    async def unavailable_mcp(*_args, **_kwargs):
+        raise RuntimeError("forced external MCP outage")
+
+    with (
+        patch.object(td, "route_tools", empty_route),
+        patch.object(gateway, "get_tools_for_servers", unavailable_mcp),
+    ):
+        response = await post_gateway(
+            client,
+            key,
+            sid,
+            {"drawer_enabled": True, "reminder_tools_enabled": False},
+            mcp_servers=[{
+                "name": "unavailable-mcp",
+                "url": "https://mcp.invalid/unavailable",
+                "transport": "streamable_http",
+            }],
+        )
+
+    controller.assert_consumed(key)
+    name_lists = assert_only_appends(controller.captured[key])
+    check(streamed_text(response) == "external failure final", "external MCP outage must not abort internal fallback")
+    check("list_tool_categories" in name_lists[0], "external outage must retain fallback meta tools")
+    check("request_mcp_probe" not in name_lists[0], "unavailable request MCP schema must not be invented")
+    first_categories = {td._tool_to_category.get(name) for name in name_lists[0]}
+    check(
+        {"calendar", "dream", "profile"} <= first_categories,
+        "external outage must retain every allowed internal base category",
+    )
 
 
 async def case_concurrent_request_isolation(client, controller):
@@ -544,6 +644,8 @@ async def main():
         await case_long_valid_loop_and_hard_stop(asgi_client, controller)
         await case_classic_legacy_return(asgi_client, controller)
         await case_route_exception_with_request_mcp(asgi_client, controller)
+        await case_empty_route_uses_gated_fallback(asgi_client, controller)
+        await case_external_mcp_failure_keeps_internal_fallback(asgi_client, controller)
         await case_concurrent_request_isolation(asgi_client, controller)
     finally:
         for item in reversed(patches):

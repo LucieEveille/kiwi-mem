@@ -14,11 +14,25 @@ sys.path.insert(0, ROOT)
 import tool_drawer as td
 
 RETURN_MESSAGE = "工具抽屉已是常驻模式：本会话展开的工具会一直保持可用，无需归还。"
+REMINDER_NAMES = {
+    "_gateway_create_reminder",
+    "_gateway_list_reminders",
+    "_gateway_complete_reminder",
+    "_gateway_delete_reminder",
+}
 
 
 def check(condition, message):
     if not condition:
         raise AssertionError(message)
+
+
+def tool_names(tools):
+    return [
+        item.get("function", {}).get("name")
+        for item in tools
+        if item.get("function", {}).get("name")
+    ]
 
 
 def ensure_categories():
@@ -193,6 +207,101 @@ async def check_reminder_route_gate():
         check("reminder" not in td._get_session(sid)["expanded"], "disabled route must keep reminder collapsed")
 
 
+async def check_fallback_builder_gates():
+    ext_id = "ext_fallback_contract"
+    ext_tool = "fallback_external_probe"
+    ext_schema = {
+        "type": "function",
+        "function": {
+            "name": ext_tool,
+            "description": "fallback external probe",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    }
+    td.TOOL_SCHEMAS[ext_tool] = ext_schema
+    td._tool_to_category[ext_tool] = ext_id
+    td.CATEGORIES[ext_id] = {
+        "label": "Fallback MCP",
+        "description": "fallback external probe",
+        "tool_names": [ext_tool],
+        "external": True,
+    }
+    td._external_categories[ext_id] = {
+        "label": "Fallback MCP",
+        "server_name": "Fallback MCP",
+        "tool_names": [ext_tool],
+        "tool_map": {
+            ext_tool: {
+                "type": "external_mcp",
+                "url": "https://invalid.test/mcp",
+                "transport": "streamable_http",
+                "server_name": "Fallback MCP",
+                "origin_name": ext_tool,
+            }
+        },
+    }
+    try:
+        blocked_tools, blocked_map = td.build_full_fallback_tools(
+            search_enabled=False,
+            mem_enabled=False,
+            reminder_tools_enabled=False,
+            mcp_mode="off",
+            project_id="project-hidden",
+        )
+        blocked_names = tool_names(blocked_tools)
+        meta_names = tool_names(td.META_TOOLS)
+        check(blocked_names[:len(meta_names)] == meta_names, "fallback must keep meta tools as the stable prefix")
+        check(len(blocked_names) == len(set(blocked_names)), "fallback must not duplicate tool schemas")
+        forbidden = {
+            name for name, category in td._tool_to_category.items()
+            if category in {"search", "memory", "conversation", "reminder"}
+        }
+        check(not (set(blocked_names) & forbidden), "fallback must filter every disabled internal category")
+        check(ext_tool not in blocked_names, "mcp_mode=off must hide fallback external tools")
+        check(
+            {"calendar", "dream", "profile"} <= {
+                td._tool_to_category.get(name) for name in blocked_names
+            },
+            "fallback must retain every allowed internal base category",
+        )
+        meta_context = blocked_map["_drawer_request_tools"]
+        check(
+            set(meta_context["disabled_categories"]) == {"search", "memory", "conversation", "reminder"},
+            "fallback meta context must freeze every request-level disabled category",
+        )
+        check(meta_context["mcp_mode"] == "off", "fallback meta context must freeze MCP mode")
+
+        manual_tools, manual_map = td.build_full_fallback_tools(
+            search_enabled=False,
+            mem_enabled=True,
+            reminder_tools_enabled=False,
+            mcp_mode="manual",
+            pinned_external={ext_id},
+            project_id="project-42",
+        )
+        manual_names = tool_names(manual_tools)
+        check(ext_tool in manual_names, "manual fallback must include a pinned external category")
+        check("_gateway_web_search" not in manual_names, "manual fallback must keep disabled search hidden")
+        check(REMINDER_NAMES.isdisjoint(manual_names), "manual fallback must keep disabled reminders hidden")
+        check(
+            manual_map["_gateway_search_conversations"]["project_id"] == "project-42",
+            "fallback conversation search must retain the request project scope",
+        )
+
+        unpinned_tools, _ = td.build_full_fallback_tools(
+            mcp_mode="manual",
+            pinned_external=set(),
+        )
+        auto_tools, _ = td.build_full_fallback_tools(mcp_mode="auto")
+        check(ext_tool not in tool_names(unpinned_tools), "manual fallback must hide unpinned external tools")
+        check(ext_tool in tool_names(auto_tools), "auto fallback may expose registered external tools")
+    finally:
+        td.TOOL_SCHEMAS.pop(ext_tool, None)
+        td._tool_to_category.pop(ext_tool, None)
+        td.CATEGORIES.pop(ext_id, None)
+        td._external_categories.pop(ext_id, None)
+
+
 async def check_reserved_external_name():
     snapshots = {
         "schemas": dict(td.TOOL_SCHEMAS),
@@ -337,6 +446,7 @@ async def main():
     await check_request_context_gates()
     await check_mcp_mode_isolation()
     await check_reminder_route_gate()
+    await check_fallback_builder_gates()
     await check_reserved_external_name()
     check_source_guards()
 

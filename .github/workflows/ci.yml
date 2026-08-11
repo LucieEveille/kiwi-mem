@@ -64,6 +64,7 @@ jobs:
           python scripts/test_stream_capture.py
           python scripts/test_calendar_summary_generation.py
           python scripts/test_calendar_json_parser.py
+          python scripts/test_mcp_recall.py
 
       - name: 运行 S1-S6 永久真库行为守卫
         run: python scripts/test_kiwi_safety_sync.py

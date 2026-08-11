@@ -60,7 +60,7 @@ async def search_memory(query: str, limit: int = 10) -> str:
         async with httpx.AsyncClient(timeout=15, headers=GATEWAY_HEADERS) as client:
             resp = await client.get(
                 f"{GATEWAY_BASE}/debug/memories",
-                params={"q": query, "limit": limit},
+                params={"q": query, "limit": limit, "track_recall": "true"},
             )
             data = resp.json()
 

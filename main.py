@@ -2038,6 +2038,8 @@ async def chat_completions(request: Request):
             await _drawer_init()
         except Exception as e:
             print(f"⚠️ 工具抽屉 lazy init 失败: {e}")
+        drawer_tools = []
+        drawer_map = {}
         try:
             from tool_drawer import route_tools as _drawer_route
             user_embedding = prompt_meta.get("user_embedding") if prompt_meta else None
@@ -2051,10 +2053,33 @@ async def chat_completions(request: Request):
                 mcp_mode=mcp_mode,
                 reminder_tools_enabled=reminder_tools_enabled,
             )
-            openai_tools.extend(drawer_tools)
-            tool_map.update(drawer_map)
         except Exception as e:
             print(f"❌ 工具抽屉路由失败: {e}")
+        if drawer_tools and drawer_map:
+            openai_tools.extend(drawer_tools)
+            tool_map.update(drawer_map)
+        else:
+            print("⚠️ 工具抽屉路由无可用结果，启用受门控的全量降级")
+            try:
+                from tool_drawer import build_full_fallback_tools, _get_pinned_external_categories
+                pinned_external = (
+                    await _get_pinned_external_categories()
+                    if mcp_mode == "manual"
+                    else set()
+                )
+                fallback_tools, fallback_map = build_full_fallback_tools(
+                    search_enabled=bool(do_search_auto),
+                    mem_enabled=mem_enabled,
+                    reminder_tools_enabled=reminder_tools_enabled,
+                    mcp_mode=mcp_mode,
+                    pinned_external=pinned_external,
+                    project_id=project_id,
+                )
+                openai_tools.extend(fallback_tools)
+                tool_map.update(fallback_map)
+                print(f"🗃️  全量降级：装载了 {len(fallback_tools)} 个受门控工具")
+            except Exception as fallback_e:
+                print(f"❌ 工具抽屉全量降级失败: {fallback_e}")
         # Request-body MCP servers are explicit third-party input and bypass mcp_mode by design.
         if mcp_servers:
             try:

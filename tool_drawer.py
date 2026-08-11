@@ -703,6 +703,33 @@ def _category_order_map(categories):
 def _sort_category_ids(cat_ids, order_map):
     return sorted(cat_ids, key=lambda cat_id: (order_map.get(cat_id, 10**9), cat_id))
 
+
+def _normalize_mcp_mode(value):
+    mode = str(value or "auto").strip().lower()
+    return mode if mode in ("off", "auto", "manual") else "auto"
+
+
+def _disabled_category_set(search_enabled=True, mem_enabled=True, reminder_tools_enabled=True):
+    disabled = set()
+    if not search_enabled:
+        disabled.add("search")
+    if not mem_enabled:
+        disabled.update({"memory", "conversation"})
+    if not reminder_tools_enabled:
+        disabled.add("reminder")
+    return disabled
+
+
+def _meta_tool_context(disabled_categories, mcp_mode, pinned_external):
+    """Freeze request-level routing state onto one meta entry."""
+    return {
+        "type": "meta",
+        "handler": "drawer_meta",
+        "disabled_categories": frozenset(disabled_categories or ()),
+        "mcp_mode": _normalize_mcp_mode(mcp_mode),
+        "pinned_external": frozenset(pinned_external or ()),
+    }
+
 def _get_session(session_id):
     now = time.time()
     if session_id not in _sessions:
@@ -769,9 +796,7 @@ async def route_tools(
         ext_threshold = 0.40
         ext_max_open = 3
 
-    mode = str(mcp_mode or "auto").strip().lower()
-    if mode not in ("off", "auto", "manual"):
-        mode = "auto"
+    mode = _normalize_mcp_mode(mcp_mode)
     external_auto = mode == "auto"
     # auto = 纯语义路由：切到 auto 后不保留手动钉选，外部工具完全交给语义/关键词决定。
     # 只有 manual 模式才尊重 mcp_manual_ids。这与 handle_meta_tool 的判定（mode=='manual'）
@@ -854,13 +879,11 @@ async def route_tools(
         matched_categories.discard("reminder")
         _remove_expanded(session, {"reminder"})
 
-    disabled = set()
-    if not search_enabled:
-        disabled.add("search")
-    if not mem_enabled:
-        disabled.update({"memory", "conversation"})
-    if not reminder_tools_enabled:
-        disabled.add("reminder")
+    disabled = _disabled_category_set(
+        search_enabled=search_enabled,
+        mem_enabled=mem_enabled,
+        reminder_tools_enabled=reminder_tools_enabled,
+    )
 
     _append_expanded_many(session, _sort_category_ids(matched_categories, category_order))
     active_categories = list(_get_expanded(session))
@@ -871,15 +894,10 @@ async def route_tools(
     # Assemble tool list. Meta-tools stay at the front so their cache breakpoint
     # is independent from later drawer expansion.
     openai_tools = list(meta_tools_snapshot)
-    tool_map = {}
-    for mt in meta_tools_snapshot:
-        tool_map[mt["function"]["name"]] = {
-            "type": "meta",
-            "handler": "drawer_meta",
-            "disabled_categories": set(disabled),
-            "mcp_mode": mode,
-            "pinned_external": set(pinned_external),
-        }
+    tool_map = {
+        mt["function"]["name"]: _meta_tool_context(disabled, mode, pinned_external)
+        for mt in meta_tools_snapshot
+    }
 
     for cat_id in active_categories:
         cat = categories_snapshot.get(cat_id)
@@ -960,6 +978,66 @@ def _infer_handler(tool_name):
     if "reminder" in tool_name: return "reminder"
     return tool_name
 
+
+def build_full_fallback_tools(
+    *,
+    search_enabled=False,
+    mem_enabled=True,
+    reminder_tools_enabled=True,
+    mcp_mode="auto",
+    pinned_external=None,
+    project_id=None,
+):
+    """Build a route-failure tool set without bypassing request-level gates."""
+    mode = _normalize_mcp_mode(mcp_mode)
+    pinned = set(pinned_external or ())
+    disabled = _disabled_category_set(
+        search_enabled=search_enabled,
+        mem_enabled=mem_enabled,
+        reminder_tools_enabled=reminder_tools_enabled,
+    )
+
+    meta_tools_snapshot = list(META_TOOLS)
+    tool_schemas_snapshot = dict(TOOL_SCHEMAS)
+    categories_snapshot = dict(CATEGORIES)
+    external_categories_snapshot = dict(_external_categories)
+
+    openai_tools = list(meta_tools_snapshot)
+    tool_map = {
+        mt["function"]["name"]: _meta_tool_context(disabled, mode, pinned)
+        for mt in meta_tools_snapshot
+    }
+    for tool_name, schema in tool_schemas_snapshot.items():
+        cat_id = _tool_to_category.get(tool_name)
+        if cat_id in disabled:
+            continue
+        cat = categories_snapshot.get(cat_id, {})
+        if cat.get("external"):
+            if mode == "off":
+                continue
+            if mode == "manual" and cat_id not in pinned:
+                continue
+
+        openai_tools.append(schema)
+        if cat.get("external"):
+            ext_map = external_categories_snapshot.get(cat_id, {}).get("tool_map", {})
+            tool_map[tool_name] = ext_map.get(tool_name, {
+                "type": "external_mcp",
+                "server_url": "",
+                "url": "",
+                "transport": "streamable_http",
+                "server_name": cat.get("label", cat_id or ""),
+                "origin_name": tool_name,
+            })
+        elif tool_name.startswith("_gateway_"):
+            route_info = {"type": "gateway_builtin", "handler": _infer_handler(tool_name)}
+            if tool_name == "_gateway_search_conversations":
+                route_info["project_id"] = project_id
+            tool_map[tool_name] = route_info
+        else:
+            tool_map[tool_name] = {"type": "drawer", "handler": tool_name}
+    return openai_tools, tool_map
+
 # ============================================================
 # 11. Meta-tool Execution
 # ============================================================
@@ -975,9 +1053,7 @@ async def handle_meta_tool(
 ):
     session = _get_session(session_id)
     disabled = set(disabled_categories or ())
-    mode = str(mcp_mode or "auto").strip().lower()
-    if mode not in ("off", "auto", "manual"):
-        mode = "auto"
+    mode = _normalize_mcp_mode(mcp_mode)
     pinned = set(pinned_external or ())
 
     def _category_visible(cat_id, cat):
