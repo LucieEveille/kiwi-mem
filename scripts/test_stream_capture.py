@@ -139,7 +139,7 @@ def fake_spawn(coro):
 
 def new_stream(api_format="openai"):
     return gateway.stream_and_capture(
-        {"Authorization": "Bearer test"},
+        {"Authorization": "Bearer test", "accept-encoding": "gzip"},
         {"model": "test-model", "messages": []},
         "test-session",
         "test-user-message",
@@ -211,6 +211,7 @@ async def case_openai_normal_usage_tail():
     headers = ACTIVE_PLAN.requests[0]["headers"]
     check(headers.get("Authorization") == "Bearer test", "OpenAI headers must be preserved")
     check(headers.get("Accept-Encoding") == "identity", "OpenAI stream must disable compression")
+    check("accept-encoding" not in headers, "OpenAI stream must replace case-insensitive encoding headers")
 
 
 async def case_openai_cancel_after_complete_event():
@@ -235,6 +236,20 @@ async def case_anthropic_capture_before_yield_and_tail():
     check(headers.get("Accept-Encoding") == "identity", "Anthropic identity header must remain")
 
 
+async def case_anthropic_cancel_after_complete_event():
+    reset(UpstreamPlan([sse_content("anthropic-delivered") + b"\n\n", sse_content("unread") + b"\n\n"]))
+    await close_after_matching_event(new_stream("anthropic"), "anthropic-delivered")
+    assert_single_finalize("anthropic-delivered")
+
+
+async def case_upstream_done_is_deduplicated():
+    reset(UpstreamPlan([sse_content("done") + b"\n\ndata: [DONE]\n\n"]))
+    events = await collect_stream(new_stream("openai"))
+    assert_single_finalize("done")
+    check(events.count("data: [DONE]\n\n") == 1, "upstream [DONE] must be replaced by one final event")
+    check(events[-1] == "data: [DONE]\n\n", "[DONE] must remain last")
+
+
 async def main():
     patches = (
         patch.object(gateway.httpx, "AsyncClient", FakeAsyncClient),
@@ -252,6 +267,8 @@ async def main():
             case_openai_cancel_after_complete_event,
             case_openai_cancel_after_residual_tail,
             case_anthropic_capture_before_yield_and_tail,
+            case_anthropic_cancel_after_complete_event,
+            case_upstream_done_is_deduplicated,
         )
         for case in cases:
             try:

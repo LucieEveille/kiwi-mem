@@ -2963,6 +2963,43 @@ async def _finalize_stream_memories(mem_enabled, session_id, user_message, assis
         emotion_level=emotion_level, project_id=project_id, is_regenerate=is_regenerate,
     )
 
+
+def _capture_openai_sse_event(event: str, full_response: list) -> tuple[int, dict | None]:
+    """Capture assistant text from one complete OpenAI-compatible SSE event.
+
+    This helper is intentionally pure apart from appending to the request-local
+    ``full_response`` list.  In particular it never writes to the database or
+    starts extraction work.  Usage-only events are left untouched for downstream
+    forwarding and do not become assistant text.
+    """
+    reasoning_chunks = 0
+    first_delta = None
+
+    for line in event.split("\n"):
+        line = line.strip()
+        if not line.startswith("data: ") or line == "data: [DONE]":
+            continue
+        try:
+            data = json.loads(line[6:])
+            choices = data.get("choices") or []
+            if not choices:
+                continue
+            delta = choices[0].get("delta") or {}
+            if not isinstance(delta, dict):
+                continue
+            if first_delta is None and delta:
+                first_delta = delta
+            if delta.get("reasoning_content") or delta.get("reasoning") or delta.get("reasoning_details"):
+                reasoning_chunks += 1
+            content = delta.get("content", "")
+            if isinstance(content, str) and content:
+                full_response.append(content)
+        except (json.JSONDecodeError, AttributeError, KeyError, IndexError, TypeError):
+            continue
+
+    return reasoning_chunks, first_delta
+
+
 async def stream_and_capture(headers: dict, body: dict, session_id: str, user_message: str, model: str, tool_events: list = None, api_url: str = None, project_id: str = None, prompt_meta: dict = None, api_format: str = "openai", api_key: str = None, is_regenerate: bool = False, mem_enabled: bool = True):
     """流式响应 + 捕获完整回复 + 工具事件"""
     _api_url = api_url or API_BASE_URL
@@ -3040,28 +3077,25 @@ async def stream_and_capture(headers: dict, body: dict, session_id: str, user_me
                             event = event.strip()
                             if not event or event == "data: [DONE]":
                                 continue
+                            captured_reasoning, _ = _capture_openai_sse_event(event, full_response)
+                            _reasoning_chunks += captured_reasoning
                             yield (event + "\n\n").encode("utf-8")
-                            try:
-                                for line in event.split("\n"):
-                                    line = line.strip()
-                                    if line.startswith("data: "):
-                                        data = json.loads(line[6:])
-                                        delta = data.get("choices", [{}])[0].get("delta", {})
-                                        content = delta.get("content", "")
-                                        if content:
-                                            full_response.append(content)
-                                        if delta.get("reasoning_content"):
-                                            _reasoning_chunks += 1
-                            except Exception:
-                                pass
                     _tail = _ev_buf.strip()
                     if _tail and _tail != "data: [DONE]":
+                        captured_reasoning, _ = _capture_openai_sse_event(_tail, full_response)
+                        _reasoning_chunks += captured_reasoning
                         yield (_tail + "\n\n").encode("utf-8")
         else:
             # OpenAI 格式：直接转发
             buffer = ""
+            stream_headers = {
+                key: value
+                for key, value in (headers or {}).items()
+                if key.lower() != "accept-encoding"
+            }
+            stream_headers["Accept-Encoding"] = "identity"
             async with httpx.AsyncClient(timeout=300) as client:
-                async with client.stream("POST", _api_url, headers=headers, json=body) as response:
+                async with client.stream("POST", _api_url, headers=stream_headers, json=body) as response:
                     if response.status_code != 200:
                         error_body = b""
                         async for chunk in response.aiter_bytes():
@@ -3082,36 +3116,25 @@ async def stream_and_capture(headers: dict, body: dict, session_id: str, user_me
                             event = event.strip()
                             if not event or event == "data: [DONE]":
                                 continue
+                            captured_reasoning, first_delta = _capture_openai_sse_event(event, full_response)
+                            _reasoning_chunks += captured_reasoning
+
+                            # 🔍 调试日志：记录第一个有效delta的所有字段
+                            if not _logged_first_delta and first_delta:
+                                keys = list(first_delta.keys())
+                                if keys and keys != ['role']:
+                                    print(f"🔍 [流式调试] 首个delta字段: {keys}, 模型: {model}")
+                                    for k in ('reasoning_content', 'reasoning', 'reasoning_details'):
+                                        if k in first_delta:
+                                            sample = str(first_delta[k])[:100]
+                                            print(f"🔍 [流式调试] {k} 示例: {sample}")
+                                    _logged_first_delta = True
+
                             yield (event + "\n\n").encode("utf-8")
-                            for line in event.split("\n"):
-                                line = line.strip()
-                                if not line.startswith("data: "):
-                                    continue
-                                try:
-                                    data = json.loads(line[6:])
-                                    delta = data.get("choices", [{}])[0].get("delta", {})
-
-                                    # 🔍 调试日志：记录第一个有效delta的所有字段
-                                    if not _logged_first_delta and delta:
-                                        keys = list(delta.keys())
-                                        if keys and keys != ['role']:
-                                            print(f"🔍 [流式调试] 首个delta字段: {keys}, 模型: {model}")
-                                            for k in ('reasoning_content', 'reasoning', 'reasoning_details'):
-                                                if k in delta:
-                                                    sample = str(delta[k])[:100]
-                                                    print(f"🔍 [流式调试] {k} 示例: {sample}")
-                                            _logged_first_delta = True
-
-                                    if delta.get('reasoning_content') or delta.get('reasoning') or delta.get('reasoning_details'):
-                                        _reasoning_chunks += 1
-
-                                    content = delta.get("content", "")
-                                    if content:
-                                        full_response.append(content)
-                                except (json.JSONDecodeError, KeyError, IndexError):
-                                    pass
                     _tail = buffer.strip()
                     if _tail and _tail != "data: [DONE]":
+                        captured_reasoning, _ = _capture_openai_sse_event(_tail, full_response)
+                        _reasoning_chunks += captured_reasoning
                         yield (_tail + "\n\n").encode("utf-8")
     finally:
         # 断连（取消/GeneratorExit）或正常完成都在此把收尾 task 与 Dream 兜底同步补出生。
