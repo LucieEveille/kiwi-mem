@@ -34,6 +34,21 @@ def _coerce_date(value, field_name: str) -> date:
         ) from exc
 
 
+def _authored_date(value) -> date:
+    if isinstance(value, datetime):
+        authored = value
+    elif isinstance(value, date):
+        return value
+    else:
+        try:
+            authored = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        except (TypeError, ValueError) as exc:
+            raise CalendarPeriodValidationError("created_at 不是合法时间") from exc
+    if authored.tzinfo is None:
+        authored = authored.replace(tzinfo=TZ_CST)
+    return authored.astimezone(TZ_CST).date()
+
+
 def _period_end(start: date, page_type: str) -> date:
     if page_type == "day":
         return start
@@ -65,6 +80,7 @@ def validate_calendar_period_identity(
     *,
     end_value=None,
     today: Optional[date] = None,
+    created_at=None,
 ) -> CalendarPeriod:
     """Validate one page key and, when supplied, its explicit range end.
 
@@ -89,19 +105,31 @@ def validate_calendar_period_identity(
         raise CalendarPeriodValidationError(
             f"{page_type} 只允许已经结束的完整周期（本周期结束于 {expected_end.isoformat()}）"
         )
+    if page_type != "day" and created_at is not None and _authored_date(created_at) <= expected_end:
+        raise CalendarPeriodValidationError(
+            f"{page_type} 页面在周期结束前成文，需按完整周期明确重新生成"
+        )
     return CalendarPeriod(page_type=page_type, start=start, end=expected_end)
 
 
-def calendar_period_invalid_reason(start_value, page_type: str, *, today: Optional[date] = None) -> Optional[str]:
+def calendar_period_invalid_reason(
+    start_value, page_type: str, *, today: Optional[date] = None, created_at=None
+) -> Optional[str]:
     try:
-        validate_calendar_period_identity(start_value, page_type, today=today)
+        validate_calendar_period_identity(
+            start_value, page_type, today=today, created_at=created_at
+        )
     except CalendarPeriodValidationError as exc:
         return str(exc)
     return None
 
 
-def is_calendar_period_identity_valid(start_value, page_type: str, *, today: Optional[date] = None) -> bool:
-    return calendar_period_invalid_reason(start_value, page_type, today=today) is None
+def is_calendar_period_identity_valid(
+    start_value, page_type: str, *, today: Optional[date] = None, created_at=None
+) -> bool:
+    return calendar_period_invalid_reason(
+        start_value, page_type, today=today, created_at=created_at
+    ) is None
 
 
 def filter_valid_calendar_period_pages(
@@ -111,5 +139,7 @@ def filter_valid_calendar_period_pages(
     return [
         page for page in pages
         if page.get("type", page_type) == page_type
-        and is_calendar_period_identity_valid(page.get("date"), page_type, today=today)
+        and is_calendar_period_identity_valid(
+            page.get("date"), page_type, today=today, created_at=page.get("created_at")
+        )
     ]

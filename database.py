@@ -3062,6 +3062,7 @@ async def save_calendar_page(date_str: str, page_type: str, sections: list, diar
             INSERT INTO calendar_pages (date, type, sections, diary, keywords, model_used, summary, digest, title, updated_at)
             VALUES ($1, $2, $3::jsonb, $4, $5::jsonb, $6, $7, $8, $9, NOW())
             ON CONFLICT (date, type) DO UPDATE SET
+                created_at = NOW(),
                 sections = EXCLUDED.sections,
                 diary = EXCLUDED.diary,
                 keywords = EXCLUDED.keywords,
@@ -3205,7 +3206,7 @@ async def get_calendar_for_injection(lookback_days: int = 365):
 
     async with pool.acquire() as conn:
         rows = await conn.fetch("""
-            SELECT date, type, digest, summary, keywords
+            SELECT date, type, digest, summary, keywords, created_at
             FROM calendar_pages
             WHERE date >= $1
             ORDER BY date ASC
@@ -3218,7 +3219,10 @@ async def get_calendar_for_injection(lookback_days: int = 365):
     pages = [
         page for page in (_calendar_row_to_dict(r) for r in rows)
         if page.get("type") == "day"
-        or is_calendar_period_identity_valid(page.get("date"), page.get("type"), today=today)
+        or is_calendar_period_identity_valid(
+            page.get("date"), page.get("type"), today=today,
+            created_at=page.get("created_at"),
+        )
     ]
 
     # 按类型分组
@@ -3357,7 +3361,7 @@ async def get_invalid_calendar_period_pages():
     today = datetime.now(TZ_CST).date()
     async with pool.acquire() as conn:
         rows = await conn.fetch("""
-            SELECT id, date, type, title, updated_at
+            SELECT id, date, type, title, created_at, updated_at
             FROM calendar_pages
             WHERE type <> 'day'
             ORDER BY date ASC, type ASC
@@ -3366,10 +3370,15 @@ async def get_invalid_calendar_period_pages():
     invalid = []
     for row in rows:
         item = dict(row)
-        reason = calendar_period_invalid_reason(item.get("date"), item.get("type"), today=today)
+        reason = calendar_period_invalid_reason(
+            item.get("date"), item.get("type"), today=today,
+            created_at=item.get("created_at"),
+        )
         if not reason:
             continue
         item["date"] = str(item.get("date"))
+        if item.get("created_at"):
+            item["created_at"] = item["created_at"].isoformat()
         if item.get("updated_at"):
             item["updated_at"] = item["updated_at"].isoformat()
         item["reason"] = reason
