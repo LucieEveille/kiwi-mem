@@ -118,7 +118,7 @@ export const CONFIG_META = {
   // —— 网关 / 对话行为 ——
   default_title_model:    { label:'标题生成模型', type:'text', def:'', input:'model', desc:'自动生成对话标题用的模型。建议小模型。' },
   prompt_title_summary:   { label:'标题生成提示词', type:'text', def:'', input:'prompt', hasDefault:false, desc:'指导如何生成对话标题。留空用内置默认。' },
-  reasoning_effort:       { label:'思考强度', type:'text', def:'off', input:'select', options:['off','low','medium','high'], desc:'转发时附带的推理强度，仅对支持 reasoning 的模型生效。off=不传。（v1.6.1 新登记：此前面板上改不了）' },
+  reasoning_effort:       { label:'思考强度', type:'text', def:'off', input:'select', options:['off','auto','low','medium','high'], desc:'转发时附带的推理强度，仅对支持 reasoning 的模型生效。off=不传，auto=由供应商自动决定。（v1.6.1 新登记：此前面板上改不了）' },
 
   // —— 网关 / 性能 ——
   prompt_cache_enabled:   { label:'Prompt 缓存', type:'bool', def:'true', input:'bool', desc:'Claude 模型的显式缓存：重复的 system prompt 前缀只收 1/10 费用。非 Claude 自动跳过。' },

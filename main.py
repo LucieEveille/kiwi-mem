@@ -45,6 +45,7 @@ from database import (
     create_reminder, get_reminders, update_reminder, delete_reminder, get_due_reminders, fire_reminder,
 )
 from config import (
+    REASONING_EFFORT_VALUES,
     SYNC_SETTING_KEYS,
     get_all_config, set_config, get_config, get_config_int, get_config_bool, get_config_float,
 )
@@ -1607,6 +1608,26 @@ async def extract_file_content(file: UploadFile = File(...)):
         )
 
 
+def _normalize_reasoning_effort(value):
+    """Normalize the public five-value request contract or reject it explicitly."""
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ValueError(
+            "reasoning_effort 必须是 "
+            + "/".join(REASONING_EFFORT_VALUES)
+            + " 之一"
+        )
+    normalized = value.strip().lower()
+    if normalized not in REASONING_EFFORT_VALUES:
+        raise ValueError(
+            "reasoning_effort 必须是 "
+            + "/".join(REASONING_EFFORT_VALUES)
+            + f" 之一，收到 {value[:40]!r}"
+        )
+    return normalized
+
+
 def _apply_reasoning(body: dict, is_openrouter: bool, is_anthropic_fmt: bool, reasoning_effort, skip_prompt: bool = False):
     """统一决定一个出站请求体的思考链参数。转发路径与工具循环共用，保证两条路对所有供应商一致。
 
@@ -1615,8 +1636,9 @@ def _apply_reasoning(body: dict, is_openrouter: bool, is_anthropic_fmt: bool, re
       - OpenRouter / Anthropic 直连 → 写 reasoning={"enabled":True[, "effort"]}
           None（旧前端 / 非推理模型未发）视为默认开（向后兼容）；'auto' 开但不带 effort；
           'low'/'medium'/'high' 带 effort。
-      - 其它 OpenAI 兼容供应商 → 只透传合法 effort(low/medium/high)；off/auto/未知值剥掉，
+      - 其它 OpenAI 兼容供应商 → 只透传合法 effort(low/medium/high)；off/auto 剥掉，
           避免严格供应商（如直连 OpenAI o 系列）对非法 reasoning_effort 报 400。
+    未知值在 /v1 入口由 _normalize_reasoning_effort 明确拒绝，不会静默进入本函数。
     """
     # 先清干净，避免 fresh body 残留或重复调用叠加
     body.pop("reasoning", None)
@@ -1677,6 +1699,20 @@ async def chat_completions(request: Request):
     # API_KEY 检查移到供应商路由的 else 分支：只有「既没匹配到供应商、又没有环境变量
     # API_KEY」时才报 500。否则面板里配了供应商、但 env API_KEY 留空的用户会被误拦。
     body = await request.json()
+    try:
+        reasoning_effort = _normalize_reasoning_effort(body.pop("reasoning_effort", None))
+    except ValueError as e:
+        return JSONResponse(
+            status_code=400,
+            content={
+                "error": {
+                    "message": str(e),
+                    "type": "invalid_request_error",
+                    "param": "reasoning_effort",
+                    "code": "invalid_value",
+                }
+            },
+        )
     messages = body.get("messages", [])
     
     # ---------- 提取用户最新消息 ----------
@@ -1990,7 +2026,6 @@ async def chat_completions(request: Request):
     
     # 思考链参数：统一交给 _apply_reasoning 处理（转发路径与工具循环同一套规则，对各类供应商分流）。
     # 由 to_anthropic_request 把 reasoning.enabled 转成 Anthropic extended thinking。
-    reasoning_effort = body.pop("reasoning_effort", None)
     _apply_reasoning(body, is_openrouter, is_anthropic_fmt, reasoning_effort, skip_prompt)
     
     # ---------- Prompt 缓存（v5.5 → v5.7 修正）----------
@@ -4181,6 +4216,30 @@ async def api_set_config(key: str, request: Request):
 # 无缝换窗 v2：源对话概要压缩（同步调用）
 # ============================================================
 
+async def _render_compress_prompt(template: str) -> str:
+    """Replace public compression placeholders with configured or safe values."""
+    ratio = 0.35
+    output_max = 4000
+    try:
+        configured_ratio = await get_config_float("compress_ratio", fallback=ratio)
+        if math.isfinite(configured_ratio) and configured_ratio > 0:
+            ratio = configured_ratio
+    except Exception:
+        pass
+    try:
+        configured_output_max = await get_config_int("compress_output_max", fallback=output_max)
+        if configured_output_max > 0:
+            output_max = configured_output_max
+    except Exception:
+        pass
+
+    return (
+        str(template or "")
+        .replace("{compress_ratio}", f"{round(ratio * 100)}%")
+        .replace("{compress_output_max}", f"{output_max} token")
+    )
+
+
 async def _compress_for_handoff(existing_summary: str, messages: list):
     """把源对话的（已有概要 + 待压消息）同步压成一段概要，失败返回 None。
 
@@ -4211,6 +4270,7 @@ async def _compress_for_handoff(existing_summary: str, messages: list):
         "请将以下对话内容压缩为简洁的摘要，保留关键信息、话题走向和情感基调。"
         "不要截断正在进行中的话题。"
     )
+    compress_prompt = await _render_compress_prompt(compress_prompt)
 
     try:
         from database import resolve_model_endpoint
