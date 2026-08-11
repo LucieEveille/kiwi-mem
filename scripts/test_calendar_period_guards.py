@@ -2,7 +2,7 @@
 
 import asyncio
 import calendar
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 import importlib
 import os
 from pathlib import Path
@@ -88,6 +88,10 @@ async def check_shared_period_contract():
     periods.validate_calendar_period_identity(
         "2026-08-03", "week", end_value="2026-08-09", today=fixed_today
     )
+    periods.validate_calendar_period_identity(
+        "2026-08-03", "week", today=fixed_today,
+        created_at=datetime(2026, 8, 10, 0, 5, tzinfo=timezone(timedelta(hours=8))),
+    )
     periods.validate_calendar_period_identity("2026-07-01", "month", today=fixed_today)
     periods.validate_calendar_period_identity("2026-04-01", "quarter", today=fixed_today)
     periods.validate_calendar_period_identity("2025-01-01", "year", today=fixed_today)
@@ -99,6 +103,10 @@ async def check_shared_period_contract():
         ("week end", lambda: periods.validate_calendar_period_identity("2026-08-03", "week", end_value="2026-08-08", today=fixed_today)),
         ("reversed week", lambda: periods.validate_calendar_period_identity("2026-08-03", "week", end_value="2026-08-02", today=fixed_today)),
         ("incomplete week", lambda: periods.validate_calendar_period_identity("2026-08-10", "week", end_value="2026-08-16", today=fixed_today)),
+        ("premature authored week", lambda: periods.validate_calendar_period_identity(
+            "2026-08-03", "week", today=fixed_today,
+            created_at=datetime(2026, 8, 9, 12, 0, tzinfo=timezone(timedelta(hours=8))),
+        )),
         ("month anchor", lambda: periods.validate_calendar_period_identity("2026-07-02", "month", today=fixed_today)),
         ("incomplete month", lambda: periods.validate_calendar_period_identity("2026-08-01", "month", today=fixed_today)),
         ("quarter anchor", lambda: periods.validate_calendar_period_identity("2026-05-01", "quarter", today=fixed_today)),
@@ -389,12 +397,19 @@ async def check_material_and_injection_isolation():
 
     invalid_month_date = month_start + timedelta(days=1)
     invalid_week_date = invalid_week_start
+    canonical_week_start, canonical_week_end = p["week"]
+    premature_created_at = datetime(
+        canonical_week_end.year, canonical_week_end.month, canonical_week_end.day,
+        12, 0, tzinfo=database.TZ_CST,
+    )
     rows = [
         {"id": 1, "date": invalid_month_date, "type": "month", "digest": "BAD_MONTH", "summary": "", "keywords": []},
         {"id": 2, "date": invalid_week_date, "type": "week", "digest": "BAD_WEEK", "summary": "", "keywords": []},
         {"id": 3, "date": invalid_month_date, "type": "day", "digest": "GOOD_DAY_MONTH", "summary": "", "keywords": []},
         {"id": 4, "date": invalid_week_date, "type": "day", "digest": "GOOD_DAY_WEEK", "summary": "", "keywords": []},
         {"id": 5, "date": month_start, "type": "fortnight", "digest": "BAD_TYPE", "summary": "", "keywords": []},
+        {"id": 6, "date": canonical_week_start, "type": "week", "digest": "PREMATURE_WEEK", "summary": "", "keywords": [], "created_at": premature_created_at},
+        {"id": 7, "date": canonical_week_start, "type": "day", "digest": "GOOD_DAY_PREMATURE", "summary": "", "keywords": []},
     ]
     conn = _FakeConnection(rows)
 
@@ -407,10 +422,10 @@ async def check_material_and_injection_isolation():
     check(not any(x["type"] in {"week", "month", "fortnight"} for x in injected),
           "invalid historical summaries must not inject or claim coverage")
     bodies = {x.get("digest") for x in injected}
-    check({"GOOD_DAY_MONTH", "GOOD_DAY_WEEK"} <= bodies,
+    check({"GOOD_DAY_MONTH", "GOOD_DAY_WEEK", "GOOD_DAY_PREMATURE"} <= bodies,
           "day pages under invalid summaries must remain eligible")
     audited_ids = {x["id"] for x in audited}
-    check({1, 2, 5} <= audited_ids, "read-only audit must diagnose every invalid historical identity")
+    check({1, 2, 5, 6} <= audited_ids, "read-only audit must diagnose every invalid historical identity")
 
 
 async def main():

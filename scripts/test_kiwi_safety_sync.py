@@ -1076,7 +1076,19 @@ async def test_w1_08() -> None:
         "INSERT INTO calendar_pages (date, type, digest) VALUES ($1, 'fortnight', 'BAD_TYPE') RETURNING id",
         previous_month_start,
     )
-    source_dates = {bad_week_date, bad_month_date}
+    premature_created_at = StdDateTime(
+        previous_week_end.year, previous_week_end.month, previous_week_end.day,
+        12, 0, tzinfo=database.TZ_CST,
+    )
+    premature_week_id = await _pool_fetchval(
+        """
+        INSERT INTO calendar_pages (date, type, digest, created_at, updated_at)
+        VALUES ($1, 'week', 'PREMATURE_WEEK', $2, $2) RETURNING id
+        """,
+        previous_week_start,
+        premature_created_at,
+    )
+    source_dates = {bad_week_date, bad_month_date, previous_week_start}
     for index, source_date in enumerate(sorted(source_dates), start=1):
         await _pool_execute(
             """
@@ -1094,7 +1106,7 @@ async def test_w1_08() -> None:
     require(count_before == count_after, "legacy period audit mutated stored pages")
     audited_ids = {row["id"] for row in audited}
     require(
-        {bad_week_id, bad_month_id, bad_type_id} <= audited_ids,
+        {bad_week_id, bad_month_id, bad_type_id, premature_week_id} <= audited_ids,
         f"legacy audit missed invalid identities: {audited_ids}",
     )
     passed("T-W1-08-3 read-only audit diagnoses legacy invalid pages without mutation")
@@ -1120,6 +1132,24 @@ async def test_w1_08() -> None:
             "legacy isolation moved or deleted a source day",
         )
     passed("T-W1-08-5 legacy isolation preserves original rows for explicit rebuild")
+
+    await database.save_calendar_page(
+        previous_week_start.isoformat(), "week", [], digest="REBUILT_WEEK"
+    )
+    rebuilt = await _pool_fetchrow(
+        "SELECT created_at, digest FROM calendar_pages WHERE id=$1", premature_week_id
+    )
+    require(
+        rebuilt["created_at"].astimezone(database.TZ_CST).date() > previous_week_end
+        and rebuilt["digest"] == "REBUILT_WEEK",
+        "explicit regeneration did not refresh the quarantined authorship epoch",
+    )
+    audited_after_rebuild = await database.get_invalid_calendar_period_pages()
+    require(
+        premature_week_id not in {row["id"] for row in audited_after_rebuild},
+        "explicit canonical rebuild did not restore period eligibility",
+    )
+    passed("T-W1-08-6 explicit regeneration releases premature-page quarantine")
 
 
 async def test_w1_01() -> None:
