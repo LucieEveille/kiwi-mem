@@ -259,10 +259,10 @@ async def check_fallback_builder_gates():
         check(not (set(blocked_names) & forbidden), "fallback must filter every disabled internal category")
         check(ext_tool not in blocked_names, "mcp_mode=off must hide fallback external tools")
         check(
-            {"calendar", "dream", "profile"} & {
+            {"calendar", "dream", "profile"} <= {
                 td._tool_to_category.get(name) for name in blocked_names
             },
-            "fallback must retain allowed internal base tools",
+            "fallback must retain every allowed internal base category",
         )
         meta_context = blocked_map["_drawer_request_tools"]
         check(

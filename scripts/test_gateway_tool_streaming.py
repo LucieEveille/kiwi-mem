@@ -425,7 +425,11 @@ async def case_route_exception_with_request_mcp(client, controller):
         if category in {"calendar", "dream", "profile"}
     }
     check(all(not (set(names) & forbidden) for names in name_lists), "fallback must obey every disabled internal gate")
-    check(allowed_internal & set(name_lists[0]), "route exception must retain allowed internal base tools")
+    allowed_categories = {td._tool_to_category.get(name) for name in name_lists[0]}
+    check(
+        {"calendar", "dream", "profile"} <= allowed_categories,
+        "route exception must retain every allowed internal base category",
+    )
     check(all("request_mcp_probe" in names for names in name_lists), "request-body MCP must force entry into the tool loop")
     second_messages = json.dumps(controller.captured[key][1].get("messages", []), ensure_ascii=False)
     check("该类工具当前已被用户设置关闭，无法展开" in second_messages, "fallback meta expansion must obey memory gate")
@@ -460,7 +464,10 @@ async def case_empty_route_uses_gated_fallback(client, controller):
     check(name_lists[0] == name_lists[1], "full fallback schemas must stay a stable prefix without reshuffle")
     check("list_tool_categories" in name_lists[0], "empty route fallback must retain meta tools")
     first_categories = {td._tool_to_category.get(name) for name in name_lists[0]}
-    check(first_categories & {"calendar", "dream", "profile"}, "empty route fallback must retain allowed base categories")
+    check(
+        {"calendar", "dream", "profile"} <= first_categories,
+        "empty route fallback must retain every allowed base category",
+    )
     check(not (first_categories & {"search", "memory", "conversation", "reminder"}), "empty route fallback must keep disabled categories hidden")
     second_messages = json.dumps(controller.captured[key][1].get("messages", []), ensure_ascii=False)
     check('"id": "memory"' not in second_messages, "fallback category listing must hide disabled memory")
@@ -505,7 +512,10 @@ async def case_external_mcp_failure_keeps_internal_fallback(client, controller):
     check("list_tool_categories" in name_lists[0], "external outage must retain fallback meta tools")
     check("request_mcp_probe" not in name_lists[0], "unavailable request MCP schema must not be invented")
     first_categories = {td._tool_to_category.get(name) for name in name_lists[0]}
-    check(first_categories & {"calendar", "dream", "profile"}, "external outage must retain allowed internal tools")
+    check(
+        {"calendar", "dream", "profile"} <= first_categories,
+        "external outage must retain every allowed internal base category",
+    )
 
 
 async def case_concurrent_request_isolation(client, controller):
