@@ -83,12 +83,13 @@ def to_anthropic_request(openai_body: dict) -> dict:
     if reasoning and isinstance(reasoning, dict) and reasoning.get("enabled"):
         # effort → thinking budget。必须单调递增：否则 xhigh/max 落进默认值，
         # 会出现「选了超高反而比高思考得少」。未知 / auto / 未给 → 默认 10000。
+        # xhigh/max 为 2026-07 新增高档，budget 参考 OpenRouter 分配比例，128k 封顶内保守取值。
         _EFFORT_BUDGET = {
             "low": 5000,
             "medium": 10000,
             "high": 20000,
             "xhigh": 32000,
-            "max": 48000,
+            "max": 64000,
         }
         budget = _EFFORT_BUDGET.get(reasoning.get("effort"), 10000)
         # Anthropic 硬性要求 budget_tokens < max_tokens（max_tokens 含思考 + 可见输出）。

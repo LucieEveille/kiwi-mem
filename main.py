@@ -45,6 +45,8 @@ from database import (
     create_reminder, get_reminders, update_reminder, delete_reminder, get_due_reminders, fire_reminder,
 )
 from config import (
+    DEFAULT_EFFORT_CEILING,
+    PROVIDER_EFFORT_CEILING,
     REASONING_EFFORT_LEVELS,
     REASONING_EFFORT_VALUES,
     SYNC_SETTING_KEYS,
@@ -1645,7 +1647,33 @@ def _normalize_reasoning_effort(value):
     return normalized
 
 
-def _apply_reasoning(body: dict, is_openrouter: bool, is_anthropic_fmt: bool, reasoning_effort, skip_prompt: bool = False):
+def _provider_effort_ceiling(api_url: str, model: str, is_openrouter: bool = False) -> str:
+    """这家供应商实际认识的最高思考档。
+
+    URL 与模型名任一命中即算——用户完全可能通过中转站访问 DeepSeek，那时 URL 里
+    没有 deepseek 字样，但模型名（deepseek-v4-flash / deepseek-v4-pro 等）还在。
+    OpenRouter 优先级最高：即使经 OR 调用 deepseek 模型，请求也得过 OR 统一层，
+    仍受 OR 的 xhigh 上限约束。
+    """
+    if is_openrouter:
+        return PROVIDER_EFFORT_CEILING["openrouter"]
+    haystack = f"{api_url or ''} {model or ''}".lower()
+    for key, ceiling in PROVIDER_EFFORT_CEILING.items():
+        if key in haystack:
+            return ceiling
+    return DEFAULT_EFFORT_CEILING
+
+
+def _clamp_effort(effort: str, ceiling: str) -> str:
+    """把档位就近压到该供应商的天花板；本来就没超过则原样返回。"""
+    if effort not in REASONING_EFFORT_LEVELS or ceiling not in REASONING_EFFORT_LEVELS:
+        return effort
+    if REASONING_EFFORT_LEVELS.index(effort) <= REASONING_EFFORT_LEVELS.index(ceiling):
+        return effort
+    return ceiling
+
+
+def _apply_reasoning(body: dict, is_openrouter: bool, is_anthropic_fmt: bool, reasoning_effort, skip_prompt: bool = False, api_url: str = ""):
     """统一决定一个出站请求体的思考链参数。转发路径与工具循环共用，保证两条路对所有供应商一致。
 
     reasoning_effort 是从请求体里 pop 出来的原值：REASONING_EFFORT_VALUES 之一或 None。
@@ -1655,8 +1683,11 @@ def _apply_reasoning(body: dict, is_openrouter: bool, is_anthropic_fmt: bool, re
           其余档位带 effort。
       - 其它 OpenAI 兼容供应商 → 透传具体档位；off/auto 剥掉，
           避免严格供应商（如直连 OpenAI o 系列）对非法 reasoning_effort 报 400。
-    档位取 REASONING_EFFORT_LEVELS（各家并集，含 DeepSeek 的 xhigh/max）后原样转发：
-    网关不替用户预判某家支不支持——不认的档位由供应商自己报错，比在这里悄悄降档更可诊断。
+
+    各家值域不一样（见 config.PROVIDER_EFFORT_CEILING）：DeepSeek 官方认 max，
+    OpenRouter 统一层最高 xhigh。所以档位在出站前**按供应商就近降到它的天花板**——
+    既不会把 max 硬塞给不认识它的 OpenRouter，也不会让支持 max 的 DeepSeek 用户白丢一档。
+    Anthropic 原生不吃 effort 字符串，原值交给 adapter 换算 budget，不在这里降档。
     未知值在 /v1 入口由 _normalize_reasoning_effort 明确拒绝，不会静默进入本函数。
     """
     # 先清干净，避免 fresh body 残留或重复调用叠加
@@ -1664,13 +1695,19 @@ def _apply_reasoning(body: dict, is_openrouter: bool, is_anthropic_fmt: bool, re
     body.pop("reasoning_effort", None)
     if skip_prompt or reasoning_effort == "off":
         return
+    effort = reasoning_effort
+    if not is_anthropic_fmt:
+        effort = _clamp_effort(
+            effort,
+            _provider_effort_ceiling(api_url, body.get("model"), is_openrouter),
+        )
     if is_openrouter or is_anthropic_fmt:
         cfg = {"enabled": True}
-        if reasoning_effort in REASONING_EFFORT_LEVELS:
-            cfg["effort"] = reasoning_effort
+        if effort in REASONING_EFFORT_LEVELS:
+            cfg["effort"] = effort
         body["reasoning"] = cfg
-    elif reasoning_effort in REASONING_EFFORT_LEVELS:
-        body["reasoning_effort"] = reasoning_effort
+    elif effort in REASONING_EFFORT_LEVELS:
+        body["reasoning_effort"] = effort
 
 
 def _is_prompt_cache_enabled_value(value) -> bool:
@@ -2045,8 +2082,8 @@ async def chat_completions(request: Request):
     
     # 思考链参数：统一交给 _apply_reasoning 处理（转发路径与工具循环同一套规则，对各类供应商分流）。
     # 由 to_anthropic_request 把 reasoning.enabled 转成 Anthropic extended thinking。
-    _apply_reasoning(body, is_openrouter, is_anthropic_fmt, reasoning_effort, skip_prompt)
-    
+    _apply_reasoning(body, is_openrouter, is_anthropic_fmt, reasoning_effort, skip_prompt, api_url=chat_api_url)
+
     # ---------- Prompt 缓存（v5.5 → v5.7 修正）----------
     # cache_control 现在在 system message 的 content block 上加，不在 body 顶层
     # （旧代码在 body 加 cache_control 是无效的，OpenRouter 需要 content block 级标记）
@@ -2629,7 +2666,7 @@ async def _stream_with_tools(messages, tools, tool_map, model, temperature, tool
             body["max_tokens"] = max_tokens
         # 与转发路径同一套规则：尊重用户思考强度，并对各类供应商分流
         # （OpenRouter/Anthropic 用 reasoning 字段；其它 OpenAI 兼容供应商透传合法 effort）。
-        _apply_reasoning(body, _is_openrouter, _is_anthropic_fmt, reasoning_effort, skip_prompt)
+        _apply_reasoning(body, _is_openrouter, _is_anthropic_fmt, reasoning_effort, skip_prompt, api_url=_api_url)
         await _apply_openrouter_sticky_routing(body, _is_openrouter, model, session_id)
 
         # Anthropic 格式转换

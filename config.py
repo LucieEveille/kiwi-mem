@@ -212,8 +212,22 @@ async def get_all_config() -> dict:
 # 供应商不认某个档位时由供应商自己报错，比网关静默拒绝或悄悄降档更可诊断。
 REASONING_EFFORT_VALUES = ("off", "auto", "low", "medium", "high", "xhigh", "max")
 
-# off / auto 之外的档位都按原样透传给供应商
-REASONING_EFFORT_LEVELS = tuple(v for v in REASONING_EFFORT_VALUES if v not in ("off", "auto"))
+# off / auto 之外的具体档位，**按强度从弱到强**排列（下标即强度序，降档逻辑依赖这个顺序）
+REASONING_EFFORT_LEVELS = ("low", "medium", "high", "xhigh", "max")
+
+# 各家 API 实际认识的最高档（2026-08 行情）：
+#   DeepSeek 官方   —— low/high/xhigh/max 都认，max 是真的最高档
+#   OpenRouter 统一层 —— 最高只到 xhigh，发 max 会被上游拒绝
+#   其余（含直连 OpenAI）—— 官方值域到 xhigh
+# 用户选了超过某家天花板的档位时，网关**就近降到该家的最高档**，而不是：
+#   ① 原样发出去让上游报错（OpenRouter 用户会踩）
+#   ② 一刀切降级（支持 max 的 DeepSeek 用户白白损失一档）
+# Anthropic 原生不吃 effort 字符串，由 anthropic_adapter 换算 budget_tokens，不参与降档。
+PROVIDER_EFFORT_CEILING = {
+    "openrouter": "xhigh",
+    "deepseek": "max",
+}
+DEFAULT_EFFORT_CEILING = "xhigh"
 
 _ENUM_VALUES = {
     "mcp_mode": {"off", "auto", "manual"},

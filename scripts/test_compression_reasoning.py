@@ -149,20 +149,72 @@ async def check_request_reasoning_contract():
     gateway._apply_reasoning(body, True, False, "off")
     check(body == {}, "off must remove every outbound reasoning field")
 
-    # 每个档位都必须真的抵达供应商：静默降档比报错更难查——用户以为开了 max，其实网关没传。
+    # ── 各家值域不同，档位必须按供应商就近降到它的天花板 ──────────────────
+    DEEPSEEK_URL = "https://api.deepseek.com/v1/chat/completions"
+    OPENAI_URL = "https://api.openai.com/v1/chat/completions"
+    OR_URL = "https://openrouter.ai/api/v1/chat/completions"
+
+    # DeepSeek 官方认 max：不能降档，否则用户白丢一档（v4-flash 传 xhigh 只到 high）
     for level in config.REASONING_EFFORT_LEVELS:
         body = {}
-        gateway._apply_reasoning(body, False, False, level)
+        gateway._apply_reasoning(body, False, False, level, api_url=DEEPSEEK_URL)
         check(
             body == {"reasoning_effort": level},
-            f"OpenAI 兼容供应商（含 DeepSeek）必须原样透传 {level}，不得静默丢弃",
+            f"DeepSeek 官方必须原样透传 {level}（它的值域到 max）",
         )
+
+    # 中转站代理 DeepSeek：URL 里没有 deepseek，靠模型名认出来
+    body = {"model": "deepseek-v4-flash"}
+    gateway._apply_reasoning(body, False, False, "max", api_url="https://aihubmix.com/v1/chat/completions")
+    check(
+        body.get("reasoning_effort") == "max",
+        "经中转站访问 DeepSeek 时应按模型名识别，仍保留 max",
+    )
+
+    # OpenRouter 统一层最高 xhigh：max 必须就近降级，否则上游直接拒绝
+    body = {}
+    gateway._apply_reasoning(body, True, False, "max", api_url=OR_URL)
+    check(
+        body == {"reasoning": {"enabled": True, "effort": "xhigh"}},
+        "OpenRouter 无 max，必须就近降级为 xhigh",
+    )
+    body = {}
+    gateway._apply_reasoning(body, True, False, "xhigh", api_url=OR_URL)
+    check(
+        body == {"reasoning": {"enabled": True, "effort": "xhigh"}},
+        "OpenRouter 的 xhigh 是天花板本身，不应被改动",
+    )
+
+    # 经 OpenRouter 调用 deepseek 模型：仍要过 OR 统一层，受 OR 上限约束
+    body = {"model": "deepseek/deepseek-v4-pro"}
+    gateway._apply_reasoning(body, True, False, "max", api_url=OR_URL)
+    check(
+        body.get("reasoning", {}).get("effort") == "xhigh",
+        "经 OpenRouter 调用 DeepSeek 模型时，OR 的上限优先于 DeepSeek 的值域",
+    )
+
+    # 直连 OpenAI：官方值域到 xhigh
+    body = {}
+    gateway._apply_reasoning(body, False, False, "max", api_url=OPENAI_URL)
+    check(
+        body == {"reasoning_effort": "xhigh"},
+        "直连 OpenAI 时 max 应降到官方值域上限 xhigh",
+    )
+    for level in ("low", "medium", "high", "xhigh"):
         body = {}
-        gateway._apply_reasoning(body, True, False, level)
+        gateway._apply_reasoning(body, False, False, level, api_url=OPENAI_URL)
         check(
-            body == {"reasoning": {"enabled": True, "effort": level}},
-            f"OpenRouter/Anthropic 必须带上 effort={level}",
+            body == {"reasoning_effort": level},
+            f"未超过天花板的 {level} 不得被改动",
         )
+
+    # Anthropic 原生不吃 effort 字符串，原值要留给 adapter 换算 budget，不参与降档
+    body = {}
+    gateway._apply_reasoning(body, False, True, "max", api_url="https://api.anthropic.com/v1/messages")
+    check(
+        body == {"reasoning": {"enabled": True, "effort": "max"}},
+        "Anthropic 路径必须保留 max 原值，交给 adapter 换算 budget",
+    )
 
     # Anthropic 的 effort→budget 必须单调递增，否则「超高」会掉回默认值、反而比「高」思考得少
     budgets = []
