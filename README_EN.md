@@ -144,23 +144,29 @@ Visit `http://localhost:8080` — if you see `{"status":"running"}`, you're good
 
 ### Staying up to date
 
-kiwi-mem ships updates regularly. Once deployed, keep up with one command — no technical knowledge required, and nothing is lost.
+kiwi-mem ships updates regularly. Once deployed, keeping up requires no technical knowledge, and nothing is lost.
 
-**Set it and forget it (recommended):**
-
-```bash
-cd kiwi-mem && bash scripts/update.sh --install-cron
-```
-
-Your server now checks for new versions every night at 4 AM and updates itself when there is one. Progress is logged to `update.log`. To stop: `crontab -e` and delete the line containing `update.sh`.
-
-**Or update manually whenever you want:**
+**Recommended — update when you choose to:**
 
 ```bash
 cd kiwi-mem && bash scripts/update.sh          # shows what's new, then asks to confirm
 cd kiwi-mem && bash scripts/update.sh --check  # just check, don't touch the service
 cd kiwi-mem && bash scripts/update.sh --help   # all options
 ```
+
+**Advanced — let it update itself:**
+
+```bash
+cd kiwi-mem && bash scripts/update.sh --install-cron
+```
+
+Your server then checks for new versions every night at 4 AM and updates itself when there is one. Progress is logged to `update.log`. To stop: `crontab -e` and delete the line containing `update.sh`.
+
+> ⚠️ **Think before enabling this.** It suits a deployment that already runs smoothly and only needs to drift along with minor releases. Prefer manual updates when:
+> - the server is used by someone other than you (they won't know who to ask when an update fails or changes behaviour)
+> - you're following the repo's development pace and large changes are landing on the main branch
+>
+> See the last two bullets below — automatic rollback covers "the service won't start", not "it started but behaves differently".
 
 **Your data is safe.** Updates replace code only:
 
@@ -172,9 +178,14 @@ cd kiwi-mem && bash scripts/update.sh --help   # all options
 - The script **backs up the database before every update** into `backups/` (keeping the 7 most recent)
 - If the new version fails to start, the script **rolls back automatically** — you never end up with a half-updated service
 
-> ⚠️ Don't hand-edit tracked files (`main.py`, `docker-compose.yml`, …). The script stops and warns you instead of silently overwriting them. Configure through `.env` or the admin panel instead.
+Two limits worth knowing before you decide whether to automate updates:
 
-**On Zeabur or similar platforms:** skip the script — just enable Auto Deploy in the project settings and every push redeploys automatically.
+- ⚖️ **Rollback covers "won't start", not "started but behaves differently."** The check is whether the service responds; a version that responds fine while quietly breaking a feature will not trigger it.
+- 🗄️ **Rollback reverts code, not schema.** The new version already created its tables and columns at startup; reverting the code leaves them in place. Migrations are additive and old code ignores new columns, so this is normally harmless — but strictly speaking that step is one-way.
+
+> ⚠️ Also: don't hand-edit tracked files (`main.py`, `docker-compose.yml`, …). The script stops and warns you instead of silently overwriting them. Configure through `.env` or the admin panel instead.
+
+**On Zeabur or similar platforms:** skip the script — enable Auto Deploy in the project settings and every push redeploys automatically. Note this is equivalent to automatic updates, so the caution above applies: for a server other people rely on, or while large changes are landing on main, leave Auto Deploy off and redeploy manually when you're ready.
 
 **Getting notified:** on GitHub, click **Watch → Custom → Releases** to get an email when a new version ships.
 
