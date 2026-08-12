@@ -207,11 +207,15 @@ async def get_all_config() -> dict:
 # 写入配置
 # ============================================================
 
-# 公开契约取值 = 各家供应商档位的并集，网关不替用户预判某家支不支持：
+# 公开契约取值 = 各家供应商档位的并集。前端统一发这一套，各家方言的翻译与降档
+# 全部收敛在网关（见下方 PROVIDER_EFFORT_CEILING 与 main._apply_reasoning）：
 #   off / auto            —— 网关自己的语义（不传 / 交给供应商决定）
-#   low / medium / high   —— OpenAI 系
-#   xhigh / max           —— DeepSeek 系（deepseek-v4-flash / pro 的思考深度上档）
-# 供应商不认某个档位时由供应商自己报错，比网关静默拒绝或悄悄降档更可诊断。
+#   low / medium / high   —— 通用档位，各家都认
+#   xhigh                 —— OpenRouter、直连 OpenAI、DeepSeek 均认
+#   max                   —— 目前只有 DeepSeek 官方认（v4-flash / v4-pro 的最高档）
+# 收到超出某家值域的档位时，网关**主动就近降到该家天花板**再发出，并记一条
+# event=reasoning_effort_downgrade；不采用「原样发出去让上游自己报错」，因为那会让
+# OpenRouter 用户直接吃 400，而这套档位本就是网关替用户抹平各家差异的地方。
 REASONING_EFFORT_VALUES = ("off", "auto", "low", "medium", "high", "xhigh", "max")
 
 # off / auto 之外的具体档位，**按强度从弱到强**排列（下标即强度序，降档逻辑依赖这个顺序）

@@ -1631,7 +1631,7 @@ async def extract_file_content(file: UploadFile = File(...)):
 
 
 def _normalize_reasoning_effort(value):
-    """Normalize the public five-value request contract or reject it explicitly."""
+    """Normalize the public reasoning-effort request contract or reject it explicitly."""
     if value is None:
         return None
     if not isinstance(value, str):
