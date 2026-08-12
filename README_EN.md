@@ -122,6 +122,10 @@ docker compose up -d
 
 Visit `http://localhost:8080` — if you see `{"status":"running"}`, you're good.
 
+> 💡 **No fork needed.** Clone the URL above directly — that way a single `bash scripts/update.sh` pulls
+> straight from upstream later. Forking is for people who want to modify the code or open PRs; if you
+> just want to run the service, a fork only adds a manual step (see [Staying up to date](#staying-up-to-date)).
+
 > 🔁 **Upgrading later?** See [Staying up to date](#staying-up-to-date) — one command sets up automatic updates.
 > If you prefer updating by hand, **always include `--build`**:
 > ```bash
@@ -145,6 +149,9 @@ Visit `http://localhost:8080` — if you see `{"status":"running"}`, you're good
 ### Staying up to date
 
 kiwi-mem ships updates regularly. Once deployed, keeping up requires no technical knowledge, and nothing is lost.
+
+This assumes you cloned upstream directly, as in the quick start — the script then pulls new code straight
+from upstream and you never touch GitHub. (**Already forked?** See the last subsection here; two minutes to fix for good.)
 
 **Recommended — update when you choose to:**
 
@@ -186,6 +193,34 @@ Two limits worth knowing before you decide whether to automate updates:
 > ⚠️ Also: don't hand-edit tracked files (`main.py`, `docker-compose.yml`, …). The script stops and warns you instead of silently overwriting them. Configure through `.env` or the admin panel instead.
 
 **On Zeabur or similar platforms:** skip the script — enable Auto Deploy in the project settings and every push redeploys automatically. Note this is equivalent to automatic updates, so the caution above applies: for a server other people rely on, or while large changes are landing on main, leave Auto Deploy off and redeploy manually when you're ready.
+
+**If you forked the repo:** a fork is *your own* copy and does not follow upstream on its own, so updates
+arrive in two hops — click **Sync fork** on GitHub first, and only then can your server pull them.
+
+The trap: **when you forget to sync, the update script reports "already up to date."** It compares your
+server against *your fork*, which genuinely has no new commits — so the script isn't wrong, but you end up
+several versions behind while believing you're current.
+
+To drop that extra hop, point the server back at upstream. Check what it's tracking:
+
+```bash
+cd kiwi-mem && git remote -v
+```
+
+If that shows *your* GitHub username instead of `LucieEveille`, repoint it:
+
+```bash
+git remote set-url origin https://github.com/LucieEveille/kiwi-mem.git
+git fetch origin main
+git branch --set-upstream-to=origin/main main
+```
+
+From then on, updating is just `bash scripts/update.sh` again. Leave the fork on GitHub or delete it —
+either way it no longer affects your server.
+
+> If the last command reports diverged branches, or a later update says the local branch has diverged,
+> tracked files on the server were edited. Once you're sure those edits are expendable,
+> `bash scripts/update.sh --force` overwrites them.
 
 **Getting notified:** on GitHub, click **Watch → Custom → Releases** to get an email when a new version ships.
 

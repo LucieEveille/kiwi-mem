@@ -158,6 +158,10 @@ cd kiwi-mem
 cp .env.example .env
 ```
 
+> 💡 **不用 fork。** 部署直接 `git clone` 上面这个地址就行——这样以后一条 `bash scripts/update.sh`
+> 就能从原库拉到最新版。fork 是给想改代码、想提 PR 的人用的；只是想跑这个服务的话，
+> fork 反而多一道手工步骤（见[第六步](#第六步以后怎么跟上新版本)）。
+
 然后编辑配置文件：
 ```bash
 nano .env
@@ -268,6 +272,9 @@ https://你的域名/admin
 
 kiwi-mem 一直在更新。部署好之后，跟上最新版**不需要懂技术，也不会丢记忆**。
 
+前提是第二步那样直接 `git clone` 原库部署的——脚本会从原库拉最新代码，你不用管 GitHub 那边。
+（**如果你之前 fork 过**，先看本节最后一小节，两分钟改完就一劳永逸。）
+
 #### 推荐方式：想更新的时候手动跑一下
 
 SSH 连上服务器，跑这一条命令：
@@ -327,6 +334,35 @@ cd kiwi-mem && bash scripts/update.sh --install-cron
 不用跑脚本。在平台的项目设置里打开 **自动部署 / Auto Deploy**，之后仓库一有更新就会自动重新部署。
 
 > 这等于开了自动更新，上面那条提醒同样适用：给别人用的服务器，或者主分支正在合大改动的时候，建议关掉 Auto Deploy、需要时手动重新部署。
+
+#### 如果你之前 fork 过
+
+fork 出来的是**你自己的**一份副本，它不会跟着原库自动更新。所以你的服务器连的是这份副本时，
+更新链路会变成两段：先去 GitHub 网页点 **Sync fork** 把原库的更新同步进你的 fork，服务器才拉得到。
+
+这里有个容易踩的坑：**忘了点 Sync fork 时，跑更新脚本会告诉你「已经是最新版了」。**
+因为脚本是拿服务器和你的 fork 比对的——你的 fork 确实没更新，脚本没说错，
+但你会以为自己已经跟上了，其实落后好几个版本。
+
+想省掉这一段，把服务器上的仓库指回原库就行。先看看现在连的是哪里：
+
+```bash
+cd kiwi-mem && git remote -v
+```
+
+如果显示的地址里是**你自己的 GitHub 用户名**（而不是 `LucieEveille`），跑这三行改回来：
+
+```bash
+git remote set-url origin https://github.com/LucieEveille/kiwi-mem.git
+git fetch origin main
+git branch --set-upstream-to=origin/main main
+```
+
+之后每次更新就只剩一行 `bash scripts/update.sh`，再也不用碰 fork。
+GitHub 上那个 fork 留着不管就行，删不删都不影响服务器。
+
+> 如果最后一行提示分支已经分叉、或者之后更新时脚本说「本地和远程分叉了」，
+> 说明服务器上的代码被改过。确认那些改动不要了，用 `bash scripts/update.sh --force` 覆盖过去即可。
 
 #### 怎么知道有新版本？
 
