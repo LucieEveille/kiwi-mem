@@ -67,22 +67,46 @@ export default {
 
   async loadStats(root) {
     const box = root.querySelector('#stats');
+    const safe = async (p, d) => { try { return await p; } catch { return d; } };
     try {
-      const [status, mems] = await Promise.all([
-        get('/').catch(() => ({})),
-        get('/debug/memories?limit=200').catch(() => ({})),
+      // 状态是必需的（拿不到就是后端不通）；热度与 Dream 是锦上添花，各自失败不影响整排卡。
+      const status = await get('/');
+      const [mems, heat, dream] = await Promise.all([
+        safe(get('/debug/memories?limit=200'), {}),
+        safe(get('/debug/memory-heat?limit=200'), {}),
+        safe(get('/dream/status'), {}),
       ]);
+
       const total = mems.total_memories ?? mems.memories?.length ?? status.memories ?? 0;
       const locked = (mems.memories || []).filter(m => m.is_permanent).length;
       const memOn = status.memory_enabled;
+
+      // 平均热度：/debug/memory-heat 取的是最近 N 条（按 created_at 倒序），
+      // 所以这是「近期样本」的平均值，不是全库平均——副标题里写清楚样本量。
+      const hs = heat.summary || {};
+      const hList = (heat.memories || []).filter(m => typeof m.heat === 'number');
+      const avgHeat = hList.length
+        ? (hList.reduce((s, m) => s + m.heat, 0) / hList.length).toFixed(2)
+        : '—';
+      const heatSub = hList.length
+        ? `高热 ${hs.hot ?? 0} · 冷 ${hs.cold ?? 0}`
+        : (heat.error ? '热度数据不可用' : '还没有记忆');
+
+      // 待整合碎片：Dream 攒够多少条会犯困，副标题给出阈值与是否已越线。
+      const pending = dream.unprocessed_count ?? dream.unprocessed_fragments ?? 0;
+      const threshold = dream.drowsy_threshold;
+      const pendingSub = threshold == null
+        ? 'Dream 尚未配置阈值'
+        : (pending >= threshold ? `已过犯困阈值 ${threshold}` : `犯困阈值 ${threshold}`);
+
       box.innerHTML =
-        statCard({ label: '🧩 记忆总数', value: total, cls: 'accent' }) +
-        statCard({ label: '🔒 锁定记忆', value: locked, cls: 'purple', sub: '当前已加载页中' }) +
-        statCard({ label: '⏱️ 提取间隔', value: (status.extract_interval ?? '—') + ' 轮', cls: 'info' }) +
+        statCard({ label: '🧩 记忆总数', value: total, cls: 'accent', sub: `${locked} 条已锁定` }) +
+        statCard({ label: '🔥 平均热度', value: avgHeat, cls: 'gold', sub: heatSub }) +
+        statCard({ label: '🌙 待整合碎片', value: pending, cls: 'purple', sub: pendingSub }) +
         statCard({ label: '记忆系统', value: memOn ? '✅ 开启' : '⛔ 关闭', cls: memOn ? 'accent' : '' });
 
       const pill = document.getElementById('status-pill');
-      if (pill) { pill.textContent = status.version ? '● ' + status.version : '● 运行中'; pill.className = 'badge badge-accent'; }
+      if (pill) { pill.textContent = '● 运行中'; pill.className = 'badge badge-accent'; }
       const foot = document.getElementById('foot-version');
       if (foot && status.version) foot.textContent = status.version;
     } catch (e) {
@@ -103,7 +127,6 @@ export default {
         body: `
         <div class="kv"><span class="k">当前</span><span class="v">${running ? badge('做梦中…', 'purple') : badge('空闲', 'muted')}</span></div>
         <div class="kv"><span class="k">未处理碎片</span><span class="v">${d.unprocessed_count ?? d.unprocessed_fragments ?? 0} ${d.is_drowsy ? badge('😴 犯困', 'warn') : ''}</span></div>
-        <div class="kv"><span class="k">犯困阈值</span><span class="v">${d.drowsy_threshold ?? '—'}</span></div>
         <div class="kv"><span class="k">上次 Dream</span><span class="v">${escHtml(d.last_dream_date || '从未')}</span></div>
       ` });
     } catch (e) { el.innerHTML = card({ title: '🌙 Dream 状态', body: `<p class="muted">加载失败：${escHtml(e.message)}</p>` }); }
@@ -117,7 +140,7 @@ export default {
       const body = list.length ? list.map(m => `
         <div class="kv">
           <span class="v truncate" style="flex:1">${escHtml(m.title || m.content?.slice(0, 70) || '#' + m.id)}</span>
-          <span>${badge('重要度 ' + m.importance, m.importance >= 8 ? 'purple' : m.importance >= 5 ? 'info' : 'accent')}${m.is_permanent ? ' 🔒' : ''}</span>
+          <span class="mono imp ${m.importance >= 8 ? 'imp-hi' : m.importance >= 5 ? 'imp-mid' : ''}">imp ${m.importance}</span>${m.is_permanent ? ' 🔒' : ''}
         </div>`).join('') : emptyState({ msg: '还没有记忆', hint: '聊几句，记忆会自动生成' });
       el.innerHTML = card({ title: '🧩 最近记忆', actions: `<a class="btn btn-sm btn-secondary" href="#/memories">全部</a>`, body });
     } catch (e) { el.innerHTML = card({ title: '🧩 最近记忆', body: `<p class="muted">加载失败：${escHtml(e.message)}</p>` }); }

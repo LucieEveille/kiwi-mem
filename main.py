@@ -62,6 +62,10 @@ from anthropic_adapter import (
 # 配置项 —— 全部从环境变量读取，部署时在云平台面板里设置
 # ============================================================
 
+# 版本号。管理面板顶栏/侧栏读 GET / 的 version 字段显示，
+# 只此一处定义，避免两处字符串各说各话。
+VERSION = "1.6.1"
+
 # 你的 API Key（OpenRouter / OpenAI / 其他兼容服务）
 API_KEY = os.getenv("API_KEY", "")
 
@@ -1382,8 +1386,8 @@ async def root_status():
             pass
     return {
         "status": "running",
-        "gateway": "Kiwi-Mem v1.3.0",
-        "version": "Kiwi-Mem v1.3.0",
+        "gateway": f"Kiwi-Mem v{VERSION}",
+        "version": f"Kiwi-Mem v{VERSION}",
         "memory_enabled": mem_enabled,
         "memory_count": memory_count,
         # 前端 admin-panel 读 status.memories, 加别名避免显示 '-'
@@ -1416,6 +1420,8 @@ async def api_status():
 # 必须带 ETag 回来问一句；没变服务端回 304, 变了就拿新的。
 # 详见文件末尾 _PanelStaticFiles 的说明。
 PANEL_CACHE_CONTROL = "no-cache, must-revalidate"
+# 自带字体是不可变资源（要换就换文件名），给一年强缓存。
+PANEL_FONT_CACHE_CONTROL = "public, max-age=31536000, immutable"
 
 
 @app.get("/admin")
@@ -5599,11 +5605,19 @@ class _PanelStaticFiles(_StaticFiles):
     ?v=版本号，所以只能在服务端统一声明。no-cache 不等于不缓存：浏览器
     仍然存副本，只是每次先带 ETag 问一下，没变就回 304（几十字节），
     变了才重新下载。代价极小，换来的是「换了文件就一定看得到」。
+
+    例外是 fonts/ 下自带的字体文件：它们不会被就地改内容（换字体等于换
+    文件名），没有「改了看不到」的问题，所以给一年强缓存，省掉每次打开
+    面板都要为字体发几个条件请求。
     """
 
     def file_response(self, *args, **kwargs):
         response = super().file_response(*args, **kwargs)
-        response.headers["Cache-Control"] = PANEL_CACHE_CONTROL
+        path = str(args[0] if args else kwargs.get("full_path", ""))
+        if os.sep + "fonts" + os.sep in path:
+            response.headers["Cache-Control"] = PANEL_FONT_CACHE_CONTROL
+        else:
+            response.headers["Cache-Control"] = PANEL_CACHE_CONTROL
         return response
 
 

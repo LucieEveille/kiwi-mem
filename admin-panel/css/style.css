@@ -8,7 +8,24 @@
    数字/模型控件限宽，参数行更紧凑。
    ============================================================ */
 
-@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+SC:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap');
+/* 等宽字体自带（52KB，仅拉丁子集）。数字、参数 key、模型名都用它，
+   是这套视觉最容易一眼看出的部分，所以不能指望外网 CDN——很多部署
+   环境（内网、被墙、离线机器）取不到 fonts.googleapis.com。
+   中文正文用的 IBM Plex Sans SC 体积上百 MB，不适合塞进仓库，
+   改由 index.html 异步加载：取得到就用，取不到静默回退到
+   苹方 / 微软雅黑，不阻塞、不白屏。 */
+@font-face {
+  font-family:'IBM Plex Mono'; font-style:normal; font-weight:400; font-display:swap;
+  src:url('/admin/fonts/ibm-plex-mono-latin-400-normal.woff2') format('woff2');
+}
+@font-face {
+  font-family:'IBM Plex Mono'; font-style:normal; font-weight:500; font-display:swap;
+  src:url('/admin/fonts/ibm-plex-mono-latin-500-normal.woff2') format('woff2');
+}
+@font-face {
+  font-family:'IBM Plex Mono'; font-style:normal; font-weight:600; font-display:swap;
+  src:url('/admin/fonts/ibm-plex-mono-latin-600-normal.woff2') format('woff2');
+}
 
 :root {
   /* Brand — kiwi green（果肉绿，压深一档，更稳重） */
@@ -582,6 +599,10 @@ html[data-theme="dark"] .wiz-terminal { background:#0d0f08; border:1px solid var
 .muted { color:var(--text-muted); }
 .faint { color:var(--text-faint); }
 .mono { font-family:var(--mono); }
+/* 记忆重要度的小字标记（仪表盘「最近记忆」用，替代原来的徽章） */
+.imp { font-size:11.5px; color:var(--text-faint); white-space:nowrap; }
+.imp-mid { color:var(--c-info); }
+.imp-hi  { color:var(--c-purple); }
 .text-sm { font-size:12.5px; }
 .text-xs { font-size:11.5px; }
 .nowrap { white-space:nowrap; }

@@ -71,7 +71,8 @@ async function refreshShellStatus() {
   try {
     const status = await get('/');
     if (pill) {
-      pill.textContent = status.version ? '● ' + status.version : '● 运行中';
+      // 版本号在侧栏底部已经有一份，顶栏胶囊只说「通不通」，不重复显示版本。
+      pill.textContent = '● 运行中';
       pill.className = 'badge badge-accent';
     }
     if (foot && status.version) foot.textContent = status.version;

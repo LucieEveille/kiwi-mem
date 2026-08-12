@@ -6,6 +6,13 @@
 <title>Kiwi-Mem Admin</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🥝</text></svg>">
 <link rel="stylesheet" href="/admin/css/style.css">
+<!-- 中文正文字体（IBM Plex Sans SC）异步加载：取得到就更贴近设计稿，
+     取不到（内网 / 被墙 / 离线）静默回退到苹方、微软雅黑，不阻塞渲染。
+     等宽字体已随面板自带，见 css/style.css 顶部的 @font-face。 -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" media="print" onload="this.media='all'"
+      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+SC:wght@400;500;600;700&display=swap">
 </head>
 <body>
 <div class="app">
