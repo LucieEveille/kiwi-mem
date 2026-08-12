@@ -153,90 +153,87 @@ async def check_request_reasoning_contract():
     gateway._apply_reasoning(body, True, False, "off")
     check(body == {}, "off must remove every outbound reasoning field")
 
-    # ── 各家值域不同，档位必须按供应商就近降到它的天花板 ──────────────────
+    # ── 档位按**端点**天花板就近降档；模型名不参与判定 ────────────────────
     DEEPSEEK_URL = "https://api.deepseek.com/v1/chat/completions"
     OPENAI_URL = "https://api.openai.com/v1/chat/completions"
     OR_URL = "https://openrouter.ai/api/v1/chat/completions"
+    RELAY_URL = "https://aihubmix.com/v1/chat/completions"
 
-    # DeepSeek 官方认 max：不能降档，否则用户白丢一档（v4-flash 传 xhigh 只到 high）
+    # DeepSeek 官方：原生 high/max，low/medium 兼容至 high、xhigh 兼容至 max。
+    # 这些别名允许原样透传（由 DeepSeek 自行映射），网关不代为改写。
     for level in config.REASONING_EFFORT_LEVELS:
         body = {}
         gateway._apply_reasoning(body, False, False, level, api_url=DEEPSEEK_URL)
         check(
             body == {"reasoning_effort": level},
-            f"DeepSeek 官方必须原样透传 {level}（它的值域到 max）",
+            f"DeepSeek 官方端点必须原样透传 {level}",
         )
 
-    # 中转站代理 DeepSeek：URL 里没有 deepseek，靠模型名认出来
-    body = {"model": "deepseek-v4-flash"}
-    gateway._apply_reasoning(body, False, False, "max", api_url="https://aihubmix.com/v1/chat/completions")
-    check(
-        body.get("reasoning_effort") == "max",
-        "经中转站访问 DeepSeek 时应按模型名识别，仍保留 max",
-    )
-
-    # OpenRouter 统一层最高 xhigh：max 必须就近降级，否则上游直接拒绝
-    body = {}
-    gateway._apply_reasoning(body, True, False, "max", api_url=OR_URL)
-    check(
-        body == {"reasoning": {"enabled": True, "effort": "xhigh"}},
-        "OpenRouter 无 max，必须就近降级为 xhigh",
-    )
-    body = {}
-    gateway._apply_reasoning(body, True, False, "xhigh", api_url=OR_URL)
-    check(
-        body == {"reasoning": {"enabled": True, "effort": "xhigh"}},
-        "OpenRouter 的 xhigh 是天花板本身，不应被改动",
-    )
-
-    # ── 优先级铁律：OpenRouter 判定必须早于 DeepSeek ──────────────────────
-    # 若哪天有人把 DeepSeek 分支挪到前面，「OpenRouter 上的 DeepSeek 模型」就会被
-    # 误判成可发 max，用户直接吃 400。下面几种形态都必须降到 xhigh。
-    for or_model in ("deepseek/deepseek-v4-pro", "deepseek/deepseek-v4-flash", "deepseek-chat"):
-        body = {"model": or_model}
-        gateway._apply_reasoning(body, True, False, "max", api_url=OR_URL)
+    # OpenRouter 统一接口接受 max/xhigh/high/medium/low/minimal/none 并按模型能力映射，
+    # 网关不再代为降档——任意模型 + max 都必须原样发出，且不得记 downgrade。
+    for or_model in ("deepseek/deepseek-v4-pro", "deepseek/deepseek-v4-flash", "deepseek-chat", "openai/gpt-5.2", ""):
+        buf = io.StringIO()
+        body = {"model": or_model} if or_model else {}
+        with contextlib.redirect_stdout(buf):
+            gateway._apply_reasoning(body, True, False, "max", api_url=OR_URL)
         check(
-            body.get("reasoning", {}).get("effort") == "xhigh",
-            f"经 OpenRouter 调用 {or_model} 时，OR 上限必须优先于 DeepSeek 值域",
+            body.get("reasoning", {}).get("effort") == "max",
+            f"OpenRouter + {or_model or '(无模型名)'} 必须原样发出 max，实际 {body.get('reasoning')}",
         )
-
-    # 更狠一层：即使 is_openrouter 没算准（传 False），URL 仍是 OpenRouter，
-    # 也不能因为模型名含 deepseek 就放行 max
-    body = {"model": "deepseek/deepseek-v4-pro"}
+        check(
+            "reasoning_effort_downgrade" not in buf.getvalue(),
+            f"OpenRouter 不再降档，不得记 downgrade（模型 {or_model or '(无)'}）",
+        )
+    # is_openrouter 没算准时，URL 仍须把它认成 OpenRouter
+    body = {}
     gateway._apply_reasoning(body, False, False, "max", api_url=OR_URL)
     check(
-        body.get("reasoning_effort") == "xhigh",
-        "is_openrouter 判定失效时，OpenRouter URL 仍须兜住上限，不得被 DeepSeek 模型名抢跑",
+        body.get("reasoning_effort") == "max",
+        "is_openrouter 判定失效时，OpenRouter URL 仍须按已登记端点处理",
     )
 
-    # 反向确认优先级函数本身
-    check(
-        gateway._provider_effort_ceiling(OR_URL, "deepseek/deepseek-v4-pro", True) == "xhigh",
-        "① OR + DeepSeek 模型 → 天花板取 OR 的 xhigh",
-    )
-    check(
-        gateway._provider_effort_ceiling(DEEPSEEK_URL, "deepseek-v4-flash", False) == "max",
-        "② DeepSeek 直连 → 天花板取 max",
-    )
-    check(
-        gateway._provider_effort_ceiling(OPENAI_URL, "gpt-5.2", False) == "xhigh",
-        "③ 其余 OpenAI 兼容 → 天花板取默认 xhigh",
-    )
-
-    # 直连 OpenAI：官方值域到 xhigh
-    body = {}
-    gateway._apply_reasoning(body, False, False, "max", api_url=OPENAI_URL)
-    check(
-        body == {"reasoning_effort": "xhigh"},
-        "直连 OpenAI 时 max 应降到官方值域上限 xhigh",
-    )
-    for level in ("low", "medium", "high", "xhigh"):
-        body = {}
-        gateway._apply_reasoning(body, False, False, level, api_url=OPENAI_URL)
+    # ── 模型名不得让未知中转站白拿 max 能力 ───────────────────────────────
+    # 模型名是调用方可控的自由文本；未知端点在能力矩阵建立前一律取保守天花板。
+    for relay_model in ("deepseek-v4-flash", "deepseek/deepseek-v4-pro", "deepseek-reasoner"):
+        buf = io.StringIO()
+        body = {"model": relay_model}
+        with contextlib.redirect_stdout(buf):
+            gateway._apply_reasoning(body, False, False, "max", api_url=RELAY_URL)
         check(
-            body == {"reasoning_effort": level},
-            f"未超过天花板的 {level} 不得被改动",
+            body.get("reasoning_effort") == "high",
+            f"未知中转站 + 模型名 {relay_model} 不得获得 max，应降到保守天花板 high，实际 {body.get('reasoning_effort')}",
         )
+        line = [ln for ln in buf.getvalue().splitlines() if "reasoning_effort_downgrade" in ln]
+        check(len(line) == 1, f"未知端点降档必须留痕恰一次，实际 {len(line)} 次")
+        check(
+            "provider=unknown" in line[0] and "requested=max" in line[0] and "applied=high" in line[0],
+            f"未知端点降档留痕字段不完整：{line[0]}",
+        )
+        check(
+            relay_model not in line[0] and "aihubmix" not in line[0],
+            f"留痕不得带模型名/URL：{line[0]}",
+        )
+
+    # 端点天花板函数本身
+    check(gateway._provider_effort_ceiling(OR_URL, "deepseek/deepseek-v4-pro", True) == "max", "OpenRouter 端点天花板为 max")
+    check(gateway._provider_effort_ceiling(OR_URL, "", False) == "max", "OpenRouter URL 即可判定，无需 is_openrouter")
+    check(gateway._provider_effort_ceiling(DEEPSEEK_URL, "", False) == "max", "DeepSeek 官方端点天花板为 max")
+    check(gateway._provider_effort_ceiling(RELAY_URL, "deepseek-v4-flash", False) == "high", "未知端点取保守天花板 high，模型名不参与判定")
+    check(gateway._provider_effort_ceiling(OPENAI_URL, "gpt-5.2", False) == "high", "未登记的直连 OpenAI 同样取保守天花板")
+    check(
+        gateway._provider_effort_profile(RELAY_URL, "deepseek-v4-flash", False)[0] == "unknown",
+        "未登记端点的供应商标识应为 unknown",
+    )
+
+    # 未超过天花板的档位在任何端点都不得被改动
+    for level in ("low", "medium", "high"):
+        for url in (DEEPSEEK_URL, OPENAI_URL, RELAY_URL):
+            body = {}
+            gateway._apply_reasoning(body, False, False, level, api_url=url)
+            check(
+                body == {"reasoning_effort": level},
+                f"未超过天花板的 {level} 不得被改动（{url}）",
+            )
 
     # Anthropic 原生不吃 effort 字符串，原值要留给 adapter 换算 budget，不参与降档
     body = {}
@@ -253,32 +250,43 @@ async def check_request_reasoning_contract():
             gateway._apply_reasoning(*args, **kwargs)
         return buf.getvalue()
 
-    log = _apply_capturing({"model": "deepseek/deepseek-v4-pro"}, True, False, "max", api_url=OR_URL)
+    log = _apply_capturing({"model": "deepseek-v4-flash"}, False, False, "max", api_url=RELAY_URL)
     hits = [ln for ln in log.splitlines() if "event=reasoning_effort_downgrade" in ln]
     check(len(hits) == 1, f"发生降档必须恰好记一次，实际 {len(hits)} 次")
     check(
-        "provider=openrouter" in hits[0] and "requested=max" in hits[0] and "applied=xhigh" in hits[0],
+        "provider=unknown" in hits[0] and "requested=max" in hits[0] and "applied=high" in hits[0],
         f"降档日志字段不完整：{hits[0]}",
     )
     # 日志是给运维看的，不该把请求信息带出去
-    check("https://" not in hits[0] and "openrouter.ai" not in hits[0], "降档日志不得包含 URL")
-    check("deepseek-v4" not in hits[0] and "deepseek/" not in hits[0], "降档日志不得包含模型名")
+    check("https://" not in hits[0] and "aihubmix" not in hits[0], "降档日志不得包含 URL")
+    check("deepseek-v4" not in hits[0], "降档日志不得包含模型名")
 
-    # 没发生降档的路径必须安静：xhigh 是 OR 的天花板本身，原样通过
+    # 没发生降档的路径必须安静
+    quiet = _apply_capturing({}, True, False, "max", api_url=OR_URL)
+    check(
+        "reasoning_effort_downgrade" not in quiet,
+        "OpenRouter 已接受 max，原样通过时不得记降档日志",
+    )
     quiet = _apply_capturing({}, True, False, "xhigh", api_url=OR_URL)
     check(
         "reasoning_effort_downgrade" not in quiet,
-        "xhigh 原样通过 OpenRouter 时不得记降档日志",
+        "xhigh 在 OpenRouter 上原样通过，不得记降档日志",
     )
-    # DeepSeek 直连的 max 也没被动过，同样不许记
+    # DeepSeek 官方端点的 max 也没被动过，同样不许记
     quiet = _apply_capturing({"model": "deepseek-v4-flash"}, False, False, "max", api_url=DEEPSEEK_URL)
     check(
         "reasoning_effort_downgrade" not in quiet,
-        "DeepSeek 直连保留 max 时不得记降档日志",
+        "DeepSeek 官方端点保留 max 时不得记降档日志",
+    )
+    # 未知端点上未超天花板的档位同样安静
+    quiet = _apply_capturing({}, False, False, "high", api_url=RELAY_URL)
+    check(
+        "reasoning_effort_downgrade" not in quiet,
+        "未知端点上 high 未超天花板，不得记降档日志",
     )
     # off / auto 根本不进降档逻辑
     for skip in ("off", "auto"):
-        quiet = _apply_capturing({}, True, False, skip, api_url=OR_URL)
+        quiet = _apply_capturing({}, False, False, skip, api_url=RELAY_URL)
         check(
             "reasoning_effort_downgrade" not in quiet,
             f"{skip} 不涉及降档，不得记日志",

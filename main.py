@@ -48,10 +48,10 @@ from database import (
     create_reminder, get_reminders, update_reminder, delete_reminder, get_due_reminders, fire_reminder,
 )
 from config import (
-    DEFAULT_EFFORT_CEILING,
-    PROVIDER_EFFORT_CEILING,
     REASONING_EFFORT_LEVELS,
     REASONING_EFFORT_VALUES,
+    TRUSTED_ENDPOINT_CEILINGS,
+    UNKNOWN_ENDPOINT_CEILING,
     SYNC_SETTING_KEYS,
     get_all_config, set_config, get_config, get_config_int, get_config_bool, get_config_float,
 )
@@ -1650,38 +1650,35 @@ def _normalize_reasoning_effort(value):
     return normalized
 
 
-def _provider_effort_ceiling(api_url: str, model: str, is_openrouter: bool = False) -> str:
-    """这家供应商实际认识的最高思考档。
-
-    ⚠️ 判定优先级是有意固定的，**不要调换分支顺序**：
-
-      ① Anthropic 原生 —— 不走本函数（由调用方跳过降档，原值交给 adapter 换算 budget）
-      ② OpenRouter     —— 最先判定。无论模型名是否含 deepseek，只要请求经 OR 统一层
-                          就受 OR 的 xhigh 上限约束。若把 DeepSeek 判断放到前面，
-                          「OpenRouter 上的 DeepSeek 模型」会被误判成可发 max，直接 400。
-      ③ DeepSeek 直连  —— 非 OR 的前提下才轮到它，认到 max。
-      ④ 其余 OpenAI 兼容 —— 落到 DEFAULT_EFFORT_CEILING（xhigh）。
-
-    ③ 同时看 api_url 与模型名：用户完全可能通过中转站访问 DeepSeek，那时 URL 里
-    没有 deepseek 字样，但模型名（deepseek-v4-flash / deepseek-v4-pro 等）还在。
-    """
+def _provider_effort_ceiling(api_url: str, model: str = "", is_openrouter: bool = False) -> str:
+    """这个端点实际认识的最高思考档。"""
     return _provider_effort_profile(api_url, model, is_openrouter)[1]
 
 
-def _provider_effort_profile(api_url: str, model: str, is_openrouter: bool = False):
-    """(供应商标识, 该家认识的最高档)。标识只用于降档日志，不含任何可识别信息。"""
-    # ② OpenRouter 最优先，早于任何模型名匹配
+def _provider_effort_profile(api_url: str, model: str = "", is_openrouter: bool = False):
+    """(供应商标识, 该端点认识的最高档)。标识只用于降档日志，不含任何可识别信息。
+
+    判定**只看端点 URL**：
+
+      ① Anthropic 原生 —— 不走本函数（由调用方跳过降档，原值交给 adapter 换算 budget）
+      ② 已登记的可信端点 —— 按 TRUSTED_ENDPOINT_CEILINGS 顺序匹配，取各自天花板
+      ③ 其余一切 OpenAI 兼容端点 —— 取保守天花板 UNKNOWN_ENDPOINT_CEILING
+
+    ⚠️ `model` 参数保留是为了调用方无需改签名，但**有意不参与判定**：模型名是调用方
+    可控的自由文本，未知中转站上出现 "deepseek-v4-pro" 并不代表它真把 max 透传给了
+    DeepSeek。靠模型名授予高档位会让任何中转站都能白拿 max 能力，因此改为只认端点。
+    能力矩阵（按模型而非端点判定）留给后续「思考强度双仓专项票」。
+    """
+    haystack = (api_url or "").lower()
     if is_openrouter:
-        return ("openrouter", PROVIDER_EFFORT_CEILING["openrouter"])
-    haystack = f"{api_url or ''} {model or ''}".lower()
-    if "openrouter" in haystack:
-        # is_openrouter 由调用方判定；这里再兜一层，避免它没算准时 ③ 抢跑
-        return ("openrouter", PROVIDER_EFFORT_CEILING["openrouter"])
-    # ③ 非 OpenRouter 才轮到 DeepSeek 直连
-    if "deepseek" in haystack:
-        return ("deepseek", PROVIDER_EFFORT_CEILING["deepseek"])
-    # ④ 其余 OpenAI 兼容
-    return ("default", DEFAULT_EFFORT_CEILING)
+        # 调用方已判定为 OpenRouter；与下表保持同一天花板
+        for marker, provider, ceiling in TRUSTED_ENDPOINT_CEILINGS:
+            if provider == "openrouter":
+                return (provider, ceiling)
+    for marker, provider, ceiling in TRUSTED_ENDPOINT_CEILINGS:
+        if marker in haystack:
+            return (provider, ceiling)
+    return ("unknown", UNKNOWN_ENDPOINT_CEILING)
 
 
 def _clamp_effort(effort: str, ceiling: str) -> str:
@@ -1704,9 +1701,9 @@ def _apply_reasoning(body: dict, is_openrouter: bool, is_anthropic_fmt: bool, re
       - 其它 OpenAI 兼容供应商 → 透传具体档位；off/auto 剥掉，
           避免严格供应商（如直连 OpenAI o 系列）对非法 reasoning_effort 报 400。
 
-    各家值域不一样（见 config.PROVIDER_EFFORT_CEILING）：DeepSeek 官方认 max，
-    OpenRouter 统一层最高 xhigh。所以档位在出站前**按供应商就近降到它的天花板**——
-    既不会把 max 硬塞给不认识它的 OpenRouter，也不会让支持 max 的 DeepSeek 用户白丢一档。
+    各端点认到哪一档不一样（见 config.TRUSTED_ENDPOINT_CEILINGS）：已登记的 OpenRouter
+    与 DeepSeek 官方都认到 max，未登记端点在能力矩阵建立前取保守天花板。所以档位在出站前
+    **按端点就近降到它的天花板**，超出即降档并记 event=reasoning_effort_downgrade。
     Anthropic 原生不吃 effort 字符串，原值交给 adapter 换算 budget，不在这里降档。
     未知值在 /v1 入口由 _normalize_reasoning_effort 明确拒绝，不会静默进入本函数。
     """

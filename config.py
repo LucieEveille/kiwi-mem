@@ -207,33 +207,37 @@ async def get_all_config() -> dict:
 # 写入配置
 # ============================================================
 
-# 公开契约取值 = 各家供应商档位的并集。前端统一发这一套，各家方言的翻译与降档
-# 全部收敛在网关（见下方 PROVIDER_EFFORT_CEILING 与 main._apply_reasoning）：
+# 公开契约取值 = 前端统一发的一套档位，各家方言的翻译与降档全部收敛在网关
+# （见下方 TRUSTED_ENDPOINT_CEILINGS 与 main._apply_reasoning）：
 #   off / auto            —— 网关自己的语义（不传 / 交给供应商决定）
-#   low / medium / high   —— 通用档位，各家都认
-#   xhigh                 —— OpenRouter、直连 OpenAI、DeepSeek 均认
-#   max                   —— 目前只有 DeepSeek 官方认（v4-flash / v4-pro 的最高档）
-# 收到超出某家值域的档位时，网关**主动就近降到该家天花板**再发出，并记一条
-# event=reasoning_effort_downgrade；不采用「原样发出去让上游自己报错」，因为那会让
-# OpenRouter 用户直接吃 400，而这套档位本就是网关替用户抹平各家差异的地方。
+#   low / medium / high   —— 通用档位
+#   xhigh / max           —— 高档位，各家支持情况不同，由端点天花板决定能否发出
+# 收到超出某端点天花板的档位时，网关就近降到该端点的最高档再发出，并记一条
+# event=reasoning_effort_downgrade，让「我选了最高档但模型没那么用力」可查。
 REASONING_EFFORT_VALUES = ("off", "auto", "low", "medium", "high", "xhigh", "max")
 
 # off / auto 之外的具体档位，**按强度从弱到强**排列（下标即强度序，降档逻辑依赖这个顺序）
 REASONING_EFFORT_LEVELS = ("low", "medium", "high", "xhigh", "max")
 
-# 各家 API 实际认识的最高档（2026-08 行情）：
-#   DeepSeek 官方   —— low/high/xhigh/max 都认，max 是真的最高档
-#   OpenRouter 统一层 —— 最高只到 xhigh，发 max 会被上游拒绝
-#   其余（含直连 OpenAI）—— 官方值域到 xhigh
-# 用户选了超过某家天花板的档位时，网关**就近降到该家的最高档**，而不是：
-#   ① 原样发出去让上游报错（OpenRouter 用户会踩）
-#   ② 一刀切降级（支持 max 的 DeepSeek 用户白白损失一档）
-# Anthropic 原生不吃 effort 字符串，由 anthropic_adapter 换算 budget_tokens，不参与降档。
-PROVIDER_EFFORT_CEILING = {
-    "openrouter": "xhigh",
-    "deepseek": "max",
-}
-DEFAULT_EFFORT_CEILING = "xhigh"
+# 明确登记的可信端点 → (供应商标识, 该端点认识的最高档)。**按端点 URL 匹配，不看模型名**：
+# 模型名是调用方可控的自由文本，某个未知中转站上出现 "deepseek-v4-pro" 并不能证明
+# 它真的把 max 透传给了 DeepSeek，因此模型名不得作为授予高档位的依据。
+# 顺序即匹配优先级。
+#
+#   openrouter.ai      —— 统一接口接受 max/xhigh/high/medium/low/minimal/none，
+#                          并按各模型能力自行映射，网关不再代为降档。
+#   api.deepseek.com   —— 原生 high / max；low、medium 由 DeepSeek 兼容至 high，
+#                          xhigh 兼容至 max。这些别名允许原样透传，但它们并非
+#                          各自独立的原生档位，只是被映射到 high / max 两档上。
+TRUSTED_ENDPOINT_CEILINGS = (
+    ("openrouter.ai", "openrouter", "max"),
+    ("api.deepseek.com", "deepseek", "max"),
+)
+
+# 未登记的 OpenAI-compatible 端点（各类中转站、自建代理、直连 OpenAI 等）：
+# 在专项票建立模型能力矩阵之前一律取保守天花板，超出即降档并结构化留痕，
+# 避免把高档位发给一个能力未知的端点。
+UNKNOWN_ENDPOINT_CEILING = "high"
 
 _ENUM_VALUES = {
     "mcp_mode": {"off", "auto", "manual"},
