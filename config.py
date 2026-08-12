@@ -207,7 +207,49 @@ async def get_all_config() -> dict:
 # 写入配置
 # ============================================================
 
-REASONING_EFFORT_VALUES = ("off", "auto", "low", "medium", "high")
+# 公开契约取值 = 前端统一发的一套档位，各家方言的翻译与降档全部收敛在网关
+# （见下方 TRUSTED_HOST_CEILINGS 与 main._apply_reasoning）：
+#   off / auto            —— 网关自己的语义（不传 / 交给供应商决定）
+#   low / medium / high   —— 通用档位
+#   xhigh / max           —— 高档位，各家支持情况不同，由端点天花板决定能否发出
+# 收到超出某端点天花板的档位时，网关就近降到该端点的最高档再发出，并记一条
+# event=reasoning_effort_downgrade，让「我选了最高档但模型没那么用力」可查。
+REASONING_EFFORT_VALUES = ("off", "auto", "low", "medium", "high", "xhigh", "max")
+
+# off / auto 之外的具体档位，**按强度从弱到强**排列（下标即强度序，降档逻辑依赖这个顺序）
+REASONING_EFFORT_LEVELS = ("low", "medium", "high", "xhigh", "max")
+
+# 明确登记的可信端点 → (供应商标识, 该端点认识的最高档)。
+#
+# ⚠️ 键是**精确 hostname**，判定必须用 urlparse(...).hostname 做等值比较，
+# 绝不可在整段 URL 上做 substring 匹配——否则下列全都会被误判成官方端点：
+#     https://openrouter.ai.evil.example/...      （子域名后缀）
+#     https://relay.example/?next=openrouter.ai   （query 夹带）
+#     https://relay.example/openrouter.ai/v1      （path 夹带）
+#     https://openrouter.ai@evil.example/...      （userinfo 伪装）
+# 这些实际都是未知中转，必须落到 unknown 的保守天花板。
+#
+# 同理，模型名也不参与判定：它是调用方可控的自由文本，未知中转站上出现
+# "deepseek-v4-pro" 并不能证明它真把 max 透传给了 DeepSeek。
+#
+#   openrouter.ai      —— 统一接口接受 max/xhigh/high/medium/low/minimal/none，
+#                          并按各模型能力自行映射，网关不再代为降档。
+#   api.deepseek.com   —— 原生 high / max；low、medium 由 DeepSeek 兼容至 high，
+#                          xhigh 兼容至 max。这些别名允许原样透传，但它们并非
+#                          各自独立的原生档位，只是被映射到 high / max 两档上。
+#   api.openai.com     —— 登记的目的是让降档留痕正确归属为 openai 而非 unknown；
+#                          天花板本票仍保守封在 high，因为 OpenAI 的 effort 能力
+#                          随模型变化，细分留给「思考档位双仓专项票」的能力矩阵。
+TRUSTED_HOST_CEILINGS = {
+    "openrouter.ai": ("openrouter", "max"),
+    "api.deepseek.com": ("deepseek", "max"),
+    "api.openai.com": ("openai", "high"),
+}
+
+# 未登记的 OpenAI-compatible 端点（各类中转站、自建代理），以及空值 / 畸形 URL：
+# 在专项票建立模型能力矩阵之前一律取保守天花板，超出即降档并结构化留痕，
+# 避免把高档位发给一个能力未知的端点。
+UNKNOWN_ENDPOINT_CEILING = "high"
 
 _ENUM_VALUES = {
     "mcp_mode": {"off", "auto", "manual"},

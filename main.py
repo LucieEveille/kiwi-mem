@@ -21,6 +21,7 @@ import copy
 import math
 import httpx
 from contextlib import asynccontextmanager
+from urllib.parse import urlparse
 from fastapi import FastAPI, Request, UploadFile, File
 from fastapi.responses import StreamingResponse, JSONResponse, Response
 from fastapi.middleware.cors import CORSMiddleware
@@ -48,7 +49,10 @@ from database import (
     create_reminder, get_reminders, update_reminder, delete_reminder, get_due_reminders, fire_reminder,
 )
 from config import (
+    REASONING_EFFORT_LEVELS,
     REASONING_EFFORT_VALUES,
+    TRUSTED_HOST_CEILINGS,
+    UNKNOWN_ENDPOINT_CEILING,
     SYNC_SETTING_KEYS,
     get_all_config, set_config, get_config, get_config_int, get_config_bool, get_config_float,
 )
@@ -1628,7 +1632,7 @@ async def extract_file_content(file: UploadFile = File(...)):
 
 
 def _normalize_reasoning_effort(value):
-    """Normalize the public five-value request contract or reject it explicitly."""
+    """Normalize the public reasoning-effort request contract or reject it explicitly."""
     if value is None:
         return None
     if not isinstance(value, str):
@@ -1647,16 +1651,76 @@ def _normalize_reasoning_effort(value):
     return normalized
 
 
-def _apply_reasoning(body: dict, is_openrouter: bool, is_anthropic_fmt: bool, reasoning_effort, skip_prompt: bool = False):
+def _endpoint_host(api_url: str) -> str:
+    """从出站 URL 取规范化后的真实 hostname；取不到就返回空串。
+
+    只认 urlparse 解析出的 hostname，天然剥掉 userinfo、端口与 path/query，
+    并统一小写。畸形 URL、空值一律得到空串，落到未知端点的保守天花板。
+    """
+    try:
+        host = urlparse((api_url or "").strip()).hostname
+    except (ValueError, AttributeError):
+        return ""
+    return (host or "").lower()
+
+
+def _provider_effort_ceiling(api_url: str, model: str = "") -> str:
+    """这个端点实际认识的最高思考档。"""
+    return _provider_effort_profile(api_url, model)[1]
+
+
+def _provider_effort_profile(api_url: str, model: str = ""):
+    """(供应商标识, 该端点认识的最高档)。标识只用于降档日志，不含任何可识别信息。
+
+    判定**只按真实 hostname 等值比较**：
+
+      ① Anthropic 原生 —— 不走本函数（由调用方跳过降档，原值交给 adapter 换算 budget）
+      ② 已登记的可信主机 —— 命中 TRUSTED_HOST_CEILINGS，取各自天花板
+      ③ 其余一切（含空值 / 畸形 URL）—— 取保守天花板 UNKNOWN_ENDPOINT_CEILING
+
+    ⚠️ 两条授信旁路都是有意堵死的，改动前请先想清楚：
+
+    - **不做 URL substring 匹配**：`openrouter.ai.evil.example`、query 或 path 里
+      夹带官方域名、`openrouter.ai@evil.example` 这些都是未知中转，substring 匹配
+      会把它们误判成官方端点、错误授予 max，进而错误透传并吃上游 400。
+    - **不接受调用方传入的 is_openrouter 布尔**：它由 `"openrouter" in api_url` 得出，
+      同样是 substring 语义，会成为绕过本函数的独立授信旁路。能力判定统一只走这里；
+      调用方的 is_openrouter 仅用于选择出站字段格式（reasoning vs reasoning_effort），
+      与「能发多高的档」无关。
+    - **model 不参与判定**：模型名是调用方可控的自由文本，未知中转站上出现
+      "deepseek-v4-pro" 并不代表它真把 max 透传给了 DeepSeek。参数保留只为免改
+      调用方签名。能力矩阵（按模型而非端点判定）留给「思考档位双仓专项票」。
+    """
+    host = _endpoint_host(api_url)
+    if host in TRUSTED_HOST_CEILINGS:
+        return TRUSTED_HOST_CEILINGS[host]
+    return ("unknown", UNKNOWN_ENDPOINT_CEILING)
+
+
+def _clamp_effort(effort: str, ceiling: str) -> str:
+    """把档位就近压到该供应商的天花板；本来就没超过则原样返回。"""
+    if effort not in REASONING_EFFORT_LEVELS or ceiling not in REASONING_EFFORT_LEVELS:
+        return effort
+    if REASONING_EFFORT_LEVELS.index(effort) <= REASONING_EFFORT_LEVELS.index(ceiling):
+        return effort
+    return ceiling
+
+
+def _apply_reasoning(body: dict, is_openrouter: bool, is_anthropic_fmt: bool, reasoning_effort, skip_prompt: bool = False, api_url: str = ""):
     """统一决定一个出站请求体的思考链参数。转发路径与工具循环共用，保证两条路对所有供应商一致。
 
-    reasoning_effort 是从请求体里 pop 出来的原值：off/auto/low/medium/high/None。
+    reasoning_effort 是从请求体里 pop 出来的原值：REASONING_EFFORT_VALUES 之一或 None。
       - 功能调用(skip_prompt) 或用户选 'off' → 不开思考（并清掉任何 reasoning/reasoning_effort 残留）
       - OpenRouter / Anthropic 直连 → 写 reasoning={"enabled":True[, "effort"]}
           None（旧前端 / 非推理模型未发）视为默认开（向后兼容）；'auto' 开但不带 effort；
-          'low'/'medium'/'high' 带 effort。
-      - 其它 OpenAI 兼容供应商 → 只透传合法 effort(low/medium/high)；off/auto 剥掉，
+          其余档位带 effort。
+      - 其它 OpenAI 兼容供应商 → 透传具体档位；off/auto 剥掉，
           避免严格供应商（如直连 OpenAI o 系列）对非法 reasoning_effort 报 400。
+
+    各端点认到哪一档不一样（见 config.TRUSTED_HOST_CEILINGS）：已登记的 OpenRouter
+    与 DeepSeek 官方都认到 max，未登记端点在能力矩阵建立前取保守天花板。所以档位在出站前
+    **按端点就近降到它的天花板**，超出即降档并记 event=reasoning_effort_downgrade。
+    Anthropic 原生不吃 effort 字符串，原值交给 adapter 换算 budget，不在这里降档。
     未知值在 /v1 入口由 _normalize_reasoning_effort 明确拒绝，不会静默进入本函数。
     """
     # 先清干净，避免 fresh body 残留或重复调用叠加
@@ -1664,13 +1728,26 @@ def _apply_reasoning(body: dict, is_openrouter: bool, is_anthropic_fmt: bool, re
     body.pop("reasoning_effort", None)
     if skip_prompt or reasoning_effort == "off":
         return
+    effort = reasoning_effort
+    if not is_anthropic_fmt:
+        # 只按端点判定能力；is_openrouter 仅用于下方选择出站字段格式，不参与授信
+        provider, ceiling = _provider_effort_profile(api_url, body.get("model"))
+        clamped = _clamp_effort(effort, ceiling)
+        if clamped != effort:
+            # 只在真的降档时记一行，方便用户对上「我选了超高，为什么模型没那么用力」。
+            # 刻意不带 URL / 模型名 / 请求正文 / 用户或会话标识。
+            print(
+                f"event=reasoning_effort_downgrade provider={provider} "
+                f"requested={effort} applied={clamped}"
+            )
+        effort = clamped
     if is_openrouter or is_anthropic_fmt:
         cfg = {"enabled": True}
-        if reasoning_effort in ("low", "medium", "high"):
-            cfg["effort"] = reasoning_effort
+        if effort in REASONING_EFFORT_LEVELS:
+            cfg["effort"] = effort
         body["reasoning"] = cfg
-    elif reasoning_effort in ("low", "medium", "high"):
-        body["reasoning_effort"] = reasoning_effort
+    elif effort in REASONING_EFFORT_LEVELS:
+        body["reasoning_effort"] = effort
 
 
 def _is_prompt_cache_enabled_value(value) -> bool:
@@ -2045,8 +2122,8 @@ async def chat_completions(request: Request):
     
     # 思考链参数：统一交给 _apply_reasoning 处理（转发路径与工具循环同一套规则，对各类供应商分流）。
     # 由 to_anthropic_request 把 reasoning.enabled 转成 Anthropic extended thinking。
-    _apply_reasoning(body, is_openrouter, is_anthropic_fmt, reasoning_effort, skip_prompt)
-    
+    _apply_reasoning(body, is_openrouter, is_anthropic_fmt, reasoning_effort, skip_prompt, api_url=chat_api_url)
+
     # ---------- Prompt 缓存（v5.5 → v5.7 修正）----------
     # cache_control 现在在 system message 的 content block 上加，不在 body 顶层
     # （旧代码在 body 加 cache_control 是无效的，OpenRouter 需要 content block 级标记）
@@ -2629,7 +2706,7 @@ async def _stream_with_tools(messages, tools, tool_map, model, temperature, tool
             body["max_tokens"] = max_tokens
         # 与转发路径同一套规则：尊重用户思考强度，并对各类供应商分流
         # （OpenRouter/Anthropic 用 reasoning 字段；其它 OpenAI 兼容供应商透传合法 effort）。
-        _apply_reasoning(body, _is_openrouter, _is_anthropic_fmt, reasoning_effort, skip_prompt)
+        _apply_reasoning(body, _is_openrouter, _is_anthropic_fmt, reasoning_effort, skip_prompt, api_url=_api_url)
         await _apply_openrouter_sticky_routing(body, _is_openrouter, model, session_id)
 
         # Anthropic 格式转换
