@@ -185,12 +185,38 @@ async def check_request_reasoning_contract():
         "OpenRouter 的 xhigh 是天花板本身，不应被改动",
     )
 
-    # 经 OpenRouter 调用 deepseek 模型：仍要过 OR 统一层，受 OR 上限约束
+    # ── 优先级铁律：OpenRouter 判定必须早于 DeepSeek ──────────────────────
+    # 若哪天有人把 DeepSeek 分支挪到前面，「OpenRouter 上的 DeepSeek 模型」就会被
+    # 误判成可发 max，用户直接吃 400。下面几种形态都必须降到 xhigh。
+    for or_model in ("deepseek/deepseek-v4-pro", "deepseek/deepseek-v4-flash", "deepseek-chat"):
+        body = {"model": or_model}
+        gateway._apply_reasoning(body, True, False, "max", api_url=OR_URL)
+        check(
+            body.get("reasoning", {}).get("effort") == "xhigh",
+            f"经 OpenRouter 调用 {or_model} 时，OR 上限必须优先于 DeepSeek 值域",
+        )
+
+    # 更狠一层：即使 is_openrouter 没算准（传 False），URL 仍是 OpenRouter，
+    # 也不能因为模型名含 deepseek 就放行 max
     body = {"model": "deepseek/deepseek-v4-pro"}
-    gateway._apply_reasoning(body, True, False, "max", api_url=OR_URL)
+    gateway._apply_reasoning(body, False, False, "max", api_url=OR_URL)
     check(
-        body.get("reasoning", {}).get("effort") == "xhigh",
-        "经 OpenRouter 调用 DeepSeek 模型时，OR 的上限优先于 DeepSeek 的值域",
+        body.get("reasoning_effort") == "xhigh",
+        "is_openrouter 判定失效时，OpenRouter URL 仍须兜住上限，不得被 DeepSeek 模型名抢跑",
+    )
+
+    # 反向确认优先级函数本身
+    check(
+        gateway._provider_effort_ceiling(OR_URL, "deepseek/deepseek-v4-pro", True) == "xhigh",
+        "① OR + DeepSeek 模型 → 天花板取 OR 的 xhigh",
+    )
+    check(
+        gateway._provider_effort_ceiling(DEEPSEEK_URL, "deepseek-v4-flash", False) == "max",
+        "② DeepSeek 直连 → 天花板取 max",
+    )
+    check(
+        gateway._provider_effort_ceiling(OPENAI_URL, "gpt-5.2", False) == "xhigh",
+        "③ 其余 OpenAI 兼容 → 天花板取默认 xhigh",
     )
 
     # 直连 OpenAI：官方值域到 xhigh

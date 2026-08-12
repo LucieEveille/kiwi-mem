@@ -1650,17 +1650,29 @@ def _normalize_reasoning_effort(value):
 def _provider_effort_ceiling(api_url: str, model: str, is_openrouter: bool = False) -> str:
     """这家供应商实际认识的最高思考档。
 
-    URL 与模型名任一命中即算——用户完全可能通过中转站访问 DeepSeek，那时 URL 里
+    ⚠️ 判定优先级是有意固定的，**不要调换分支顺序**：
+
+      ① Anthropic 原生 —— 不走本函数（由调用方跳过降档，原值交给 adapter 换算 budget）
+      ② OpenRouter     —— 最先判定。无论模型名是否含 deepseek，只要请求经 OR 统一层
+                          就受 OR 的 xhigh 上限约束。若把 DeepSeek 判断放到前面，
+                          「OpenRouter 上的 DeepSeek 模型」会被误判成可发 max，直接 400。
+      ③ DeepSeek 直连  —— 非 OR 的前提下才轮到它，认到 max。
+      ④ 其余 OpenAI 兼容 —— 落到 DEFAULT_EFFORT_CEILING（xhigh）。
+
+    ③ 同时看 api_url 与模型名：用户完全可能通过中转站访问 DeepSeek，那时 URL 里
     没有 deepseek 字样，但模型名（deepseek-v4-flash / deepseek-v4-pro 等）还在。
-    OpenRouter 优先级最高：即使经 OR 调用 deepseek 模型，请求也得过 OR 统一层，
-    仍受 OR 的 xhigh 上限约束。
     """
+    # ② OpenRouter 最优先，早于任何模型名匹配
     if is_openrouter:
         return PROVIDER_EFFORT_CEILING["openrouter"]
     haystack = f"{api_url or ''} {model or ''}".lower()
-    for key, ceiling in PROVIDER_EFFORT_CEILING.items():
-        if key in haystack:
-            return ceiling
+    if "openrouter" in haystack:
+        # is_openrouter 由调用方判定；这里再兜一层，避免它没算准时 ③ 抢跑
+        return PROVIDER_EFFORT_CEILING["openrouter"]
+    # ③ 非 OpenRouter 才轮到 DeepSeek 直连
+    if "deepseek" in haystack:
+        return PROVIDER_EFFORT_CEILING["deepseek"]
+    # ④ 其余 OpenAI 兼容
     return DEFAULT_EFFORT_CEILING
 
 
