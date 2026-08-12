@@ -1295,6 +1295,218 @@ async def test_w1_01() -> None:
     passed("T-W1-01-4 hard-delete paths preserve projects and locks")
 
 
+async def test_w2_01(client: httpx.AsyncClient) -> None:
+    """W2-01 G1 granular-sync, ownership, gate, and observability guards."""
+    expected_routes = {
+        ("/sync/conversations", "POST"),
+        ("/sync/conversations/{conv_id}", "PATCH"),
+        ("/sync/conversations/{conv_id}/messages/{msg_id}", "PUT"),
+        ("/sync/conversations/{conv_id}/messages/{msg_id}", "DELETE"),
+        ("/sync/projects", "POST"),
+        ("/sync/projects/{proj_id}", "PATCH"),
+    }
+    actual_routes = {
+        (route.path, method)
+        for route in app_module.app.routes
+        for method in (getattr(route, "methods", None) or set())
+    }
+    missing = sorted(expected_routes - actual_routes)
+    require(not missing, f"W2-01 granular routes missing: {missing}")
+    require(
+        config.CONFIG_SCHEMA.get("sync_legacy_write_enabled", (None, None))[1] == "true",
+        "sync_legacy_write_enabled must exist and default to true",
+    )
+
+    await _truncate("chat_messages", "chat_conversations", "chat_projects")
+    prefix = "w201-"
+    proj_a, proj_b = f"{prefix}pa", f"{prefix}pb"
+    conv_a, conv_b = f"{prefix}ca", f"{prefix}cb"
+
+    # Create-only project endpoints use server timestamps and never overwrite on replay.
+    response = await client.post(
+        "/sync/projects",
+        json={"id": proj_a, "name": "Project A", "icon": "A", "createdAt": "2000-01-01T00:00:00Z"},
+    )
+    require(response.status_code == 200, f"project POST failed: {response.status_code} {response.text}")
+    response = await client.post("/sync/projects", json={"id": proj_a, "name": "overwritten"})
+    require(response.status_code == 409, "duplicate project POST must return 409")
+    project_row = await _pool_fetchrow(
+        "SELECT name, icon, created_at FROM chat_projects WHERE id = $1", proj_a
+    )
+    require(project_row["name"] == "Project A" and project_row["icon"] == "A", "project replay overwrote data")
+    require(project_row["created_at"].year >= 2026, "project POST trusted client createdAt")
+    passed("T-W2-01-1 project POST is create-only and server-timed")
+
+    response = await client.patch(f"/sync/projects/{proj_a}", json={"icon": "PATCHED"})
+    require(response.status_code == 200, "project PATCH failed")
+    response = await client.patch(f"/sync/projects/{proj_a}", json={"unknown": "x"})
+    require(response.status_code == 400, "empty/unknown project PATCH must return 400")
+    response = await client.patch(f"/sync/projects/{prefix}missing", json={"name": "x"})
+    require(response.status_code == 404, "missing project PATCH must return 404")
+    project_row = await _pool_fetchrow("SELECT name, icon FROM chat_projects WHERE id = $1", proj_a)
+    require(project_row["name"] == "Project A" and project_row["icon"] == "PATCHED", "project PATCH was not partial")
+    passed("T-W2-01-2 project PATCH is partial and never creates")
+
+    await client.post("/sync/projects", json={"id": proj_b, "name": "Project B"})
+    response = await client.post(
+        "/sync/conversations",
+        json={
+            "id": conv_a,
+            "title": "Conversation A",
+            "projectId": proj_a,
+            "createdAt": "2000-01-01T00:00:00Z",
+            "messages": [{"id": f"{prefix}ignored", "content": "must-not-insert"}],
+        },
+    )
+    require(response.status_code == 200 and response.json().get("warning") == "messages ignored", "conversation POST contract failed")
+    response = await client.post("/sync/conversations", json={"id": conv_a, "title": "overwritten"})
+    require(response.status_code == 409, "duplicate conversation POST must return 409")
+    conv_row = await _pool_fetchrow(
+        "SELECT title, project_id, created_at FROM chat_conversations WHERE id = $1", conv_a
+    )
+    require(conv_row["title"] == "Conversation A" and conv_row["project_id"] == proj_a, "conversation replay overwrote data")
+    require(conv_row["created_at"].year >= 2026, "conversation POST trusted client createdAt")
+    require(await _pool_fetchval("SELECT COUNT(*) FROM chat_messages WHERE conversation_id = $1", conv_a) == 0, "POST inserted messages")
+    passed("T-W2-01-3 conversation POST is metadata-only, create-only, and server-timed")
+
+    response = await client.patch(f"/sync/conversations/{conv_a}", json={"pinned": True})
+    require(response.status_code == 200, "conversation PATCH failed")
+    response = await client.patch(f"/sync/conversations/{conv_a}", json={"messages": []})
+    require(response.status_code == 400, "messages-only conversation PATCH must return 400")
+    response = await client.patch(f"/sync/conversations/{prefix}missing", json={"title": "x"})
+    require(response.status_code == 404, "missing conversation PATCH must return 404")
+    conv_row = await _pool_fetchrow("SELECT title, pinned FROM chat_conversations WHERE id = $1", conv_a)
+    require(conv_row["title"] == "Conversation A" and conv_row["pinned"] is True, "conversation PATCH was not partial")
+    passed("T-W2-01-4 conversation PATCH is partial and never creates")
+
+    msg_id = f"{prefix}message"
+    message_url = f"/sync/conversations/{conv_a}/messages/{msg_id}"
+    response = await client.put(message_url, json={"id": "body-id-ignored", "role": "user", "content": "v1", "sortOrder": 7})
+    require(response.status_code == 200, "single-message insert failed")
+    before_touch = await _pool_fetchval("SELECT updated_at FROM chat_conversations WHERE id = $1", conv_a)
+    await asyncio.sleep(0.01)
+    response = await client.put(message_url, json={"role": "assistant", "content": "v2"})
+    require(response.status_code == 200, "same-ID message replay failed")
+    message_row = await _pool_fetchrow(
+        "SELECT id, conversation_id, role, content, sort_order FROM chat_messages WHERE id = $1", msg_id
+    )
+    after_touch = await _pool_fetchval("SELECT updated_at FROM chat_conversations WHERE id = $1", conv_a)
+    require(message_row["id"] == msg_id and message_row["conversation_id"] == conv_a, "URL IDs were not authoritative")
+    require(message_row["role"] == "assistant" and message_row["content"] == "v2", "message replay did not update snapshot")
+    require(message_row["sort_order"] == 7 and after_touch > before_touch, "sort order/timestamp replay contract failed")
+    require(await _pool_fetchval("SELECT COUNT(*) FROM chat_messages WHERE id = $1", msg_id) == 1, "message replay created duplicates")
+    passed("T-W2-01-5 same message ID replay is idempotent and URL-authoritative")
+
+    await client.post("/sync/conversations", json={"id": conv_b, "title": "Conversation B", "projectId": proj_b})
+    original = dict(await _pool_fetchrow("SELECT * FROM chat_messages WHERE id = $1", msg_id))
+    response = await client.put(
+        f"/sync/conversations/{conv_b}/messages/{msg_id}",
+        json={"role": "assistant", "content": "forged-cross-project"},
+    )
+    require(response.status_code == 409, "cross-project/cross-conversation message forgery must return 409")
+    require(dict(await _pool_fetchrow("SELECT * FROM chat_messages WHERE id = $1", msg_id)) == original, "409 changed original message")
+    passed("T-W2-01-6 cross-conversation and cross-project message forgery is rejected")
+
+    concurrent_id = f"{prefix}concurrent"
+    responses = await asyncio.gather(
+        client.put(f"/sync/conversations/{conv_a}/messages/{concurrent_id}", json={"content": "from-a"}),
+        client.put(f"/sync/conversations/{conv_b}/messages/{concurrent_id}", json={"content": "from-b"}),
+    )
+    require(sorted(r.status_code for r in responses) == [200, 409], "concurrent cross-owner writes must yield one 200 and one 409")
+    winner = conv_a if responses[0].status_code == 200 else conv_b
+    require(await _pool_fetchval("SELECT conversation_id FROM chat_messages WHERE id = $1", concurrent_id) == winner, "concurrent winner ownership changed")
+    passed("T-W2-01-7 concurrent same-ID cross-owner writes have exactly one winner")
+
+    response = await client.delete(f"/sync/conversations/{conv_b}/messages/{msg_id}")
+    require(response.status_code == 200 and response.json() == {"deleted": False}, "wrong-owner delete was not rejected")
+    response = await client.delete(message_url)
+    require(response.status_code == 200 and response.json() == {"deleted": True}, "correct-owner delete failed")
+    response = await client.delete(message_url)
+    require(response.status_code == 200 and response.json() == {"deleted": False}, "repeat delete was not idempotent")
+    passed("T-W2-01-8 single-message delete is owner-scoped and idempotent")
+
+    atomic_conv, atomic_msg = f"{prefix}atomic-conv", f"{prefix}atomic-msg"
+    await client.post("/sync/conversations", json={"id": atomic_conv, "title": "atomic"})
+    await _pool_execute(
+        """
+        CREATE OR REPLACE FUNCTION w201_fail_parent_touch() RETURNS trigger AS $fn$
+        BEGIN
+            IF NEW.id = 'w201-atomic-conv' THEN RAISE EXCEPTION 'W2-01 injected parent-touch failure'; END IF;
+            RETURN NEW;
+        END; $fn$ LANGUAGE plpgsql
+        """
+    )
+    await _pool_execute(
+        "CREATE TRIGGER w201_fail_parent_touch_trg BEFORE UPDATE ON chat_conversations "
+        "FOR EACH ROW EXECUTE FUNCTION w201_fail_parent_touch()"
+    )
+    try:
+        response = await client.put(
+            f"/sync/conversations/{atomic_conv}/messages/{atomic_msg}", json={"content": "must-roll-back"}
+        )
+        require(response.status_code == 500, "injected transaction failure must surface as 500")
+        require(
+            not await _pool_fetchval("SELECT EXISTS(SELECT 1 FROM chat_messages WHERE id = $1)", atomic_msg),
+            "message half-state survived parent-touch failure",
+        )
+    finally:
+        await _pool_execute("DROP TRIGGER IF EXISTS w201_fail_parent_touch_trg ON chat_conversations")
+        await _pool_execute("DROP FUNCTION IF EXISTS w201_fail_parent_touch()")
+    passed("T-W2-01-9 message write and parent timestamp are one transaction")
+
+    legacy_conv, legacy_proj = f"{prefix}legacy-conv", f"{prefix}legacy-proj"
+    sentinel = "W2_01_PAYLOAD_MUST_STAY_PRIVATE"
+    gate_key = "sync_legacy_write_enabled"
+    gate_had_row = await _pool_fetchval("SELECT EXISTS(SELECT 1 FROM gateway_config WHERE key = $1)", gate_key)
+    gate_previous = await _config_row(gate_key)
+    try:
+        require(await config.get_config_bool(gate_key, True) is True, "legacy gate is not open by default")
+        capture = io.StringIO()
+        with redirect_stdout(capture):
+            response_conv_open = await client.put(
+                f"/sync/conversations/{legacy_conv}",
+                json={"title": sentinel, "messages": [{"id": f"{prefix}legacy-msg", "content": sentinel}]},
+            )
+            response_proj_open = await client.put(
+                f"/sync/projects/{legacy_proj}", json={"name": sentinel, "description": sentinel}
+            )
+        require(response_conv_open.status_code == 200 and response_proj_open.status_code == 200, "default-open legacy PUT failed")
+        require(await _pool_fetchval("SELECT content FROM chat_messages WHERE id = $1", f"{prefix}legacy-msg") == sentinel, "old conversation payload broke")
+        passed("T-W2-01-10 default-open legacy PUTs preserve old-client payloads")
+
+        await _upsert_config(gate_key, "false")
+        blocked_capture = io.StringIO()
+        with redirect_stdout(blocked_capture):
+            response_conv_closed = await client.put(f"/sync/conversations/{legacy_conv}", json={"title": sentinel})
+            response_proj_closed = await client.put(f"/sync/projects/{legacy_proj}", json={"name": sentinel})
+        require(response_conv_closed.status_code == 410 and response_proj_closed.status_code == 410, "closed gate did not retire both legacy PUTs")
+        import_response = await client.post("/sync/import", json={"conversations": [], "projects": []})
+        require(import_response.status_code == 200 and import_response.json().get("status") == "ok", "/sync/import was incorrectly gated")
+        fresh_response = await client.post("/sync/projects", json={"id": f"{prefix}gate-fresh", "name": "fresh"})
+        require(fresh_response.status_code == 200, "new granular endpoint was incorrectly gated")
+        passed("T-W2-01-11 closed gate affects only two legacy PUTs; import stays W2-02")
+
+        events = capture.getvalue() + blocked_capture.getvalue()
+        expected_events = {
+            "event=sync_legacy_write endpoint=conversation_put outcome=allowed increment=1",
+            "event=sync_legacy_write endpoint=project_put outcome=allowed increment=1",
+            "event=sync_legacy_write endpoint=conversation_put outcome=blocked increment=1",
+            "event=sync_legacy_write endpoint=project_put outcome=blocked increment=1",
+        }
+        actual_events = {line.strip() for line in events.splitlines() if line.startswith("event=sync_legacy_write ")}
+        require(actual_events == expected_events, f"legacy counter events mismatch: {sorted(actual_events)}")
+        require(sentinel not in events and legacy_conv not in events and legacy_proj not in events, "legacy observability leaked payload or entity IDs")
+        passed("T-W2-01-12 legacy structured count events contain no payload or entity IDs")
+    finally:
+        if gate_had_row:
+            await _upsert_config(gate_key, gate_previous)
+        else:
+            await _pool_execute("DELETE FROM gateway_config WHERE key = $1", gate_key)
+
+    malformed = await client.post("/sync/conversations", content=b"[1,2,3]", headers={"content-type": "application/json"})
+    require(malformed.status_code == 400, "new JSON-object endpoint accepted an array body")
+
+
 async def run_suite(test_dsn: str) -> None:
     global database, config, app_module, memory_extractor
 
@@ -1334,6 +1546,7 @@ async def run_suite(test_dsn: str) -> None:
         await test_w1_06()
         await test_w1_08()
         await test_w1_01()
+        await test_w2_01(client)
 
 
 async def async_main() -> int:
@@ -1347,10 +1560,12 @@ async def async_main() -> int:
         w1_01_passed = [name for name in PASSED if name.startswith("T-W1-01-")]
         w1_06_passed = [name for name in PASSED if name.startswith("T-W1-06-")]
         w1_08_passed = [name for name in PASSED if name.startswith("T-W1-08-")]
+        w2_01_passed = [name for name in PASSED if name.startswith("T-W2-01-")]
         print(f"\nPASS: {len(legacy_passed)} permanent S1-S6 behavior guards")
         print(f"PASS: {len(w1_01_passed)} W1-01 isolation/permanent guards")
         print(f"PASS: {len(w1_06_passed)} W1-06 calendar-delete atomicity guards")
         print(f"PASS: {len(w1_08_passed)} W1-08 calendar-period guards")
+        print(f"PASS: {len(w2_01_passed)} W2-01 granular-sync guards")
         print(f"PASS: {len(PASSED)} total permanent behavior guards")
         print("Real database path: disposable PostgreSQL verified")
         print("Real model/API path: not called; embedding/model/HTTP boundaries were mocked")
