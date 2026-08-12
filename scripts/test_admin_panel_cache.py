@@ -70,6 +70,13 @@ def main_test():
         check("场景3 304 仍带 no-cache", has_no_cache(r304),
               f"Cache-Control={r304.headers.get('cache-control')!r}")
 
+    # ---- 场景 3.5：自带字体走强缓存，不跟着 no-cache 每次问 ----
+    r = client.get("/admin/fonts/ibm-plex-mono-latin-400-normal.woff2")
+    check("场景3.5 自带等宽字体可访问", r.status_code == 200, f"status={r.status_code}")
+    cc = r.headers.get("cache-control", "")
+    check("场景3.5 字体走 immutable 强缓存", "immutable" in cc and "no-cache" not in cc,
+          f"Cache-Control={cc!r}")
+
     # ---- 场景 4：面板文件齐全（改版新增的两个模块真的在仓库里）----
     panel = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "admin-panel")
     for rel in ("js/search.js", "js/wizard.js"):

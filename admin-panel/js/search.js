@@ -108,7 +108,7 @@ export function initSearch(container) {
   container.innerHTML = `
     <div class="gs-box">
       <span class="gs-icon">⌕</span>
-      <input type="search" class="gs-input" id="gs-input" placeholder="搜索参数、页面…  例：半衰期 / 提示词" autocomplete="off" spellcheck="false">
+      <input type="search" class="gs-input" id="gs-input" placeholder="搜索参数、页面、操作…  例：半衰期 / 提示词 / dream" autocomplete="off" spellcheck="false">
       <div class="gs-drop" id="gs-drop" hidden></div>
     </div>`;
   const input = container.querySelector('#gs-input');
