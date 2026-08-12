@@ -208,7 +208,7 @@ async def get_all_config() -> dict:
 # ============================================================
 
 # 公开契约取值 = 前端统一发的一套档位，各家方言的翻译与降档全部收敛在网关
-# （见下方 TRUSTED_ENDPOINT_CEILINGS 与 main._apply_reasoning）：
+# （见下方 TRUSTED_HOST_CEILINGS 与 main._apply_reasoning）：
 #   off / auto            —— 网关自己的语义（不传 / 交给供应商决定）
 #   low / medium / high   —— 通用档位
 #   xhigh / max           —— 高档位，各家支持情况不同，由端点天花板决定能否发出

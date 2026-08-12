@@ -1717,7 +1717,7 @@ def _apply_reasoning(body: dict, is_openrouter: bool, is_anthropic_fmt: bool, re
       - 其它 OpenAI 兼容供应商 → 透传具体档位；off/auto 剥掉，
           避免严格供应商（如直连 OpenAI o 系列）对非法 reasoning_effort 报 400。
 
-    各端点认到哪一档不一样（见 config.TRUSTED_ENDPOINT_CEILINGS）：已登记的 OpenRouter
+    各端点认到哪一档不一样（见 config.TRUSTED_HOST_CEILINGS）：已登记的 OpenRouter
     与 DeepSeek 官方都认到 max，未登记端点在能力矩阵建立前取保守天花板。所以档位在出站前
     **按端点就近降到它的天花板**，超出即降档并记 event=reasoning_effort_downgrade。
     Anthropic 原生不吃 effort 字符串，原值交给 adapter 换算 budget，不在这里降档。
