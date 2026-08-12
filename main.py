@@ -1412,6 +1412,12 @@ async def api_status():
     return await root_status()
 
 
+# 管理面板资源的缓存策略。no-cache = 浏览器可以留副本，但每次用之前
+# 必须带 ETag 回来问一句；没变服务端回 304, 变了就拿新的。
+# 详见文件末尾 _PanelStaticFiles 的说明。
+PANEL_CACHE_CONTROL = "no-cache, must-revalidate"
+
+
 @app.get("/admin")
 async def admin_panel():
     """返回管理面板 HTML（admin-panel/index.html）。
@@ -1422,7 +1428,11 @@ async def admin_panel():
     from fastapi.responses import FileResponse
     panel_path = os.path.join(os.path.dirname(__file__), "admin-panel", "index.html")
     if os.path.exists(panel_path):
-        return FileResponse(panel_path, media_type="text/html; charset=utf-8")
+        return FileResponse(
+            panel_path,
+            media_type="text/html; charset=utf-8",
+            headers={"Cache-Control": PANEL_CACHE_CONTROL},
+        )
     return {"status": "running", "service": "kiwi-mem", "warning": "admin-panel/index.html not found"}
 
 
@@ -5574,9 +5584,32 @@ app.mount("/calendar", get_calendar_mcp_app())
 # /admin 返回 index.html（上面的 @app.get("/admin")），/admin/ 由 html=True 提供；
 # 页面内用绝对路径 /admin/... 引用资源。
 from fastapi.staticfiles import StaticFiles as _StaticFiles
+
+
+class _PanelStaticFiles(_StaticFiles):
+    """管理面板静态资源：一律带 no-cache, 让浏览器每次都回来问一句。
+
+    StaticFiles 默认只发 ETag / Last-Modified, 不发 Cache-Control。缺了
+    Cache-Control 时浏览器可以按启发式规则自行判定新鲜度（常见实现取
+    「距上次修改时间」的 10% 当有效期）——一个几个月没动过的 style.css,
+    浏览器能自作主张缓存好几天，期间连一次条件请求都不发。
+    结果就是升级面板后换了文件、重启了服务，页面看上去还是老样子。
+
+    面板的 js/pages/*.js 是 app.js 动态 import 进来的，URL 上没法挂
+    ?v=版本号，所以只能在服务端统一声明。no-cache 不等于不缓存：浏览器
+    仍然存副本，只是每次先带 ETag 问一下，没变就回 304（几十字节），
+    变了才重新下载。代价极小，换来的是「换了文件就一定看得到」。
+    """
+
+    def file_response(self, *args, **kwargs):
+        response = super().file_response(*args, **kwargs)
+        response.headers["Cache-Control"] = PANEL_CACHE_CONTROL
+        return response
+
+
 _panel_dir = os.path.join(os.path.dirname(__file__), "admin-panel")
 if os.path.isdir(_panel_dir):
-    app.mount("/admin", _StaticFiles(directory=_panel_dir, html=True), name="admin-panel")
+    app.mount("/admin", _PanelStaticFiles(directory=_panel_dir, html=True), name="admin-panel")
 
 
 # ============================================================

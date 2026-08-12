@@ -185,6 +185,14 @@ curl http://localhost:8080
 
 返回 `{"status":"running"}` 就说明 kiwi-mem 在跑了 🎉
 
+> 🔁 **以后更新到新版本，记得加 `--build`：**
+> ```bash
+> git pull
+> docker compose up -d --build
+> ```
+> Dockerfile 是把整个项目 `COPY` 进镜像的。不加 `--build` 时 compose 会直接复用旧镜像，
+> 容器里跑的还是旧代码、旧管理面板——表现就是「明明拉了新代码，页面一点没变」。
+
 ---
 
 ### 第三步：配域名和 HTTPS
