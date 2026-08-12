@@ -1,7 +1,9 @@
 """No-network contracts for compression placeholders and reasoning effort."""
 
 import asyncio
+import contextlib
 import copy
+import io
 import os
 import sys
 from pathlib import Path
@@ -241,6 +243,44 @@ async def check_request_reasoning_contract():
         body == {"reasoning": {"enabled": True, "effort": "max"}},
         "Anthropic 路径必须保留 max 原值，交给 adapter 换算 budget",
     )
+
+    # ── 主动降档必须留痕，且只在真的降档时留 ────────────────────────────
+    def _apply_capturing(*args, **kwargs):
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            gateway._apply_reasoning(*args, **kwargs)
+        return buf.getvalue()
+
+    log = _apply_capturing({"model": "deepseek/deepseek-v4-pro"}, True, False, "max", api_url=OR_URL)
+    hits = [ln for ln in log.splitlines() if "event=reasoning_effort_downgrade" in ln]
+    check(len(hits) == 1, f"发生降档必须恰好记一次，实际 {len(hits)} 次")
+    check(
+        "provider=openrouter" in hits[0] and "requested=max" in hits[0] and "applied=xhigh" in hits[0],
+        f"降档日志字段不完整：{hits[0]}",
+    )
+    # 日志是给运维看的，不该把请求信息带出去
+    check("https://" not in hits[0] and "openrouter.ai" not in hits[0], "降档日志不得包含 URL")
+    check("deepseek-v4" not in hits[0] and "deepseek/" not in hits[0], "降档日志不得包含模型名")
+
+    # 没发生降档的路径必须安静：xhigh 是 OR 的天花板本身，原样通过
+    quiet = _apply_capturing({}, True, False, "xhigh", api_url=OR_URL)
+    check(
+        "reasoning_effort_downgrade" not in quiet,
+        "xhigh 原样通过 OpenRouter 时不得记降档日志",
+    )
+    # DeepSeek 直连的 max 也没被动过，同样不许记
+    quiet = _apply_capturing({"model": "deepseek-v4-flash"}, False, False, "max", api_url=DEEPSEEK_URL)
+    check(
+        "reasoning_effort_downgrade" not in quiet,
+        "DeepSeek 直连保留 max 时不得记降档日志",
+    )
+    # off / auto 根本不进降档逻辑
+    for skip in ("off", "auto"):
+        quiet = _apply_capturing({}, True, False, skip, api_url=OR_URL)
+        check(
+            "reasoning_effort_downgrade" not in quiet,
+            f"{skip} 不涉及降档，不得记日志",
+        )
 
     # Anthropic 的 effort→budget 必须单调递增，否则「超高」会掉回默认值、反而比「高」思考得少
     budgets = []

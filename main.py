@@ -1665,18 +1665,23 @@ def _provider_effort_ceiling(api_url: str, model: str, is_openrouter: bool = Fal
     ③ 同时看 api_url 与模型名：用户完全可能通过中转站访问 DeepSeek，那时 URL 里
     没有 deepseek 字样，但模型名（deepseek-v4-flash / deepseek-v4-pro 等）还在。
     """
+    return _provider_effort_profile(api_url, model, is_openrouter)[1]
+
+
+def _provider_effort_profile(api_url: str, model: str, is_openrouter: bool = False):
+    """(供应商标识, 该家认识的最高档)。标识只用于降档日志，不含任何可识别信息。"""
     # ② OpenRouter 最优先，早于任何模型名匹配
     if is_openrouter:
-        return PROVIDER_EFFORT_CEILING["openrouter"]
+        return ("openrouter", PROVIDER_EFFORT_CEILING["openrouter"])
     haystack = f"{api_url or ''} {model or ''}".lower()
     if "openrouter" in haystack:
         # is_openrouter 由调用方判定；这里再兜一层，避免它没算准时 ③ 抢跑
-        return PROVIDER_EFFORT_CEILING["openrouter"]
+        return ("openrouter", PROVIDER_EFFORT_CEILING["openrouter"])
     # ③ 非 OpenRouter 才轮到 DeepSeek 直连
     if "deepseek" in haystack:
-        return PROVIDER_EFFORT_CEILING["deepseek"]
+        return ("deepseek", PROVIDER_EFFORT_CEILING["deepseek"])
     # ④ 其余 OpenAI 兼容
-    return DEFAULT_EFFORT_CEILING
+    return ("default", DEFAULT_EFFORT_CEILING)
 
 
 def _clamp_effort(effort: str, ceiling: str) -> str:
@@ -1712,10 +1717,16 @@ def _apply_reasoning(body: dict, is_openrouter: bool, is_anthropic_fmt: bool, re
         return
     effort = reasoning_effort
     if not is_anthropic_fmt:
-        effort = _clamp_effort(
-            effort,
-            _provider_effort_ceiling(api_url, body.get("model"), is_openrouter),
-        )
+        provider, ceiling = _provider_effort_profile(api_url, body.get("model"), is_openrouter)
+        clamped = _clamp_effort(effort, ceiling)
+        if clamped != effort:
+            # 只在真的降档时记一行，方便用户对上「我选了超高，为什么模型没那么用力」。
+            # 刻意不带 URL / 模型名 / 请求正文 / 用户或会话标识。
+            print(
+                f"event=reasoning_effort_downgrade provider={provider} "
+                f"requested={effort} applied={clamped}"
+            )
+        effort = clamped
     if is_openrouter or is_anthropic_fmt:
         cfg = {"enabled": True}
         if effort in REASONING_EFFORT_LEVELS:
