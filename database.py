@@ -2792,11 +2792,6 @@ async def sync_upsert_single_message(conv_id: str, msg_id: str, msg: dict):
             )
             if not parent:
                 return ("对话不存在", 404)
-            owner = await conn.fetchrow(
-                "SELECT conversation_id FROM chat_messages WHERE id = $1", msg_id
-            )
-            if owner and owner["conversation_id"] != conv_id:
-                return ("消息属于其他对话", 409)
             row = await conn.fetchrow("""
                 INSERT INTO chat_messages (
                     id, conversation_id, role, content, time, model,
