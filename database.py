@@ -2831,7 +2831,6 @@ async def sync_upsert_single_message(conv_id: str, msg_id: str, msg: dict):
                     usage = EXCLUDED.usage,
                     summary = EXCLUDED.summary,
                     sort_order = COALESCE($23, chat_messages.sort_order)
-                WHERE chat_messages.conversation_id = EXCLUDED.conversation_id
                 RETURNING id
             """, msg_id, conv_id, *content_values, sort_order)
             if row is None:
