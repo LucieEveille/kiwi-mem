@@ -10,6 +10,10 @@ venv/
 # seed_memories.py 包含你的个人记忆数据，务必不要提交
 seed_memories.py
 
+# 更新脚本产物（数据库备份 / 自动更新日志）
+backups/
+update.log
+
 # IDE
 .vscode/
 .idea/

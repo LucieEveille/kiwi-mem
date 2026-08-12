@@ -132,6 +132,41 @@ Visit `http://localhost:8080` — if you see `{"status":"running"}`, you're good
 
 > 💡 80+ parameters can be changed at runtime via the admin panel — no restart needed.
 
+### Staying up to date
+
+kiwi-mem ships updates regularly. Once deployed, keep up with one command — no technical knowledge required, and nothing is lost.
+
+**Set it and forget it (recommended):**
+
+```bash
+cd kiwi-mem && bash scripts/update.sh --install-cron
+```
+
+Your server now checks for new versions every night at 4 AM and updates itself when there is one. Progress is logged to `update.log`. To stop: `crontab -e` and delete the line containing `update.sh`.
+
+**Or update manually whenever you want:**
+
+```bash
+cd kiwi-mem && bash scripts/update.sh          # shows what's new, then asks to confirm
+cd kiwi-mem && bash scripts/update.sh --check  # just check, don't touch the service
+cd kiwi-mem && bash scripts/update.sh --help   # all options
+```
+
+**Your data is safe.** Updates replace code only:
+
+- Memories, conversations, calendar pages and Dream results live in a Docker volume — untouched
+- `.env` is git-ignored and never overwritten
+- Providers, API keys and the 80+ runtime parameters live in the database — preserved as-is
+- **Schema migrations run automatically** on startup (`init_tables()` is idempotent), so new columns appear on their own
+- The script **backs up the database before every update** into `backups/` (keeping the 7 most recent)
+- If the new version fails to start, the script **rolls back automatically** — you never end up with a half-updated service
+
+> ⚠️ Don't hand-edit tracked files (`main.py`, `docker-compose.yml`, …). The script stops and warns you instead of silently overwriting them. Configure through `.env` or the admin panel instead.
+
+**On Zeabur or similar platforms:** skip the script — just enable Auto Deploy in the project settings and every push redeploys automatically.
+
+**Getting notified:** on GitHub, click **Watch → Custom → Releases** to get an email when a new version ships.
+
 ### Importing existing memories
 
 Want to bring in memories from previous AI conversations? Two ways:
@@ -382,6 +417,7 @@ kiwi-mem/
 ├── mcp_client.py            # MCP Client
 ├── web_search.py            # Web search
 ├── admin-panel/index.html   # Web admin panel
+├── scripts/update.sh        # One-command updater (auto backup + rollback)
 ├── system_prompt.txt        # Default persona
 ├── Dockerfile
 ├── docker-compose.yml
