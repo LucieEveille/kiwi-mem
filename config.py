@@ -205,7 +205,15 @@ async def get_all_config() -> dict:
 # 写入配置
 # ============================================================
 
-REASONING_EFFORT_VALUES = ("off", "auto", "low", "medium", "high")
+# 公开契约取值 = 各家供应商档位的并集，网关不替用户预判某家支不支持：
+#   off / auto            —— 网关自己的语义（不传 / 交给供应商决定）
+#   low / medium / high   —— OpenAI 系
+#   xhigh / max           —— DeepSeek 系（deepseek-v4-flash / pro 的思考深度上档）
+# 供应商不认某个档位时由供应商自己报错，比网关静默拒绝或悄悄降档更可诊断。
+REASONING_EFFORT_VALUES = ("off", "auto", "low", "medium", "high", "xhigh", "max")
+
+# off / auto 之外的档位都按原样透传给供应商
+REASONING_EFFORT_LEVELS = tuple(v for v in REASONING_EFFORT_VALUES if v not in ("off", "auto"))
 
 _ENUM_VALUES = {
     "mcp_mode": {"off", "auto", "manual"},

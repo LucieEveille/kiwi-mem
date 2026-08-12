@@ -13,6 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+import anthropic_adapter
 import config
 import database
 import main as gateway
@@ -57,8 +58,8 @@ async def check_reasoning_config_contract():
     async def fake_pool():
         return _FakePool(conn)
 
-    allowed = ("off", "auto", "low", "medium", "high")
-    rejected = ("", "xhigh", "max", "ultra", "HIGH")
+    allowed = ("off", "auto", "low", "medium", "high", "xhigh", "max")
+    rejected = ("", "ultra", "HIGH")
     with patch.object(config, "get_pool", fake_pool):
         for value in allowed:
             check(await config.set_config("reasoning_effort", value), f"config must accept {value}")
@@ -74,13 +75,13 @@ async def check_reasoning_config_contract():
         async with httpx.AsyncClient(transport=transport, base_url="http://kiwi.test") as client:
             admin_response = await client.put(
                 "/admin/config/reasoning_effort",
-                json={"value": "xhigh"},
+                json={"value": "ultra"},
             )
             check("error" in admin_response.json(), "admin config must return an explicit invalid-value error")
 
             sync_response = await client.put(
                 "/sync/settings",
-                json={"reasoning_effort": "max"},
+                json={"reasoning_effort": "ultra"},
             )
             check(
                 sync_response.json().get("rejected") == ["reasoning_effort"],
@@ -88,19 +89,21 @@ async def check_reasoning_config_contract():
             )
 
     panel_source = (ROOT / "admin-panel" / "js" / "config-schema.js").read_text(encoding="utf-8")
+    expected_options = "options:[" + ",".join(f"'{v}'" for v in config.REASONING_EFFORT_VALUES) + "]"
     check(
-        "options:['off','auto','low','medium','high']" in panel_source,
-        "admin panel must expose exactly the public five-value reasoning contract",
+        expected_options in panel_source,
+        "admin panel must expose exactly the public reasoning contract (面板选项须与 REASONING_EFFORT_VALUES 一致)",
     )
 
 
 async def check_request_reasoning_contract():
-    for value in ("off", "auto", "low", "medium", "high"):
+    for value in config.REASONING_EFFORT_VALUES:
         check(gateway._normalize_reasoning_effort(value) == value, f"request must accept {value}")
     check(gateway._normalize_reasoning_effort(None) is None, "omitted effort must preserve legacy behavior")
     check(gateway._normalize_reasoning_effort(" HIGH ") == "high", "request effort may normalize case/space")
+    check(gateway._normalize_reasoning_effort(" MAX ") == "max", "DeepSeek 的 max 同样按大小写/空格规范化")
 
-    for value in ("", "xhigh", "max", "ultra", 7):
+    for value in ("", "ultra", "higher", 7):
         try:
             gateway._normalize_reasoning_effort(value)
         except ValueError:
@@ -122,7 +125,7 @@ async def check_request_reasoning_contract():
                 json={
                     "model": "test/model",
                     "messages": [{"role": "user", "content": "reasoning contract"}],
-                    "reasoning_effort": "xhigh",
+                    "reasoning_effort": "ultra",
                 },
             )
 
@@ -130,7 +133,10 @@ async def check_request_reasoning_contract():
     payload = response.json()
     error = payload.get("error", {})
     check(error.get("param") == "reasoning_effort", "400 response must identify reasoning_effort")
-    check("off/auto/low/medium/high" in error.get("message", ""), "400 response must list allowed values")
+    check(
+        "/".join(config.REASONING_EFFORT_VALUES) in error.get("message", ""),
+        "400 response must list allowed values",
+    )
     check(provider_calls == [], "invalid request must not touch provider routing or upstream I/O")
 
     body = {"reasoning": {"enabled": False}, "reasoning_effort": "stale"}
@@ -142,6 +148,41 @@ async def check_request_reasoning_contract():
     body = {"reasoning": {"enabled": True}, "reasoning_effort": "high"}
     gateway._apply_reasoning(body, True, False, "off")
     check(body == {}, "off must remove every outbound reasoning field")
+
+    # 每个档位都必须真的抵达供应商：静默降档比报错更难查——用户以为开了 max，其实网关没传。
+    for level in config.REASONING_EFFORT_LEVELS:
+        body = {}
+        gateway._apply_reasoning(body, False, False, level)
+        check(
+            body == {"reasoning_effort": level},
+            f"OpenAI 兼容供应商（含 DeepSeek）必须原样透传 {level}，不得静默丢弃",
+        )
+        body = {}
+        gateway._apply_reasoning(body, True, False, level)
+        check(
+            body == {"reasoning": {"enabled": True, "effort": level}},
+            f"OpenRouter/Anthropic 必须带上 effort={level}",
+        )
+
+    # Anthropic 的 effort→budget 必须单调递增，否则「超高」会掉回默认值、反而比「高」思考得少
+    budgets = []
+    for level in config.REASONING_EFFORT_LEVELS:
+        converted = anthropic_adapter.to_anthropic_request(
+            {
+                "model": "claude-test",
+                "messages": [{"role": "user", "content": "ping"}],
+                "reasoning": {"enabled": True, "effort": level},
+            }
+        )
+        budgets.append(converted["thinking"]["budget_tokens"])
+        check(
+            converted["max_tokens"] > converted["thinking"]["budget_tokens"],
+            f"budget_tokens 必须小于 max_tokens（{level}）",
+        )
+    check(
+        budgets == sorted(budgets) and len(set(budgets)) == len(budgets),
+        f"effort→budget 必须严格递增，实际为 {dict(zip(config.REASONING_EFFORT_LEVELS, budgets))}",
+    )
 
 
 class _FakeCompressionResponse:

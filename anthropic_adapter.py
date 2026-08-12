@@ -81,12 +81,16 @@ def to_anthropic_request(openai_body: dict) -> dict:
     # ── 思考链 / extended thinking ──
     reasoning = openai_body.get("reasoning")
     if reasoning and isinstance(reasoning, dict) and reasoning.get("enabled"):
-        budget = 10000
-        effort = reasoning.get("effort")
-        if effort == "low":
-            budget = 5000
-        elif effort == "high":
-            budget = 20000
+        # effort → thinking budget。必须单调递增：否则 xhigh/max 落进默认值，
+        # 会出现「选了超高反而比高思考得少」。未知 / auto / 未给 → 默认 10000。
+        _EFFORT_BUDGET = {
+            "low": 5000,
+            "medium": 10000,
+            "high": 20000,
+            "xhigh": 32000,
+            "max": 48000,
+        }
+        budget = _EFFORT_BUDGET.get(reasoning.get("effort"), 10000)
         # Anthropic 硬性要求 budget_tokens < max_tokens（max_tokens 含思考 + 可见输出）。
         # 默认 max_tokens=8192 < 默认 budget=10000（high 时 20000）会被 API 直接 400。
         # 开启思考时，若 max_tokens 不足以容纳 budget，则上调到 budget 之上并留出可见

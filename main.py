@@ -45,6 +45,7 @@ from database import (
     create_reminder, get_reminders, update_reminder, delete_reminder, get_due_reminders, fire_reminder,
 )
 from config import (
+    REASONING_EFFORT_LEVELS,
     REASONING_EFFORT_VALUES,
     SYNC_SETTING_KEYS,
     get_all_config, set_config, get_config, get_config_int, get_config_bool, get_config_float,
@@ -1647,13 +1648,15 @@ def _normalize_reasoning_effort(value):
 def _apply_reasoning(body: dict, is_openrouter: bool, is_anthropic_fmt: bool, reasoning_effort, skip_prompt: bool = False):
     """统一决定一个出站请求体的思考链参数。转发路径与工具循环共用，保证两条路对所有供应商一致。
 
-    reasoning_effort 是从请求体里 pop 出来的原值：off/auto/low/medium/high/None。
+    reasoning_effort 是从请求体里 pop 出来的原值：REASONING_EFFORT_VALUES 之一或 None。
       - 功能调用(skip_prompt) 或用户选 'off' → 不开思考（并清掉任何 reasoning/reasoning_effort 残留）
       - OpenRouter / Anthropic 直连 → 写 reasoning={"enabled":True[, "effort"]}
           None（旧前端 / 非推理模型未发）视为默认开（向后兼容）；'auto' 开但不带 effort；
-          'low'/'medium'/'high' 带 effort。
-      - 其它 OpenAI 兼容供应商 → 只透传合法 effort(low/medium/high)；off/auto 剥掉，
+          其余档位带 effort。
+      - 其它 OpenAI 兼容供应商 → 透传具体档位；off/auto 剥掉，
           避免严格供应商（如直连 OpenAI o 系列）对非法 reasoning_effort 报 400。
+    档位取 REASONING_EFFORT_LEVELS（各家并集，含 DeepSeek 的 xhigh/max）后原样转发：
+    网关不替用户预判某家支不支持——不认的档位由供应商自己报错，比在这里悄悄降档更可诊断。
     未知值在 /v1 入口由 _normalize_reasoning_effort 明确拒绝，不会静默进入本函数。
     """
     # 先清干净，避免 fresh body 残留或重复调用叠加
@@ -1663,10 +1666,10 @@ def _apply_reasoning(body: dict, is_openrouter: bool, is_anthropic_fmt: bool, re
         return
     if is_openrouter or is_anthropic_fmt:
         cfg = {"enabled": True}
-        if reasoning_effort in ("low", "medium", "high"):
+        if reasoning_effort in REASONING_EFFORT_LEVELS:
             cfg["effort"] = reasoning_effort
         body["reasoning"] = cfg
-    elif reasoning_effort in ("low", "medium", "high"):
+    elif reasoning_effort in REASONING_EFFORT_LEVELS:
         body["reasoning_effort"] = reasoning_effort
 
 
