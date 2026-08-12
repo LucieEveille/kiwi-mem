@@ -2646,6 +2646,58 @@ async def sync_upsert_conversation(conv: dict):
     return True
 
 
+async def sync_create_conversation(conv: dict) -> bool:
+    """创建对话元数据；ID 已存在时返回 False，且不覆盖原数据。"""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        result = await conn.execute("""
+            INSERT INTO chat_conversations (id, title, model, provider_model_id, project_id, pinned, sort_order)
+            VALUES ($1, $2, $3, $4, $5, $6, $7)
+            ON CONFLICT (id) DO NOTHING
+        """,
+            str(conv.get("id", "")),
+            conv.get("title", "新对话") or "新对话",
+            conv.get("model") or "",
+            _safe_int(conv.get("providerModelId") or conv.get("provider_model_id")),
+            conv.get("projectId") or conv.get("project_id") or None,
+            bool(conv.get("pinned", False)),
+            int(conv.get("sortOrder", conv.get("sort_order", 0)) or 0),
+        )
+    return _rowcount_nonzero(result)
+
+
+_CONV_PATCH_COLS = [
+    ("title",             ("title",),                          lambda v: v or "新对话"),
+    ("model",             ("model",),                          lambda v: v or ""),
+    ("provider_model_id", ("providerModelId", "provider_model_id"), lambda v: _safe_int(v)),
+    ("project_id",        ("projectId", "project_id"),         lambda v: v if v else None),
+    ("pinned",            ("pinned",),                         lambda v: bool(v)),
+    ("sort_order",        ("sortOrder", "sort_order"),         lambda v: int(v or 0)),
+]
+
+
+async def sync_patch_conversation(conv_id: str, fields: dict) -> str:
+    """局部更新对话元数据；返回 no_fields / not_found / ok。"""
+    sets, values = [], []
+    for col, aliases, convert in _CONV_PATCH_COLS:
+        key = next((key for key in aliases if key in fields), None)
+        if key is None:
+            continue
+        values.append(convert(fields[key]))
+        sets.append(f"{col} = ${len(values)}")
+    if not sets:
+        return "no_fields"
+    values.append(conv_id)
+    set_clause = ", ".join(sets) + ", updated_at = NOW()"
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        result = await conn.execute(
+            f"UPDATE chat_conversations SET {set_clause} WHERE id = ${len(values)}",
+            *values,
+        )
+    return "ok" if _rowcount_nonzero(result) else "not_found"
+
+
 async def sync_delete_conversation(conv_id: str):
     """删除对话（chat_messages 由外键级联删除；compression_summaries 无外键，需手动清理）"""
     pool = await get_pool()
@@ -2662,55 +2714,149 @@ async def sync_delete_conversation(conv_id: str):
         return _rowcount_nonzero(result)
 
 
+def _message_content_values(msg: dict) -> list:
+    """装配 chat_messages 中 role..summary 的 20 个内容字段。"""
+    return [
+        msg.get("role") or "user",
+        msg.get("content") or "",
+        _parse_time(msg.get("time")),
+        msg.get("model") or "",
+        False,
+        bool(msg.get("error", False)),
+        _to_json(msg.get("tokenInfo") or msg.get("token_info")),
+        msg.get("thinking") if isinstance(msg.get("thinking"), str) else None,
+        _to_json(msg.get("statusEvents") or msg.get("status_events")),
+        _to_json(msg.get("toolEvents") or msg.get("tool_events")),
+        _to_json(msg.get("memoryResult") or msg.get("memory_result")),
+        _to_json(msg.get("memoryEvent") or msg.get("memory_event")),
+        _to_json(msg.get("handoffInfo") or msg.get("handoff_info")),
+        _to_json(msg.get("webSearchResults") or msg.get("web_search_results")),
+        _to_json(msg.get("versions")),
+        int(msg.get("versionIndex", msg.get("version_index", 0)) or 0),
+        _to_json(msg.get("images")),
+        _to_json(msg.get("attachments")),
+        _to_json(msg.get("usage")),
+        msg.get("summary") if isinstance(msg.get("summary"), str) else None,
+    ]
+
+
+_MESSAGE_INSERT_SQL = """
+    INSERT INTO chat_messages (
+        id, conversation_id, role, content, time, model,
+        streaming, error, token_info, thinking, status_events, tool_events,
+        memory_result, memory_event, handoff_info, web_search_results, versions, version_index,
+        images, attachments, usage, summary, sort_order
+    ) VALUES (
+        $1, $2, $3, $4, $5, $6,
+        $7, $8, $9, $10, $11, $12,
+        $13, $14, $15, $16, $17, $18,
+        $19, $20, $21, $22, $23
+    )
+"""
+
+
 async def sync_upsert_messages(conv_id: str, messages: list):
     """批量写入/更新消息（全量替换该对话的所有消息）"""
     pool = await get_pool()
     async with pool.acquire() as conn:
         async with conn.transaction():
-            # 先删除该对话的旧消息
             await conn.execute(
                 "DELETE FROM chat_messages WHERE conversation_id = $1", conv_id
             )
-            # 批量插入新消息
-            for idx, msg in enumerate(messages):
-                await conn.execute("""
-                    INSERT INTO chat_messages (
-                        id, conversation_id, role, content, time, model,
-                        streaming, error, token_info, thinking, status_events, tool_events,
-                        memory_result, memory_event, handoff_info, web_search_results, versions, version_index,
-                        images, attachments, usage, summary, sort_order
-                    ) VALUES (
-                        $1, $2, $3, $4, $5, $6,
-                        $7, $8, $9, $10, $11, $12,
-                        $13, $14, $15, $16, $17, $18,
-                        $19, $20, $21, $22, $23
-                    )
-                """,
+            rows = [
+                (
                     str(msg.get("id") or f"m-{conv_id}-{idx}"),
                     conv_id,
-                    msg.get("role") or "user",
-                    msg.get("content") or "",
-                    _parse_time(msg.get("time")),
-                    msg.get("model") or "",
-                    False,  # streaming 存盘时永远 false
-                    bool(msg.get("error", False)),
-                    _to_json(msg.get("tokenInfo") or msg.get("token_info")),
-                    msg.get("thinking") if isinstance(msg.get("thinking"), str) else None,
-                    _to_json(msg.get("statusEvents") or msg.get("status_events")),
-                    _to_json(msg.get("toolEvents") or msg.get("tool_events")),
-                    _to_json(msg.get("memoryResult") or msg.get("memory_result")),
-                    _to_json(msg.get("memoryEvent") or msg.get("memory_event")),
-                    _to_json(msg.get("handoffInfo") or msg.get("handoff_info")),
-                    _to_json(msg.get("webSearchResults") or msg.get("web_search_results")),
-                    _to_json(msg.get("versions")),
-                    int(msg.get("versionIndex", msg.get("version_index", 0)) or 0),
-                    _to_json(msg.get("images")),
-                    _to_json(msg.get("attachments")),
-                    _to_json(msg.get("usage")),
-                    msg.get("summary") if isinstance(msg.get("summary"), str) else None,
+                    *_message_content_values(msg),
                     idx,
                 )
+                for idx, msg in enumerate(messages)
+            ]
+            if rows:
+                await conn.executemany(_MESSAGE_INSERT_SQL, rows)
     return True
+
+
+async def sync_upsert_single_message(conv_id: str, msg_id: str, msg: dict):
+    """单事务 upsert 单条完整消息快照，且永不改变既有消息归属。"""
+    if "sortOrder" in msg or "sort_order" in msg:
+        sort_order = int(msg.get("sortOrder", msg.get("sort_order", 0)) or 0)
+    else:
+        sort_order = None
+    content_values = _message_content_values(msg)
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            parent = await conn.fetchrow(
+                "SELECT id FROM chat_conversations WHERE id = $1 FOR UPDATE", conv_id
+            )
+            if not parent:
+                return ("对话不存在", 404)
+            owner = await conn.fetchrow(
+                "SELECT conversation_id FROM chat_messages WHERE id = $1", msg_id
+            )
+            if owner and owner["conversation_id"] != conv_id:
+                return ("消息属于其他对话", 409)
+            row = await conn.fetchrow("""
+                INSERT INTO chat_messages (
+                    id, conversation_id, role, content, time, model,
+                    streaming, error, token_info, thinking, status_events, tool_events,
+                    memory_result, memory_event, handoff_info, web_search_results, versions, version_index,
+                    images, attachments, usage, summary, sort_order
+                ) VALUES (
+                    $1, $2, $3, $4, $5, $6,
+                    $7, $8, $9, $10, $11, $12,
+                    $13, $14, $15, $16, $17, $18,
+                    $19, $20, $21, $22, COALESCE($23, 0)
+                )
+                ON CONFLICT (id) DO UPDATE SET
+                    role = EXCLUDED.role,
+                    content = EXCLUDED.content,
+                    time = EXCLUDED.time,
+                    model = EXCLUDED.model,
+                    streaming = EXCLUDED.streaming,
+                    error = EXCLUDED.error,
+                    token_info = EXCLUDED.token_info,
+                    thinking = EXCLUDED.thinking,
+                    status_events = EXCLUDED.status_events,
+                    tool_events = EXCLUDED.tool_events,
+                    memory_result = EXCLUDED.memory_result,
+                    memory_event = EXCLUDED.memory_event,
+                    handoff_info = EXCLUDED.handoff_info,
+                    web_search_results = EXCLUDED.web_search_results,
+                    versions = EXCLUDED.versions,
+                    version_index = EXCLUDED.version_index,
+                    images = EXCLUDED.images,
+                    attachments = EXCLUDED.attachments,
+                    usage = EXCLUDED.usage,
+                    summary = EXCLUDED.summary,
+                    sort_order = COALESCE($23, chat_messages.sort_order)
+                WHERE chat_messages.conversation_id = EXCLUDED.conversation_id
+                RETURNING id
+            """, msg_id, conv_id, *content_values, sort_order)
+            if row is None:
+                return ("消息属于其他对话", 409)
+            await conn.execute(
+                "UPDATE chat_conversations SET updated_at = NOW() WHERE id = $1", conv_id
+            )
+    return ("ok", 200)
+
+
+async def sync_delete_message(conv_id: str, msg_id: str):
+    """按消息与父对话双条件删除；命中时同事务刷新父对话时间。"""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            result = await conn.execute(
+                "DELETE FROM chat_messages WHERE id = $1 AND conversation_id = $2",
+                msg_id, conv_id,
+            )
+            deleted = _rowcount_nonzero(result)
+            if deleted:
+                await conn.execute(
+                    "UPDATE chat_conversations SET updated_at = NOW() WHERE id = $1", conv_id
+                )
+    return deleted
 
 
 # ============================================================
@@ -2758,6 +2904,62 @@ async def sync_upsert_project(proj: dict):
             _parse_time(proj.get("updatedAt") or proj.get("updated_at")),
         )
     return True
+
+
+async def sync_create_project(proj: dict) -> bool:
+    """创建项目；ID 已存在时返回 False，且不覆盖原数据。"""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        result = await conn.execute("""
+            INSERT INTO chat_projects (id, name, icon, description, instructions, files, memory, expanded, sort_order)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+            ON CONFLICT (id) DO NOTHING
+        """,
+            str(proj.get("id", "")),
+            proj.get("name", "新项目") or "新项目",
+            proj.get("icon", "📁") or "📁",
+            proj.get("description") or "",
+            proj.get("instructions") or "",
+            _to_json(proj.get("files") or []),
+            proj.get("memory") or "",
+            bool(proj.get("expanded", False)),
+            int(proj.get("sortOrder", proj.get("sort_order", 0)) or 0),
+        )
+    return _rowcount_nonzero(result)
+
+
+_PROJ_PATCH_COLS = [
+    ("name",         ("name",),                   lambda v: v or "新项目"),
+    ("icon",         ("icon",),                   lambda v: v or ""),
+    ("description",  ("description",),            lambda v: v or ""),
+    ("instructions", ("instructions",),           lambda v: v or ""),
+    ("files",        ("files",),                  lambda v: _to_json(v if v else [])),
+    ("memory",       ("memory",),                 lambda v: v or ""),
+    ("expanded",     ("expanded",),               lambda v: bool(v)),
+    ("sort_order",   ("sortOrder", "sort_order"), lambda v: int(v or 0)),
+]
+
+
+async def sync_patch_project(proj_id: str, fields: dict) -> str:
+    """局部更新项目；返回 no_fields / not_found / ok。"""
+    sets, values = [], []
+    for col, aliases, convert in _PROJ_PATCH_COLS:
+        key = next((key for key in aliases if key in fields), None)
+        if key is None:
+            continue
+        values.append(convert(fields[key]))
+        sets.append(f"{col} = ${len(values)}")
+    if not sets:
+        return "no_fields"
+    values.append(proj_id)
+    set_clause = ", ".join(sets) + ", updated_at = NOW()"
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        result = await conn.execute(
+            f"UPDATE chat_projects SET {set_clause} WHERE id = ${len(values)}",
+            *values,
+        )
+    return "ok" if _rowcount_nonzero(result) else "not_found"
 
 
 async def sync_delete_project(proj_id: str):

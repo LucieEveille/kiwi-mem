@@ -110,6 +110,8 @@ CONFIG_SCHEMA = {
     "mcp_manual_ids":        ("",                        "",     "手动MCP选择",       "text"),
     "mcp_mode":              ("",                        "auto", "MCP模式",           "text"),
     "reasoning_effort":      ("",                        "off",  "思考强度",          "text"),
+    # W2-01：旧全量同步 PUT 的退役闸门。默认开放，待兼容客户端迁移与调用观测确认后再关闭。
+    "sync_legacy_write_enabled": ("",                    "true", "旧同步写入通道",    "bool"),
     "ext_drawer_threshold":  ("EXT_DRAWER_THRESHOLD",   "0.40", "外部抽屉相似度阈值", "float"),
     "ext_drawer_max_open":   ("EXT_DRAWER_MAX_OPEN",    "3",    "外部抽屉同开上限",   "int"),
     "theme_preference":      ("",                        "",     "主题偏好",          "text"),

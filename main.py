@@ -40,7 +40,10 @@ from database import (
     get_system_prompt_from_db, set_system_prompt_in_db,
     # v4.1 云端同步
     sync_get_conversations, sync_get_conversation, sync_upsert_conversation, sync_delete_conversation,
-    sync_upsert_messages, sync_get_projects, sync_upsert_project, sync_delete_project, sync_import_all,
+    sync_create_conversation, sync_patch_conversation,
+    sync_upsert_messages, sync_upsert_single_message, sync_delete_message,
+    sync_get_projects, sync_upsert_project, sync_create_project, sync_patch_project,
+    sync_delete_project, sync_import_all,
     # v4.2 提醒系统
     create_reminder, get_reminders, update_reminder, delete_reminder, get_due_reminders, fire_reminder,
 )
@@ -5129,6 +5132,26 @@ async def api_search_messages(q: str = "", project_id: str = None, limit: int = 
 # 云端同步 API（v4.1）
 # ============================================================
 
+async def _read_json_object(request: Request):
+    """解析 JSON 对象；非法 JSON 或非对象请求统一返回 400。"""
+    try:
+        data = await request.json()
+    except Exception:
+        return None, JSONResponse(status_code=400, content={"error": "请求体必须是合法 JSON"})
+    if not isinstance(data, dict):
+        return None, JSONResponse(status_code=400, content={"error": "请求体必须是 JSON 对象"})
+    return data, None
+
+
+async def _legacy_write_gate(endpoint: str):
+    """记录无 payload 的调用计数事件；关闸时返回 410，默认保持旧 PUT 可用。"""
+    allowed = await get_config_bool("sync_legacy_write_enabled", fallback=True)
+    outcome = "allowed" if allowed else "blocked"
+    print(f"event=sync_legacy_write endpoint={endpoint} outcome={outcome} increment=1")
+    if not allowed:
+        return JSONResponse(status_code=410, content={"error": "旧同步通道已退役，请更新客户端"})
+    return None
+
 # ──── 对话 ────
 
 @app.get("/sync/conversations")
@@ -5154,10 +5177,34 @@ async def api_sync_get_conversation(conv_id: str):
         return JSONResponse(status_code=500, content={"error": str(e)})
 
 
+@app.post("/sync/conversations")
+async def api_sync_create_conversation(request: Request):
+    """创建对话元数据；已存在返回 409，消息须经单消息端点写入。"""
+    try:
+        data, err = await _read_json_object(request)
+        if err:
+            return err
+        warning = "messages ignored" if "messages" in data else None
+        data.pop("messages", None)
+        if not str(data.get("id") or "").strip():
+            return JSONResponse(status_code=400, content={"error": "缺少对话 id"})
+        if not await sync_create_conversation(data):
+            return JSONResponse(status_code=409, content={"error": "对话已存在"})
+        result = {"status": "ok"}
+        if warning:
+            result["warning"] = warning
+        return result
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": str(e)})
+
+
 @app.put("/sync/conversations/{conv_id}")
 async def api_sync_upsert_conversation(conv_id: str, request: Request):
-    """创建或更新对话（含消息）"""
+    """创建或更新对话（含消息）的旧全量通道。"""
     try:
+        gate = await _legacy_write_gate("conversation_put")
+        if gate:
+            return gate
         data = await request.json()
         data["id"] = conv_id
         messages = data.pop("messages", None)
@@ -5169,12 +5216,58 @@ async def api_sync_upsert_conversation(conv_id: str, request: Request):
         return JSONResponse(status_code=500, content={"error": str(e)})
 
 
+@app.patch("/sync/conversations/{conv_id}")
+async def api_sync_patch_conversation(conv_id: str, request: Request):
+    """局部更新对话元数据；空 PATCH 400，不存在 404。"""
+    try:
+        data, err = await _read_json_object(request)
+        if err:
+            return err
+        data.pop("messages", None)
+        status = await sync_patch_conversation(conv_id, data)
+        if status == "no_fields":
+            return JSONResponse(status_code=400, content={"error": "没有可更新的字段"})
+        if status == "not_found":
+            return JSONResponse(status_code=404, content={"error": "对话不存在"})
+        return {"status": "ok"}
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": str(e)})
+
+
 @app.delete("/sync/conversations/{conv_id}")
 async def api_sync_delete_conversation(conv_id: str):
     """删除对话"""
     try:
         deleted = await sync_delete_conversation(conv_id)
         return {"deleted": deleted}
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": str(e)})
+
+
+# ──── 单消息 ────
+
+@app.put("/sync/conversations/{conv_id}/messages/{msg_id}")
+async def api_sync_upsert_message(conv_id: str, msg_id: str, request: Request):
+    """按 URL 权威 ID upsert 单条完整消息快照。"""
+    try:
+        if not msg_id or not msg_id.strip():
+            return JSONResponse(status_code=400, content={"error": "msg_id 不能为空"})
+        data, err = await _read_json_object(request)
+        if err:
+            return err
+        status, code = await sync_upsert_single_message(conv_id, msg_id, data)
+        if code != 200:
+            return JSONResponse(status_code=code, content={"error": status})
+        return {"status": "ok"}
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": str(e)})
+
+
+@app.delete("/sync/conversations/{conv_id}/messages/{msg_id}")
+async def api_sync_delete_message(conv_id: str, msg_id: str):
+    """以对话和消息双条件删除单条消息。"""
+    try:
+        return {"deleted": await sync_delete_message(conv_id, msg_id)}
     except Exception as e:
         return JSONResponse(status_code=500, content={"error": str(e)})
 
@@ -5191,13 +5284,49 @@ async def api_sync_get_projects():
         return JSONResponse(status_code=500, content={"error": str(e)})
 
 
+@app.post("/sync/projects")
+async def api_sync_create_project(request: Request):
+    """创建项目；已存在返回 409。"""
+    try:
+        data, err = await _read_json_object(request)
+        if err:
+            return err
+        if not str(data.get("id") or "").strip():
+            return JSONResponse(status_code=400, content={"error": "缺少项目 id"})
+        if not await sync_create_project(data):
+            return JSONResponse(status_code=409, content={"error": "项目已存在"})
+        return {"status": "ok"}
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": str(e)})
+
+
 @app.put("/sync/projects/{proj_id}")
 async def api_sync_upsert_project(proj_id: str, request: Request):
-    """创建或更新项目"""
+    """创建或更新项目的旧全量通道。"""
     try:
+        gate = await _legacy_write_gate("project_put")
+        if gate:
+            return gate
         data = await request.json()
         data["id"] = proj_id
         await sync_upsert_project(data)
+        return {"status": "ok"}
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": str(e)})
+
+
+@app.patch("/sync/projects/{proj_id}")
+async def api_sync_patch_project(proj_id: str, request: Request):
+    """局部更新项目；空 PATCH 400，不存在 404。"""
+    try:
+        data, err = await _read_json_object(request)
+        if err:
+            return err
+        status = await sync_patch_project(proj_id, data)
+        if status == "no_fields":
+            return JSONResponse(status_code=400, content={"error": "没有可更新的字段"})
+        if status == "not_found":
+            return JSONResponse(status_code=404, content={"error": "项目不存在"})
         return {"status": "ok"}
     except Exception as e:
         return JSONResponse(status_code=500, content={"error": str(e)})
