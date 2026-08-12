@@ -17,6 +17,11 @@ import uuid
 from typing import AsyncGenerator
 
 
+# extended thinking 的最小可用额度：max_tokens 同时装思考与可见输出，
+# 到了这个量级再切一刀已经留不下有意义的回答，本次直接不开思考。
+_THINKING_MIN_MAX_TOKENS = 1024
+
+
 # ============================================================
 # 请求转换：OpenAI → Anthropic
 # ============================================================
@@ -91,16 +96,31 @@ def to_anthropic_request(openai_body: dict) -> dict:
             "xhigh": 32000,
             "max": 64000,
         }
-        budget = _EFFORT_BUDGET.get(reasoning.get("effort"), 10000)
+        requested = reasoning.get("effort") or "auto"
+        mapped_budget = _EFFORT_BUDGET.get(reasoning.get("effort"), 10000)
+        max_tokens = body["max_tokens"]
         # Anthropic 硬性要求 budget_tokens < max_tokens（max_tokens 含思考 + 可见输出）。
-        # 默认 max_tokens=8192 < 默认 budget=10000（high 时 20000）会被 API 直接 400。
-        # 开启思考时，若 max_tokens 不足以容纳 budget，则上调到 budget 之上并留出可见
-        # 输出余量；只在会非法时才动，不影响调用方显式给的更大 max_tokens。
-        if body["max_tokens"] <= budget:
-            body["max_tokens"] = budget + 4096
-        body["thinking"] = {"type": "enabled", "budget_tokens": budget}
-        # Anthropic extended thinking 要求 temperature == 1
-        body["temperature"] = 1
+        # 冲突只能往下夹思考预算，**绝不反向抬高 max_tokens**：max_tokens 是调用方给的
+        # 回复上限，抬高它既会顶穿模型输出上限，也会让「我要短回复」的约束失效。
+        if max_tokens <= _THINKING_MIN_MAX_TOKENS:
+            # 额度小到装不下任何有意义的思考：本次关掉 thinking，请求照发。
+            # 不碰 max_tokens，也不做 extended thinking 专属的 temperature=1 覆盖。
+            print(
+                f"event=reasoning_effort_disable provider=anthropic "
+                f"requested={requested} reason=max_tokens_below_minimum"
+            )
+        else:
+            applied_budget = min(mapped_budget, max_tokens - 1)
+            if applied_budget != mapped_budget:
+                # 只有真的夹小了才记账；本函数是这条日志的唯一所有者，转发层不重复记。
+                print(
+                    f"event=reasoning_effort_budget_clamp provider=anthropic "
+                    f"requested={requested} mapped_budget={mapped_budget} "
+                    f"applied_budget={applied_budget} reason=max_tokens_limit"
+                )
+            body["thinking"] = {"type": "enabled", "budget_tokens": applied_budget}
+            # Anthropic extended thinking 要求 temperature == 1
+            body["temperature"] = 1
 
     return body
 

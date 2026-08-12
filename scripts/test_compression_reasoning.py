@@ -90,11 +90,13 @@ async def check_reasoning_config_contract():
                 "sync settings must report an invalid reasoning value as rejected",
             )
 
+    # 本票范围边界：后端请求合同扩到七档，但管理面板**不扩档**，保持基线五档，
+    # 留给后续「思考强度双仓专项票」统一处理（面板扩档牵涉 UI 文案与双仓同步）。
+    # 这里锁住基线，避免有人顺手把面板改了却不走那张票。
     panel_source = (ROOT / "admin-panel" / "js" / "config-schema.js").read_text(encoding="utf-8")
-    expected_options = "options:[" + ",".join(f"'{v}'" for v in config.REASONING_EFFORT_VALUES) + "]"
     check(
-        expected_options in panel_source,
-        "admin panel must expose exactly the public reasoning contract (面板选项须与 REASONING_EFFORT_VALUES 一致)",
+        "options:['off','auto','low','medium','high']" in panel_source,
+        "管理面板本票不扩档，reasoning_effort 应保持基线五档",
     )
 
 
@@ -282,13 +284,16 @@ async def check_request_reasoning_contract():
             f"{skip} 不涉及降档，不得记日志",
         )
 
-    # Anthropic 的 effort→budget 必须单调递增，否则「超高」会掉回默认值、反而比「高」思考得少
+    # Anthropic 的 effort→budget 必须单调递增，否则「超高」会掉回默认值、反而比「高」思考得少。
+    # 前提是额度装得下——额度不足时各档被夹到同一个上限是正确行为（见 check_anthropic_budget_clamp），
+    # 所以这里显式给足 max_tokens，只验证映射表本身的阶梯。
     budgets = []
     for level in config.REASONING_EFFORT_LEVELS:
         converted = anthropic_adapter.to_anthropic_request(
             {
                 "model": "claude-test",
                 "messages": [{"role": "user", "content": "ping"}],
+                "max_tokens": 200000,
                 "reasoning": {"enabled": True, "effort": level},
             }
         )
@@ -300,6 +305,101 @@ async def check_request_reasoning_contract():
     check(
         budgets == sorted(budgets) and len(set(budgets)) == len(budgets),
         f"effort→budget 必须严格递增，实际为 {dict(zip(config.REASONING_EFFORT_LEVELS, budgets))}",
+    )
+
+
+async def check_anthropic_budget_clamp():
+    """Anthropic legacy 合同：thinking 只能被 max_tokens 夹小，绝不反向抬高 max_tokens。"""
+
+    def convert(effort, max_tokens=None, enabled=True, reasoning=True):
+        payload = {
+            "model": "claude-test",
+            "messages": [{"role": "user", "content": "ping"}],
+            "temperature": 0.7,
+        }
+        if max_tokens is not None:
+            payload["max_tokens"] = max_tokens
+        if reasoning:
+            payload["reasoning"] = {"enabled": enabled}
+            if effort is not None:
+                payload["reasoning"]["effort"] = effort
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            out = anthropic_adapter.to_anthropic_request(payload)
+        log = buf.getvalue()
+        return (
+            out,
+            log.count("event=reasoning_effort_budget_clamp"),
+            log.count("event=reasoning_effort_disable"),
+            log,
+        )
+
+    # ① 显式额度：用户要 2000 就必须发 2000，thinking 只能夹到 1999
+    out, clamps, disables, log = convert("max", max_tokens=2000)
+    check(
+        out["max_tokens"] == 2000,
+        f"用户显式 max_tokens=2000 必须原样出站，实际 {out['max_tokens']}",
+    )
+    check(
+        out["thinking"]["budget_tokens"] == 1999,
+        f"budget 必须夹到 max_tokens-1=1999，实际 {out['thinking']['budget_tokens']}",
+    )
+    check(clamps == 1, f"发生钳制必须恰好记一次，实际 {clamps} 次")
+    check(disables == 0, "发生钳制时不得记 disable 日志")
+    line = [ln for ln in log.splitlines() if "budget_clamp" in ln][0]
+    for field in ("provider=anthropic", "requested=max", "mapped_budget=64000", "applied_budget=1999", "reason=max_tokens_limit"):
+        check(field in line, f"钳制日志缺字段 {field}：{line}")
+    check("claude-test" not in line and "http" not in line and "ping" not in line, f"钳制日志不得带模型名/URL/正文：{line}")
+
+    # ② 未传 max_tokens：沿用默认 8192，同样不得被抬高
+    out, clamps, disables, _ = convert("max")
+    check(out["max_tokens"] == 8192, f"未传 max_tokens 应保持默认 8192，实际 {out['max_tokens']}")
+    check(out["thinking"]["budget_tokens"] == 8191, f"budget 应夹到 8191，实际 {out['thinking']['budget_tokens']}")
+    check(clamps == 1 and disables == 0, f"默认额度被钳制应恰记一次 clamp，实际 clamp={clamps} disable={disables}")
+
+    # ③ 装得下时保持高档，且必须安静
+    out, clamps, disables, _ = convert("max", max_tokens=70000)
+    check(out["max_tokens"] == 70000, f"额度充足时 max_tokens 不得改动，实际 {out['max_tokens']}")
+    check(out["thinking"]["budget_tokens"] == 64000, f"额度充足时应给满 64000，实际 {out['thinking']['budget_tokens']}")
+    check(clamps == 0 and disables == 0, f"未发生钳制不得记日志，实际 clamp={clamps} disable={disables}")
+
+    # ④ 最小边界：<=1024 关闭 thinking，请求照发
+    out, clamps, disables, log = convert("max", max_tokens=1024)
+    check(out["max_tokens"] == 1024, f"max_tokens=1024 必须原样保留，实际 {out['max_tokens']}")
+    check("thinking" not in out, "max_tokens<=1024 时出站不得带 thinking")
+    check(out.get("temperature") == 0.7, f"关闭 thinking 时不得强制 temperature=1，实际 {out.get('temperature')}")
+    check(disables == 1 and clamps == 0, f"应恰记一次 disable，实际 disable={disables} clamp={clamps}")
+    line = [ln for ln in log.splitlines() if "reasoning_effort_disable" in ln][0]
+    for field in ("provider=anthropic", "requested=max", "reason=max_tokens_below_minimum"):
+        check(field in line, f"关闭日志缺字段 {field}：{line}")
+
+    # ⑤ 相邻边界 1025：仍开思考，夹到 1024
+    out, clamps, disables, _ = convert("max", max_tokens=1025)
+    check(out["max_tokens"] == 1025, f"max_tokens=1025 必须原样保留，实际 {out['max_tokens']}")
+    check(out["thinking"]["budget_tokens"] == 1024, f"budget 应夹到 1024，实际 {out['thinking'].get('budget_tokens')}")
+    check(out.get("temperature") == 1, "thinking 生效时仍须 temperature=1")
+    check(clamps == 1 and disables == 0, f"1025 应恰记一次 clamp，实际 clamp={clamps} disable={disables}")
+
+    # ⑥ 安静路径：这些情形一律不得出现 clamp/disable 日志
+    quiet_cases = [
+        ("reasoning 关闭", dict(effort="max", max_tokens=2000, enabled=False)),
+        ("不带 reasoning", dict(effort=None, max_tokens=2000, reasoning=False)),
+        ("low 且额度充足", dict(effort="low", max_tokens=70000)),
+        ("auto 且额度充足", dict(effort=None, max_tokens=70000)),
+    ]
+    for name, kwargs in quiet_cases:
+        _, clamps, disables, _ = convert(**kwargs)
+        check(clamps == 0 and disables == 0, f"安静路径「{name}」不得记日志，实际 clamp={clamps} disable={disables}")
+
+    # 非 Anthropic 路径也不得记 Anthropic 的这两种日志
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        gateway._apply_reasoning({}, False, False, "max", api_url="https://api.deepseek.com/v1/chat/completions")
+        gateway._apply_reasoning({}, True, False, "max", api_url="https://openrouter.ai/api/v1/chat/completions")
+    non_anthropic = buf.getvalue()
+    check(
+        "budget_clamp" not in non_anthropic and "reasoning_effort_disable" not in non_anthropic,
+        "非 Anthropic 路径不得出现 Anthropic 的 clamp/disable 日志",
     )
 
 
@@ -391,6 +491,7 @@ async def main():
     for name, case in (
         ("reasoning config", check_reasoning_config_contract),
         ("request reasoning", check_request_reasoning_contract),
+        ("anthropic budget clamp", check_anthropic_budget_clamp),
         ("compression placeholders", check_compression_placeholders),
     ):
         try:
