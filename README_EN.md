@@ -122,6 +122,15 @@ docker compose up -d
 
 Visit `http://localhost:8080` — if you see `{"status":"running"}`, you're good.
 
+> 🔁 **Upgrading later? Remember `--build`:**
+> ```bash
+> git pull
+> docker compose up -d --build
+> ```
+> The Dockerfile `COPY`s the whole project into the image. Without `--build`, compose reuses
+> the existing image, so the container keeps running the old code and the old admin panel —
+> which looks exactly like "I pulled the new version but nothing changed".
+
 ### What's next
 
 - Visit `/admin` for the browser-based admin panel
