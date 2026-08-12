@@ -64,7 +64,7 @@ from anthropic_adapter import (
 
 # 版本号。管理面板顶栏/侧栏读 GET / 的 version 字段显示，
 # 只此一处定义，避免两处字符串各说各话。
-VERSION = "1.6.1"
+VERSION = "1.6.2"
 
 # 你的 API Key（OpenRouter / OpenAI / 其他兼容服务）
 API_KEY = os.getenv("API_KEY", "")

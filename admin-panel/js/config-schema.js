@@ -1,5 +1,5 @@
 // ============================================================
-// config-schema.js — 全部配置项的权威登记表（单一事实源）v1.6.1 改版
+// config-schema.js — 全部配置项的权威登记表（单一事实源）v1.6.2
 //
 // 与后端 config.py 的 CONFIG_SCHEMA 一一对应。每个 key 都登记：
 //   label / type / def / input / desc / hasDefault（可恢复默认的 prompt）

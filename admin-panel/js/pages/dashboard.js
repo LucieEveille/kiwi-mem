@@ -1,4 +1,4 @@
-// 📊 仪表盘 — 配置清单 + 系统总览（v1.6.1 改版：清单式引导）
+// 📊 仪表盘 — 配置清单 + 系统总览（v1.6.2：清单式引导）
 import { get, escHtml } from '../api.js';
 import { statCard, card, badge, emptyState, loadingBlock } from '../ui.js';
 import { runHealthChecks } from '../health.js';
