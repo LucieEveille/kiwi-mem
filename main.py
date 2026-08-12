@@ -21,6 +21,7 @@ import copy
 import math
 import httpx
 from contextlib import asynccontextmanager
+from urllib.parse import urlparse
 from fastapi import FastAPI, Request, UploadFile, File
 from fastapi.responses import StreamingResponse, JSONResponse, Response
 from fastapi.middleware.cors import CORSMiddleware
@@ -50,7 +51,7 @@ from database import (
 from config import (
     REASONING_EFFORT_LEVELS,
     REASONING_EFFORT_VALUES,
-    TRUSTED_ENDPOINT_CEILINGS,
+    TRUSTED_HOST_CEILINGS,
     UNKNOWN_ENDPOINT_CEILING,
     SYNC_SETTING_KEYS,
     get_all_config, set_config, get_config, get_config_int, get_config_bool, get_config_float,
@@ -1650,34 +1651,49 @@ def _normalize_reasoning_effort(value):
     return normalized
 
 
-def _provider_effort_ceiling(api_url: str, model: str = "", is_openrouter: bool = False) -> str:
+def _endpoint_host(api_url: str) -> str:
+    """从出站 URL 取规范化后的真实 hostname；取不到就返回空串。
+
+    只认 urlparse 解析出的 hostname，天然剥掉 userinfo、端口与 path/query，
+    并统一小写。畸形 URL、空值一律得到空串，落到未知端点的保守天花板。
+    """
+    try:
+        host = urlparse((api_url or "").strip()).hostname
+    except (ValueError, AttributeError):
+        return ""
+    return (host or "").lower()
+
+
+def _provider_effort_ceiling(api_url: str, model: str = "") -> str:
     """这个端点实际认识的最高思考档。"""
-    return _provider_effort_profile(api_url, model, is_openrouter)[1]
+    return _provider_effort_profile(api_url, model)[1]
 
 
-def _provider_effort_profile(api_url: str, model: str = "", is_openrouter: bool = False):
+def _provider_effort_profile(api_url: str, model: str = ""):
     """(供应商标识, 该端点认识的最高档)。标识只用于降档日志，不含任何可识别信息。
 
-    判定**只看端点 URL**：
+    判定**只按真实 hostname 等值比较**：
 
       ① Anthropic 原生 —— 不走本函数（由调用方跳过降档，原值交给 adapter 换算 budget）
-      ② 已登记的可信端点 —— 按 TRUSTED_ENDPOINT_CEILINGS 顺序匹配，取各自天花板
-      ③ 其余一切 OpenAI 兼容端点 —— 取保守天花板 UNKNOWN_ENDPOINT_CEILING
+      ② 已登记的可信主机 —— 命中 TRUSTED_HOST_CEILINGS，取各自天花板
+      ③ 其余一切（含空值 / 畸形 URL）—— 取保守天花板 UNKNOWN_ENDPOINT_CEILING
 
-    ⚠️ `model` 参数保留是为了调用方无需改签名，但**有意不参与判定**：模型名是调用方
-    可控的自由文本，未知中转站上出现 "deepseek-v4-pro" 并不代表它真把 max 透传给了
-    DeepSeek。靠模型名授予高档位会让任何中转站都能白拿 max 能力，因此改为只认端点。
-    能力矩阵（按模型而非端点判定）留给后续「思考强度双仓专项票」。
+    ⚠️ 两条授信旁路都是有意堵死的，改动前请先想清楚：
+
+    - **不做 URL substring 匹配**：`openrouter.ai.evil.example`、query 或 path 里
+      夹带官方域名、`openrouter.ai@evil.example` 这些都是未知中转，substring 匹配
+      会把它们误判成官方端点、错误授予 max，进而错误透传并吃上游 400。
+    - **不接受调用方传入的 is_openrouter 布尔**：它由 `"openrouter" in api_url` 得出，
+      同样是 substring 语义，会成为绕过本函数的独立授信旁路。能力判定统一只走这里；
+      调用方的 is_openrouter 仅用于选择出站字段格式（reasoning vs reasoning_effort），
+      与「能发多高的档」无关。
+    - **model 不参与判定**：模型名是调用方可控的自由文本，未知中转站上出现
+      "deepseek-v4-pro" 并不代表它真把 max 透传给了 DeepSeek。参数保留只为免改
+      调用方签名。能力矩阵（按模型而非端点判定）留给「思考档位双仓专项票」。
     """
-    haystack = (api_url or "").lower()
-    if is_openrouter:
-        # 调用方已判定为 OpenRouter；与下表保持同一天花板
-        for marker, provider, ceiling in TRUSTED_ENDPOINT_CEILINGS:
-            if provider == "openrouter":
-                return (provider, ceiling)
-    for marker, provider, ceiling in TRUSTED_ENDPOINT_CEILINGS:
-        if marker in haystack:
-            return (provider, ceiling)
+    host = _endpoint_host(api_url)
+    if host in TRUSTED_HOST_CEILINGS:
+        return TRUSTED_HOST_CEILINGS[host]
     return ("unknown", UNKNOWN_ENDPOINT_CEILING)
 
 
@@ -1714,7 +1730,8 @@ def _apply_reasoning(body: dict, is_openrouter: bool, is_anthropic_fmt: bool, re
         return
     effort = reasoning_effort
     if not is_anthropic_fmt:
-        provider, ceiling = _provider_effort_profile(api_url, body.get("model"), is_openrouter)
+        # 只按端点判定能力；is_openrouter 仅用于下方选择出站字段格式，不参与授信
+        provider, ceiling = _provider_effort_profile(api_url, body.get("model"))
         clamped = _clamp_effort(effort, ceiling)
         if clamped != effort:
             # 只在真的降档时记一行，方便用户对上「我选了超高，为什么模型没那么用力」。

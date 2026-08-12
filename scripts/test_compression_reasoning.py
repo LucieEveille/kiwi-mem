@@ -214,14 +214,71 @@ async def check_request_reasoning_contract():
             f"留痕不得带模型名/URL：{line[0]}",
         )
 
+    # ── 端点授信必须按真实 hostname 等值比较 ─────────────────────────────
+    # 正向：官方主机在大小写、端口、userinfo、带 path/query 等形态下都要认出来
+    for url, want_provider, want_ceiling, why in (
+        (OR_URL, "openrouter", "max", "OpenRouter 官方"),
+        ("https://OpenRouter.AI/api/v1/chat/completions", "openrouter", "max", "大写域名须规范化"),
+        ("https://openrouter.ai:443/api/v1/chat/completions", "openrouter", "max", "带端口须剥离"),
+        ("https://user:pw@openrouter.ai/api/v1/chat/completions", "openrouter", "max", "带 userinfo 的官方主机仍是官方"),
+        (DEEPSEEK_URL, "deepseek", "max", "DeepSeek 官方"),
+        ("https://API.DeepSeek.CoM:443/v1/chat/completions", "deepseek", "max", "DeepSeek 大写+端口"),
+        (OPENAI_URL, "openai", "high", "OpenAI 已登记，天花板仍保守封在 high"),
+    ):
+        provider, ceiling = gateway._provider_effort_profile(url)
+        check(
+            (provider, ceiling) == (want_provider, want_ceiling),
+            f"{why}：期望 {(want_provider, want_ceiling)}，实际 {(provider, ceiling)} — {url}",
+        )
+
+    # 负向：下列都是**未知中转**伪装成官方域名，一律不得获得官方天花板
+    spoofs = (
+        ("https://openrouter.ai.evil.example/v1/chat/completions", "子域名后缀 openrouter"),
+        ("https://api.deepseek.com.evil.example/v1/chat/completions", "子域名后缀 deepseek"),
+        ("https://api.openai.com.evil.example/v1/chat/completions", "子域名后缀 openai"),
+        ("https://relay.example/?next=openrouter.ai", "query 夹带官方域名"),
+        ("https://relay.example/openrouter.ai/v1/chat/completions", "path 夹带官方域名"),
+        ("https://openrouter.ai@evil.example/v1/chat/completions", "userinfo 伪装成官方域名"),
+        ("https://api.deepseek.com@evil.example/v1/chat/completions", "userinfo 伪装 deepseek"),
+        ("https://myopenrouter.ai/v1/chat/completions", "前缀粘连"),
+        ("not a url at all", "畸形 URL"),
+        ("", "空 URL"),
+        (None, "None"),
+    )
+    for url, why in spoofs:
+        provider, ceiling = gateway._provider_effort_profile(url)
+        check(
+            (provider, ceiling) == ("unknown", "high"),
+            f"{why} 必须落到 unknown/high，实际 {(provider, ceiling)} — {url!r}",
+        )
+        body = {"model": "deepseek-v4-pro"}
+        gateway._apply_reasoning(body, False, False, "max", api_url=url)
+        got = body.get("reasoning_effort") or body.get("reasoning", {}).get("effort")
+        check(got == "high", f"{why} 不得获得 max，实际 {got} — {url!r}")
+
+    # is_openrouter 布尔不得成为绕过 hostname 判定的授信旁路
+    for url, why in (
+        ("https://openrouter.ai.evil.example/v1/chat/completions", "伪装域名 + is_openrouter=True"),
+        ("https://relay.example/v1/chat/completions", "任意中转 + is_openrouter=True"),
+    ):
+        body = {}
+        gateway._apply_reasoning(body, True, False, "max", api_url=url)
+        check(
+            body.get("reasoning", {}).get("effort") == "high",
+            f"{why} 不得获得 max，实际 {body.get('reasoning')}",
+        )
+
     # 端点天花板函数本身
-    check(gateway._provider_effort_ceiling(OR_URL, "deepseek/deepseek-v4-pro", True) == "max", "OpenRouter 端点天花板为 max")
-    check(gateway._provider_effort_ceiling(OR_URL, "", False) == "max", "OpenRouter URL 即可判定，无需 is_openrouter")
-    check(gateway._provider_effort_ceiling(DEEPSEEK_URL, "", False) == "max", "DeepSeek 官方端点天花板为 max")
-    check(gateway._provider_effort_ceiling(RELAY_URL, "deepseek-v4-flash", False) == "high", "未知端点取保守天花板 high，模型名不参与判定")
-    check(gateway._provider_effort_ceiling(OPENAI_URL, "gpt-5.2", False) == "high", "未登记的直连 OpenAI 同样取保守天花板")
+    check(gateway._provider_effort_ceiling(OR_URL) == "max", "OpenRouter 端点天花板为 max")
+    check(gateway._provider_effort_ceiling(DEEPSEEK_URL) == "max", "DeepSeek 官方端点天花板为 max")
+    check(gateway._provider_effort_ceiling(RELAY_URL, "deepseek-v4-flash") == "high", "未知端点取保守天花板 high，模型名不参与判定")
+    check(gateway._provider_effort_ceiling(OPENAI_URL, "gpt-5.2") == "high", "OpenAI 本票天花板保守封在 high")
     check(
-        gateway._provider_effort_profile(RELAY_URL, "deepseek-v4-flash", False)[0] == "unknown",
+        gateway._provider_effort_profile(OPENAI_URL, "gpt-5.2")[0] == "openai",
+        "OpenAI 降档留痕须归属 openai 而非 unknown",
+    )
+    check(
+        gateway._provider_effort_profile(RELAY_URL, "deepseek-v4-flash")[0] == "unknown",
         "未登记端点的供应商标识应为 unknown",
     )
 
