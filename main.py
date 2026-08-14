@@ -5467,17 +5467,32 @@ async def api_delete_file_chunks(proj_id: str, file_id: str):
 
 @app.post("/sync/import")
 async def api_sync_import(request: Request):
-    """一次性导入所有 localStorage 数据"""
+    """一次性导入所有 localStorage 数据。
+
+    顶层结构错误返回 400；单实体的畸形条目进 rejected、数据库失败进 failed，
+    两者都不影响同批次其他实体，整体仍返回 200 并由回执逐项交代。
+    """
     try:
-        data = await request.json()
+        data, err = await _read_json_object(request)
+        if err:
+            return err
         conversations = data.get("conversations", [])
         projects = data.get("projects", [])
+        if not isinstance(conversations, list) or not isinstance(projects, list):
+            return JSONResponse(
+                status_code=400, content={"error": "conversations 与 projects 必须是数组"}
+            )
         result = await sync_import_all(conversations, projects)
-        print(f"📦 云端同步导入完成：{result}")
+        # 只记计数，不打印回执正文：error_details 含实体 ID，日志侧不需要
+        counts = result["counts"]
+        print(
+            "event=sync_import_done "
+            f"conversations={counts['conversations']['success']}/{counts['conversations']['rejected']}/{counts['conversations']['failed']} "
+            f"projects={counts['projects']['success']}/{counts['projects']['rejected']}/{counts['projects']['failed']} "
+            f"messages={counts['messages']['success']} (success/rejected/failed)"
+        )
         return {"status": "ok", **result}
     except Exception as e:
-        import traceback
-        traceback.print_exc()
         return JSONResponse(status_code=500, content={"error": str(e)})
 
 
