@@ -150,6 +150,8 @@ async def _truncate(*tables: str) -> None:
         "comments",
         "dream_logs",
         "mem_scenes",
+        "conversations",
+        "memory_extraction_state",
     }
     require(bool(tables) and set(tables) <= allowed, "unsafe TRUNCATE table")
     await _pool_execute(f"TRUNCATE TABLE {', '.join(tables)} RESTART IDENTITY CASCADE")
@@ -2202,6 +2204,648 @@ async def test_w2_02(client: httpx.AsyncClient) -> None:
     passed("T-W2-02-22 reject and failure observability keep codes and drop entity IDs")
 
 
+# ---------------------------------------------------------------------------
+# W2-03 | M1 ledger schema, authoritative scope, and dark writes
+# ---------------------------------------------------------------------------
+
+_LEDGER_NEW_COLUMNS = {
+    "project_id": "text",
+    "scope_known": "boolean",
+    "usage": "jsonb",
+    "turn_id": "bigint",
+    "turn_key": "text",
+}
+
+
+async def _ledger_rows(session_id: str) -> list:
+    return await _pool_fetch(
+        "SELECT id, role, content, model, project_id, scope_known, usage, turn_id, turn_key "
+        "FROM conversations WHERE session_id = $1 ORDER BY id",
+        session_id,
+    )
+
+
+async def _set_ledger_gate(enabled: bool) -> None:
+    await _upsert_config("memory_event_ledger_write_enabled", "true" if enabled else "false")
+
+
+async def _set_identity_gate(enabled: bool) -> None:
+    await _upsert_config("session_identity_v2_enabled", "true" if enabled else "false")
+
+
+async def test_w2_03_schema_and_atomic() -> None:
+    """T-W2-03-1..10: schema, migration, atomic turn writes, regenerate."""
+    # ---- 1. five columns + extraction state table --------------------------
+    rows = {
+        r["column_name"]: r
+        for r in await _pool_fetch(
+            "SELECT column_name, data_type, is_nullable, column_default "
+            "FROM information_schema.columns WHERE table_name = 'conversations'"
+        )
+    }
+    missing = sorted(set(_LEDGER_NEW_COLUMNS) - set(rows))
+    require(not missing, f"W2-03 conversations columns missing: {missing}")
+    for col, want_type in _LEDGER_NEW_COLUMNS.items():
+        require(rows[col]["data_type"] == want_type,
+                f"{col} must be {want_type}, got {rows[col]['data_type']}")
+    require(rows["scope_known"]["is_nullable"] == "NO", "scope_known must be NOT NULL")
+    require("false" in (rows["scope_known"]["column_default"] or "").lower(),
+            f"scope_known must default FALSE, got {rows['scope_known']['column_default']!r}")
+    for col in ("project_id", "usage", "turn_id", "turn_key"):
+        require(rows[col]["is_nullable"] == "YES", f"{col} must be nullable")
+        require(rows[col]["column_default"] is None, f"{col} must have no default")
+    state_cols = {
+        r["column_name"]
+        for r in await _pool_fetch(
+            "SELECT column_name FROM information_schema.columns "
+            "WHERE table_name = 'memory_extraction_state'"
+        )
+    }
+    require({"session_id", "last_extracted_message_id", "claimed_until", "updated_at", "claim_token"}
+            <= state_cols, f"memory_extraction_state columns missing: {sorted(state_cols)}")
+    passed("T-W2-03-1 ledger gains five columns and memory_extraction_state exists")
+
+    # ---- 2/3. idempotent migration, untouched legacy rows -------------------
+    await _truncate("conversations")
+    legacy_id = await _pool_fetchval(
+        "INSERT INTO conversations (session_id, role, content, model) "
+        "VALUES ('w203-legacy', 'user', 'legacy-body', 'm') RETURNING id"
+    )
+    await database.init_tables()
+    await database.init_tables()
+    recheck = await _pool_fetchval(
+        "SELECT COUNT(*) FROM information_schema.columns WHERE table_name = 'conversations' "
+        "AND column_name = ANY($1::text[])",
+        list(_LEDGER_NEW_COLUMNS),
+    )
+    require(recheck == 5, "repeat init_tables() disturbed the W2-03 columns")
+    passed("T-W2-03-2 repeat init_tables() is idempotent for the ledger columns")
+
+    legacy = await _pool_fetchrow(
+        "SELECT content, project_id, scope_known, usage, turn_id, turn_key "
+        "FROM conversations WHERE id = $1", legacy_id
+    )
+    require(legacy["content"] == "legacy-body", "migration damaged an existing ledger row")
+    require(legacy["scope_known"] is False, "legacy rows must stay scope_known = FALSE")
+    for col in ("project_id", "usage", "turn_id", "turn_key"):
+        require(legacy[col] is None, f"legacy row must keep {col} NULL, got {legacy[col]!r}")
+    passed("T-W2-03-3 legacy ledger rows stay blank and unclaimed")
+
+    # ---- 4. atomic normal turn ---------------------------------------------
+    await _truncate("conversations", "chat_conversations", "chat_projects")
+    sid = "w203-atomic"
+    result = await database.append_turn_events_atomic(
+        sid, "u-body", "a-body", "m-1",
+        usage={"prompt_tokens": 10, "completion_tokens": 4,
+               "prompt_tokens_details": {"cached_tokens": 3}},
+        turn_key="tk-1",
+    )
+    require(result.get("ok") is True, f"atomic append failed: {result!r}")
+    rows = await _ledger_rows(sid)
+    require(len(rows) == 2, f"atomic turn must write exactly two rows, got {len(rows)}")
+    user_row, asst_row = rows
+    require((user_row["role"], asst_row["role"]) == ("user", "assistant"),
+            f"row order wrong: {[r['role'] for r in rows]}")
+    require(user_row["turn_id"] == user_row["id"],
+            f"user turn_id must anchor to its own id: {user_row['turn_id']} != {user_row['id']}")
+    require(asst_row["turn_id"] == user_row["id"],
+            "assistant must share the user's turn_id")
+    require(user_row["turn_key"] == "tk-1" and asst_row["turn_key"] == "tk-1",
+            "both rows must carry the same turn_key")
+    require(user_row["usage"] is None, "usage belongs on the assistant row only")
+    require(json.loads(asst_row["usage"]) == {"prompt": 10, "completion": 4, "cached": 3},
+            f"usage was not normalized: {asst_row['usage']!r}")
+    passed("T-W2-03-4 an atomic turn writes both rows with shared identity and normalized usage")
+
+    # ---- 5. transaction rollback + safe failure event -----------------------
+    await _truncate("conversations")
+    fail_sid = "w203-rollback"
+    await _pool_execute(
+        """
+        CREATE OR REPLACE FUNCTION w203_fail_assistant() RETURNS trigger AS $fn$
+        BEGIN
+            IF NEW.role = 'assistant' AND NEW.session_id = 'w203-rollback'
+            THEN RAISE EXCEPTION 'W2_03_INJECTED_LEDGER_FAILURE'; END IF;
+            RETURN NEW;
+        END; $fn$ LANGUAGE plpgsql
+        """
+    )
+    await _pool_execute("DROP TRIGGER IF EXISTS w203_fail_assistant_trg ON conversations")
+    await _pool_execute(
+        "CREATE TRIGGER w203_fail_assistant_trg BEFORE INSERT ON conversations "
+        "FOR EACH ROW EXECUTE FUNCTION w203_fail_assistant()"
+    )
+    try:
+        capture = io.StringIO()
+        with redirect_stdout(capture):
+            result = await database.append_turn_events_atomic(fail_sid, "u", "a", "m")
+        require(result.get("ok") is False, "a failed atomic append must report ok=False")
+        require(not await _ledger_rows(fail_sid),
+                "half-written turn survived: the user row was not rolled back")
+        events = [ln.strip() for ln in capture.getvalue().splitlines()
+                  if ln.startswith("event=ledger_write_failed ")]
+        require(events, f"no ledger_write_failed event: {capture.getvalue()!r}")
+        require(all("code=write_failed" in e for e in events),
+                f"ledger_write_failed must use the stable code: {events}")
+        require(all("exception_type=" in e for e in events),
+                f"ledger_write_failed must name the exception type: {events}")
+        require(all("W2_03_INJECTED_LEDGER_FAILURE" not in e for e in events),
+                "ledger_write_failed leaked the exception body")
+        require(all(fail_sid not in e for e in events),
+                "ledger_write_failed leaked the session id")
+        passed("T-W2-03-5 a failed turn rolls back entirely and emits a safe coded event")
+    finally:
+        await _pool_execute("DROP TRIGGER IF EXISTS w203_fail_assistant_trg ON conversations")
+        await _pool_execute("DROP FUNCTION IF EXISTS w203_fail_assistant()")
+
+    # ---- 6/7. gate exclusivity ---------------------------------------------
+    await _truncate("conversations")
+    gate_key = "memory_event_ledger_write_enabled"
+    gate_had_row = await _pool_fetchval("SELECT EXISTS(SELECT 1 FROM gateway_config WHERE key = $1)", gate_key)
+    gate_previous = await _config_row(gate_key)
+    try:
+        require(config.CONFIG_SCHEMA.get(gate_key, (None, None))[1] == "true",
+                "memory_event_ledger_write_enabled must exist and default to true")
+        await _set_ledger_gate(True)
+        open_sid = "w203-gate-open"
+        await database.append_turn_events_atomic(open_sid, "u", "a", "m", turn_key="tk")
+        rows = await _ledger_rows(open_sid)
+        require(len(rows) == 2, f"gate-open path must write exactly 2 rows, got {len(rows)} (double write?)")
+        passed("T-W2-03-6 the open gate writes one atomic pair, never a doubled turn")
+
+        source = (ROOT / "database.py").read_text(encoding="utf-8")
+        legacy_sql = re.search(r"async def save_message\(.*?\n\n", source, re.S)
+        require(legacy_sql, "save_message not found for the static legacy-SQL guard")
+        body = legacy_sql.group(0)
+        for forbidden in ("project_id", "scope_known", "usage", "turn_id", "turn_key"):
+            require(forbidden not in body,
+                    f"save_message must stay byte-compatible; it now mentions {forbidden}")
+        passed("T-W2-03-7 the closed-gate path keeps save_message free of the new columns")
+    finally:
+        if gate_had_row:
+            await _upsert_config(gate_key, gate_previous)
+        else:
+            await _pool_execute("DELETE FROM gateway_config WHERE key = $1", gate_key)
+
+    # ---- 8/9/10. regenerate ------------------------------------------------
+    await _truncate("conversations")
+    regen_sid = "w203-regen"
+    await database.append_turn_events_atomic(regen_sid, "u1", "a1", "m", turn_key="k1")
+    before = await _ledger_rows(regen_sid)
+    target_turn = before[0]["id"]
+    result = await database.append_turn_events_atomic(
+        regen_sid, "u1", "a1-regenerated", "m", turn_key=None, is_regenerate=True
+    )
+    require(result.get("ok") is True, f"regenerate failed: {result!r}")
+    rows = await _ledger_rows(regen_sid)
+    require(len(rows) == 2, f"regenerate must replace, not append: {len(rows)} rows")
+    require(rows[0]["id"] == before[0]["id"], "regenerate must not touch the user row")
+    require(rows[1]["content"] == "a1-regenerated", "regenerate did not replace the assistant body")
+    require(rows[1]["turn_id"] == target_turn, "regenerated assistant lost its turn anchor")
+    passed("T-W2-03-8 keyless regenerate replaces the newest assistant of the newest turn")
+
+    # historical key -> abandon, unknown key -> abandon; the old assistant survives both
+    await _truncate("conversations")
+    await database.append_turn_events_atomic(regen_sid, "u1", "a1", "m", turn_key="k1")
+    await database.append_turn_events_atomic(regen_sid, "u2", "a2", "m", turn_key="k2")
+    for bad_key, label in (("k1", "historical"), ("k-nope", "unknown")):
+        capture = io.StringIO()
+        with redirect_stdout(capture):
+            result = await database.append_turn_events_atomic(
+                regen_sid, "u2", "should-not-land", "m", turn_key=bad_key, is_regenerate=True
+            )
+        require(result.get("ok") is False,
+                f"{label} turn_key regenerate must be abandoned, got {result!r}")
+        rows = await _ledger_rows(regen_sid)
+        require(len(rows) == 4, f"{label} key regenerate changed the ledger: {len(rows)} rows")
+        require(rows[-1]["content"] == "a2",
+                f"{label} key regenerate destroyed the newest assistant")
+        require(any(ln.startswith("event=regen_target_invalid ") for ln in capture.getvalue().splitlines()),
+                f"{label} key abandon did not emit regen_target_invalid: {capture.getvalue()!r}")
+    passed("T-W2-03-9 regenerate abandons on historical or unknown turn_key and keeps the old reply")
+
+    # mixed era: gate-off rows (turn_id NULL) must survive a new-turn regenerate
+    await _truncate("conversations")
+    mix_sid = "w203-mixed"
+    await _pool_execute(
+        "INSERT INTO conversations (session_id, role, content, model) VALUES "
+        "($1,'user','legacy-u','m'), ($1,'assistant','legacy-a','m')", mix_sid
+    )
+    await database.append_turn_events_atomic(mix_sid, "new-u", "new-a", "m", turn_key="mk")
+    await database.append_turn_events_atomic(
+        mix_sid, "new-u", "new-a-regen", "m", is_regenerate=True
+    )
+    rows = await _ledger_rows(mix_sid)
+    legacy_bodies = [r["content"] for r in rows if r["turn_id"] is None]
+    require(legacy_bodies == ["legacy-u", "legacy-a"],
+            f"mixed-era regenerate damaged the gate-off rows: {legacy_bodies}")
+    require([r["content"] for r in rows if r["turn_id"] is not None] == ["new-u", "new-a-regen"],
+            f"mixed-era regenerate did not replace within its own turn: {[r['content'] for r in rows]}")
+    passed("T-W2-03-10 mixed-era regenerate stays inside its own turn branch")
+
+
+async def test_w2_03_scope_and_order() -> None:
+    """T-W2-03-12, 16(pure), 17, 18, 19: scope authority, usage shape, observability, read order."""
+    # ---- 12. authority table, row by row -----------------------------------
+    await _truncate("conversations", "chat_conversations", "chat_projects")
+    await _pool_execute("INSERT INTO chat_projects (id, name) VALUES ('w203-p-live', 'live')")
+    await _pool_execute(
+        "INSERT INTO chat_conversations (id, title, project_id) VALUES "
+        "('w203-c-live','c','w203-p-live'), ('w203-c-dead','c','w203-p-gone'), ('w203-c-null','c',NULL)"
+    )
+
+    async def scope_of(sid, **kwargs):
+        capture = io.StringIO()
+        with redirect_stdout(capture):
+            await database.append_turn_events_atomic(sid, "u", "a", "m", **kwargs)
+        row = (await _ledger_rows(sid))[0]
+        codes = {ln.split()[0].split("=", 1)[1]
+                 for ln in capture.getvalue().splitlines() if ln.startswith("event=scope_")}
+        return row["scope_known"], row["project_id"], codes
+
+    # row 1: metadata wins even when payload disagrees
+    known, pid, codes = await scope_of("w203-c-live", client_gave_conv_id=True,
+                                       project_id_present=True, payload_project_id="w203-p-other")
+    require((known, pid) == (True, "w203-p-live"),
+            f"row 1: metadata must win, got {(known, pid)}")
+    require("scope_mismatch" in codes, f"row 1 must emit scope_mismatch, got {codes}")
+    # row 2: project deleted -> keep the historical attribution, never global
+    known, pid, codes = await scope_of("w203-c-dead", client_gave_conv_id=True)
+    require((known, pid) == (True, "w203-p-gone"),
+            f"row 2: deleted project keeps TRUE + original id, got {(known, pid)}")
+    require("scope_project_missing" in codes, f"row 2 must emit scope_project_missing, got {codes}")
+    # row 3: metadata says global
+    known, pid, _ = await scope_of("w203-c-null", client_gave_conv_id=True)
+    require((known, pid) == (True, None), f"row 3: metadata NULL means global, got {(known, pid)}")
+    # row 4/5: only a server-generated session may trust the payload
+    known, pid, _ = await scope_of("w203-gen-null", client_gave_conv_id=False,
+                                   project_id_present=True, payload_project_id=None)
+    require((known, pid) == (True, None), f"row 4: explicit null is trusted, got {(known, pid)}")
+    known, pid, codes = await scope_of("w203-gen-proj", client_gave_conv_id=False,
+                                       project_id_present=True, payload_project_id="w203-p-live")
+    require((known, pid) == (True, "w203-p-live"), f"row 5: payload trusted, got {(known, pid)}")
+    require("scope_payload_trusted" in codes, f"row 5 must emit scope_payload_trusted, got {codes}")
+    # row 6: client supplied a conversation_id but metadata is missing -> never trust payload
+    known, pid, codes = await scope_of("w203-c-missing", client_gave_conv_id=True,
+                                       project_id_present=True, payload_project_id="w203-p-live")
+    require((known, pid) == (False, None),
+            f"row 6: unverified session must stay FALSE+NULL regardless of payload, got {(known, pid)}")
+    require("scope_unverified" in codes, f"row 6 must emit scope_unverified, got {codes}")
+    # row 7: absent key on a generated session stays unknown
+    known, pid, _ = await scope_of("w203-gen-absent", client_gave_conv_id=False)
+    require((known, pid) == (False, None), f"row 7: absent key stays unknown, got {(known, pid)}")
+    known, pid, codes = await scope_of("w203-gen-blank", client_gave_conv_id=False,
+                                       project_id_present=True, payload_project_id="")
+    require((known, pid) == (False, None), f"row 7: blank payload stays unknown, got {(known, pid)}")
+    require("scope_unverified" in codes, f"row 7 blank must emit scope_unverified, got {codes}")
+    passed("T-W2-03-12 the scope authority table holds row by row against a real database")
+
+    # ---- 16 (pure half). usage normalization shapes ------------------------
+    normalize = app_module._normalize_usage_for_storage
+    require(normalize({"prompt_tokens": 7, "completion_tokens": 2,
+                       "prompt_tokens_details": {"cached_tokens": 5}})
+            == {"prompt": 7, "completion": 2, "cached": 5}, "OpenAI usage shape mis-normalized")
+    require(normalize({"input_tokens": 9, "output_tokens": 3, "cache_read_input_tokens": 1})
+            == {"prompt": 9, "completion": 3, "cached": 1}, "Anthropic usage shape mis-normalized")
+    for empty in (None, "", [], {}, 0):
+        require(normalize(empty) is None, f"non-dict usage must normalize to None: {empty!r}")
+    # Counted once, together with the streaming half, as T-W2-03-16.
+
+    # ---- 17. observability sentinels ---------------------------------------
+    await _truncate("conversations", "chat_conversations", "chat_projects")
+    obs_sid = f"W2_03_OBS_SID_{uuid.uuid4().hex}"
+    obs_pid = f"W2_03_OBS_PID_{uuid.uuid4().hex}"
+    await _pool_execute("INSERT INTO chat_projects (id, name) VALUES ($1, 'obs')", obs_pid)
+    await _pool_execute(
+        "INSERT INTO chat_conversations (id, title, project_id) VALUES ($1, 'obs', $2)", obs_sid, obs_pid
+    )
+    out_cap, err_cap = io.StringIO(), io.StringIO()
+    with redirect_stdout(out_cap), redirect_stderr(err_cap):
+        await database.append_turn_events_atomic(
+            obs_sid, "u", "a", "m", client_gave_conv_id=True,
+            project_id_present=True, payload_project_id="w203-p-other",
+        )
+    logs = out_cap.getvalue() + err_cap.getvalue()
+    require(obs_sid not in logs, "observability leaked the session id")
+    require(obs_pid not in logs, "observability leaked the project id")
+    events = [ln.strip() for ln in logs.splitlines() if ln.startswith("event=scope_mismatch ")]
+    require(events, f"scope_mismatch event missing: {logs!r}")
+    require(all("increment=" in e for e in events), f"scope event lost increment: {events}")
+    passed("T-W2-03-17 scope observability keeps counters and drops session/project IDs")
+
+    # ---- 18. turn_key must never be joined across tables --------------------
+    db_source = (ROOT / "database.py").read_text(encoding="utf-8")
+    joined = re.findall(r"JOIN[^;]{0,200}turn_key|turn_key[^;]{0,200}JOIN", db_source, re.I)
+    require(not joined, f"turn_key appears in a JOIN: {joined[:1]}")
+    require(db_source.count("同名不同义") >= 2,
+            "both turn_key columns must carry the same-name-different-meaning warning")
+    passed("T-W2-03-18 the two turn_key columns stay unjoined and both warn in place")
+
+    # ---- 19. deterministic read order on tied timestamps --------------------
+    await _truncate("conversations")
+    tie_sid = "w203-tie"
+    tied = "2026-05-05 05:05:05+00"
+    await _pool_execute(
+        "INSERT INTO conversations (session_id, role, content, model, created_at) VALUES "
+        "($1,'user','u-first','m',$2::timestamptz), "
+        "($1,'assistant','a-second','m',$2::timestamptz), "
+        "($1,'assistant','a-third','m',$2::timestamptz)",
+        tie_sid, tied,
+    )
+    recent = await database.get_recent_messages(tie_sid, limit=10)
+    require([r["content"] for r in recent] == ["u-first", "a-second", "a-third"],
+            f"get_recent_messages is unstable on tied timestamps: {[r['content'] for r in recent]}")
+    await database.delete_latest_assistant_message(tie_sid)
+    left = [r["content"] for r in await _ledger_rows(tie_sid)]
+    require(left == ["u-first", "a-second"],
+            f"delete_latest_assistant_message removed the wrong tied row: {left}")
+    passed("T-W2-03-19 ledger readers break timestamp ties by id, deterministically")
+
+
+async def test_w2_03_entry_and_panel(client: httpx.AsyncClient) -> None:
+    """T-W2-03-11, 23, 24, 25: request-entry validation, project turns, panel wiring, CORS."""
+    # ---- 11. turn_key entry validation -------------------------------------
+    # Rejections happen while parsing the body, before any upstream call, so no
+    # model boundary is exercised here.
+    for bad, label in ((["x"], "list"), ({"a": 1}, "dict"), (7, "int"),
+                       ("", "empty"), ("   ", "blank"), ("k" * 201, "201 chars")):
+        response = await client.post("/v1/chat/completions", json={
+            "model": "mock-model", "stream": False, "turn_key": bad,
+            "messages": [{"role": "user", "content": "hi"}],
+        })
+        require(response.status_code == 400,
+                f"explicit invalid turn_key ({label}) must be 400, got {response.status_code}")
+    passed("T-W2-03-11 explicitly invalid turn_key is rejected at the request entry")
+
+    # ---- 23. project turns keep their scope and still skip extraction -------
+    await _truncate("conversations", "chat_conversations", "chat_projects")
+    await _pool_execute("INSERT INTO chat_projects (id, name) VALUES ('w203-proj', 'p')")
+    await _pool_execute(
+        "INSERT INTO chat_conversations (id, title, project_id) VALUES ('w203-proj-c','c','w203-proj')"
+    )
+    await database.append_turn_events_atomic(
+        "w203-proj-c", "u", "a", "m", client_gave_conv_id=True, turn_key="pk"
+    )
+    rows = await _ledger_rows("w203-proj-c")
+    require(len(rows) == 2, f"project turn must still land two ledger rows, got {len(rows)}")
+    require(all(r["scope_known"] is True and r["project_id"] == "w203-proj" for r in rows),
+            f"project turn lost its scope: {[(r['scope_known'], r['project_id']) for r in rows]}")
+    require(not await _pool_fetchval(
+        "SELECT EXISTS(SELECT 1 FROM conversations WHERE session_id = 'w203-proj-c' "
+        "AND scope_known = TRUE AND project_id IS NULL)"),
+        "a project turn must never satisfy the global scope condition")
+    passed("T-W2-03-23 project turns carry their scope and stay out of the global pool")
+
+    # ---- 24. both gates are registered on both sides and settable ----------
+    schema_js = (ROOT / "admin-panel" / "js" / "config-schema.js").read_text(encoding="utf-8")
+    for key in ("memory_event_ledger_write_enabled", "session_identity_v2_enabled"):
+        require(key in config.CONFIG_SCHEMA, f"{key} is missing from the backend registry")
+        require(re.search(rf"\b{key}\s*:", schema_js),
+                f"{key} is missing from config-schema.js CONFIG_META (the panel would not show it)")
+        require(re.search(rf"['\"]{key}['\"]", schema_js.split("CONFIG_PAGES")[-1]),
+                f"{key} is registered but never placed in a CONFIG_PAGES group")
+    gate_key = "memory_event_ledger_write_enabled"
+    had_row = await _pool_fetchval("SELECT EXISTS(SELECT 1 FROM gateway_config WHERE key = $1)", gate_key)
+    previous = await _config_row(gate_key)
+    try:
+        response = await client.put(f"/admin/config/{gate_key}", json={"value": "false"})
+        require(response.status_code == 200, f"PUT /admin/config failed: {response.status_code}")
+        require(await config.get_config_bool(gate_key, True) is False,
+                "PUT /admin/config did not actually change the gate")
+        response = await client.put(f"/admin/config/{gate_key}", json={"value": "true"})
+        require(await config.get_config_bool(gate_key, False) is True, "gate could not be turned back on")
+    finally:
+        if had_row:
+            await _upsert_config(gate_key, previous)
+        else:
+            await _pool_execute("DELETE FROM gateway_config WHERE key = $1", gate_key)
+    passed("T-W2-03-24 both gates are dual-registered and settable through the admin endpoint")
+
+    # ---- 25. CORS actually exposes the session header ----------------------
+    response = await client.get("/", headers={"Origin": "http://kiwi.example"})
+    exposed = response.headers.get("access-control-expose-headers", "")
+    require("X-Kiwi-Session-Id" in exposed,
+            f"CORS does not expose X-Kiwi-Session-Id (browsers could not read it): {exposed!r}")
+    passed("T-W2-03-25 a real cross-origin response exposes X-Kiwi-Session-Id")
+
+
+def _fake_upstream(*, sse_events=None, json_body=None, status_code=200):
+    """Fake httpx.AsyncClient serving one canned upstream reply (streaming or not).
+
+    Only the surface main.py actually uses is implemented: async context manager,
+    .post() for the buffered path and .stream() for the streaming path.
+    """
+    class _Resp:
+        def __init__(self):
+            self.status_code = status_code
+            self.headers = {"content-type": "text/event-stream"}
+
+        def json(self):
+            return json_body or {"choices": [{"message": {"content": "a-body"}}], "model": "mock-model"}
+
+        @property
+        def text(self):
+            return json.dumps(self.json(), ensure_ascii=False)
+
+        async def aiter_bytes(self, chunk_size=None):
+            for event in (sse_events or []):
+                yield event if isinstance(event, bytes) else event.encode("utf-8")
+
+        async def aread(self):
+            return b""
+
+    class _StreamCtx:
+        async def __aenter__(self):
+            return _Resp()
+
+        async def __aexit__(self, *args):
+            return None
+
+    class _Client:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return None
+
+        def stream(self, *args, **kwargs):
+            return _StreamCtx()
+
+        async def post(self, *args, **kwargs):
+            return _Resp()
+
+    return _Client
+
+
+def _sse(payload: dict) -> str:
+    return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+
+
+_DELTA = _sse({"choices": [{"delta": {"content": "hello"}, "finish_reason": None}], "model": "mock-model"})
+_USAGE_TAIL = _sse({"choices": [], "usage": {"prompt_tokens": 11, "completion_tokens": 5,
+                                             "prompt_tokens_details": {"cached_tokens": 2}}})
+
+
+async def _chat(client, body, *, sse_events=None, json_body=None, status_code=200):
+    """POST /v1/chat/completions against a canned upstream; returns the response."""
+    async def fake_resolve(_model):
+        return "http://127.0.0.1:9/mock-chat", "mock-key", "openai"
+
+    with (
+        patch.object(app_module.httpx, "AsyncClient",
+                     _fake_upstream(sse_events=sse_events, json_body=json_body, status_code=status_code)),
+        patch.object(database, "resolve_model_endpoint", fake_resolve),
+    ):
+        return await client.post("/v1/chat/completions", json=body)
+
+
+async def test_w2_03_chat_paths(client: httpx.AsyncClient) -> None:
+    """T-W2-03-13, 14, 15, 16b, 20, 21, 22: identity v2, ev_session, usage, layering."""
+    mem_key = "memory_enabled"
+    mem_had = await _pool_fetchval("SELECT EXISTS(SELECT 1 FROM gateway_config WHERE key = $1)", mem_key)
+    mem_prev = await _config_row(mem_key)
+    id_key = "session_identity_v2_enabled"
+    id_had = await _pool_fetchval("SELECT EXISTS(SELECT 1 FROM gateway_config WHERE key = $1)", id_key)
+    id_prev = await _config_row(id_key)
+    try:
+        # Memory off for the whole block: proves the layering contract and keeps the
+        # embedding/extraction boundaries out of these guards entirely.
+        await _upsert_config(mem_key, "false")
+
+        # ---- 20. memory off still records events, never extracts ------------
+        await _truncate("conversations")
+        await _set_identity_gate(False)
+        response = await _chat(client, {
+            "model": "mock-model", "stream": False, "conversation_id": "w203-layer-a",
+            "messages": [{"role": "user", "content": "hi"}],
+        }, json_body={"choices": [{"message": {"content": "a-body"}}], "model": "mock-model"})
+        require(response.status_code == 200, f"buffered chat failed: {response.status_code} {response.text[:200]}")
+        rows = await _ledger_rows("w203-layer-a")
+        require(len(rows) == 2, f"memory-off chat must still write 2 ledger rows, got {len(rows)}")
+        require(await _pool_fetchval("SELECT COUNT(*) FROM memories") == 0,
+                "memory-off chat must not extract any memory")
+        passed("T-W2-03-20 with memory off the ledger still records the turn and nothing is extracted")
+
+        # ---- 21. internal requests write nothing ----------------------------
+        await _truncate("conversations")
+        response = await _chat(client, {
+            "model": "mock-model", "stream": False, "conversation_id": "w203-internal",
+            "skip_system_prompt": True,
+            "messages": [{"role": "user", "content": "summarize"}],
+        }, json_body={"choices": [{"message": {"content": "title"}}], "model": "mock-model"})
+        require(response.status_code == 200, "internal request failed")
+        require(not await _ledger_rows("w203-internal"),
+                "an internal request (skip_system_prompt) must not touch the ledger")
+        passed("T-W2-03-21 internal requests write neither events nor memories")
+
+        # ---- 13/22. session identity v2 -------------------------------------
+        await _truncate("conversations")
+        await _set_identity_gate(True)
+        seen = []
+        for _ in range(2):
+            response = await _chat(client, {
+                "model": "mock-model", "stream": False,
+                "messages": [{"role": "user", "content": "same opening line"}],
+            }, json_body={"choices": [{"message": {"content": "a"}}], "model": "mock-model"})
+            require(response.status_code == 200, "identity-v2 chat failed")
+            sid = response.headers.get("x-kiwi-session-id")
+            require(sid, "server-generated session must be returned in X-Kiwi-Session-Id")
+            seen.append(sid)
+        require(seen[0] != seen[1],
+                f"identical opening lines must not collapse into one session: {seen}")
+        require(all(s.startswith("auto-r-") and len(s) == len("auto-r-") + 32 for s in seen),
+                f"identity v2 must be auto-r- plus a full uuid4 hex: {seen}")
+        response = await _chat(client, {
+            "model": "mock-model", "stream": False, "conversation_id": "w203-own-id",
+            "messages": [{"role": "user", "content": "hi"}],
+        }, json_body={"choices": [{"message": {"content": "a"}}], "model": "mock-model"})
+        require("x-kiwi-session-id" not in response.headers,
+                "a client-supplied conversation_id must never be echoed back")
+        passed("T-W2-03-13 identity v2 gives distinct full-uuid sessions and never echoes client IDs")
+
+        await _set_identity_gate(False)
+        await _truncate("conversations")
+        for _ in range(2):
+            await _chat(client, {
+                "model": "mock-model", "stream": False,
+                "messages": [{"role": "user", "content": "same opening line"}],
+            }, json_body={"choices": [{"message": {"content": "a"}}], "model": "mock-model"})
+        legacy_sessions = {r["session_id"] for r in await _pool_fetch(
+            "SELECT DISTINCT session_id FROM conversations")}
+        require(len(legacy_sessions) == 1 and next(iter(legacy_sessions)).startswith("auto-"),
+                f"gate-off must fall back to the md5 session exactly: {legacy_sessions}")
+        require(not next(iter(legacy_sessions)).startswith("auto-r-"),
+                "gate-off must not use the v2 prefix")
+        passed("T-W2-03-22 with identity v2 off the legacy md5 session is restored byte for byte")
+
+        # ---- 14/15. ev_session contract on streams --------------------------
+        await _set_identity_gate(True)
+        await _truncate("conversations")
+        response = await _chat(client, {
+            "model": "mock-model", "stream": True,
+            "messages": [{"role": "user", "content": "stream me"}],
+        }, sse_events=[_DELTA, _USAGE_TAIL, "data: [DONE]\n\n"])
+        require(response.status_code == 200, "streaming chat failed")
+        require(response.headers.get("x-kiwi-session-id"), "stream response lost X-Kiwi-Session-Id")
+        events = [e for e in response.text.split("\n\n") if e.strip()]
+        ev_indexes = [i for i, e in enumerate(events) if '"ev_session"' in e]
+        require(len(ev_indexes) == 1, f"ev_session must appear exactly once per stream: {ev_indexes}")
+        require(ev_indexes[0] == 0, f"ev_session must precede every other stream event: {events[:2]}")
+        require(events[-1].strip() == "data: [DONE]", f"[DONE] must stay last: {events[-1]!r}")
+        payload = json.loads(events[0].split("data: ", 1)[1])
+        require(payload["ev_session"]["generated"] is True and payload["ev_session"]["id"],
+                f"ev_session payload malformed: {payload}")
+        passed("T-W2-03-14 ev_session is emitted once, first, and the header travels with the stream")
+
+        response = await _chat(client, {
+            "model": "mock-model", "stream": True,
+            "messages": [{"role": "user", "content": "upstream will fail"}],
+        }, sse_events=[], status_code=502)
+        require(response.headers.get("x-kiwi-session-id"),
+                "an upstream failure must still carry the retry identity (headers cannot be recalled)")
+        require('"ev_session"' in response.text,
+                "ev_session must still be present when the upstream fails")
+        bad = await client.post("/v1/chat/completions", json={
+            "model": "mock-model", "stream": True, "turn_key": "",
+            "messages": [{"role": "user", "content": "rejected before identity"}],
+        })
+        require(bad.status_code == 400, "entry validation must still reject before identity")
+        require("x-kiwi-session-id" not in bad.headers,
+                "a request rejected before identity generation must not carry a session header")
+        passed("T-W2-03-15 identity survives upstream failure but is absent on pre-identity 4xx")
+
+        # ---- 16b. usage aggregation across the stream -----------------------
+        await _truncate("conversations")
+        response = await _chat(client, {
+            "model": "mock-model", "stream": True, "conversation_id": "w203-usage",
+            "messages": [{"role": "user", "content": "count me"}],
+        }, sse_events=[_DELTA, _USAGE_TAIL, "data: [DONE]\n\n"])
+        require(response.status_code == 200, "usage stream failed")
+        rows = await _ledger_rows("w203-usage")
+        require(len(rows) == 2, f"usage stream must land a full turn: {len(rows)} rows")
+        require(json.loads(rows[1]["usage"]) == {"prompt": 11, "completion": 5, "cached": 2},
+                f"streamed usage was not captured/normalized: {rows[1]['usage']!r}")
+
+        await _truncate("conversations")
+        response = await _chat(client, {
+            "model": "mock-model", "stream": True, "conversation_id": "w203-nousage",
+            "messages": [{"role": "user", "content": "no usage block"}],
+        }, sse_events=[_DELTA, "data: [DONE]\n\n"])
+        rows = await _ledger_rows("w203-nousage")
+        require(rows and rows[1]["usage"] is None,
+                f"a stream without a usage block must store NULL: {rows[1]['usage'] if rows else 'no rows'!r}")
+        passed("T-W2-03-16 usage is normalized for both vendors and captured/NULL across streams")
+    finally:
+        for key, had, prev in ((mem_key, mem_had, mem_prev), (id_key, id_had, id_prev)):
+            if had:
+                await _upsert_config(key, prev)
+            else:
+                await _pool_execute("DELETE FROM gateway_config WHERE key = $1", key)
+
+
 async def run_suite(test_dsn: str) -> None:
     global database, config, app_module, memory_extractor
 
@@ -2243,6 +2887,10 @@ async def run_suite(test_dsn: str) -> None:
         await test_w1_01()
         await test_w2_01(client)
         await test_w2_02(client)
+        await test_w2_03_schema_and_atomic()
+        await test_w2_03_scope_and_order()
+        await test_w2_03_entry_and_panel(client)
+        await test_w2_03_chat_paths(client)
 
 
 async def async_main() -> int:
@@ -2258,12 +2906,14 @@ async def async_main() -> int:
         w1_08_passed = [name for name in PASSED if name.startswith("T-W1-08-")]
         w2_01_passed = [name for name in PASSED if name.startswith("T-W2-01-")]
         w2_02_passed = [name for name in PASSED if name.startswith("T-W2-02-")]
+        w2_03_passed = [name for name in PASSED if name.startswith("T-W2-03-")]
         print(f"\nPASS: {len(legacy_passed)} permanent S1-S6 behavior guards")
         print(f"PASS: {len(w1_01_passed)} W1-01 isolation/permanent guards")
         print(f"PASS: {len(w1_06_passed)} W1-06 calendar-delete atomicity guards")
         print(f"PASS: {len(w1_08_passed)} W1-08 calendar-period guards")
         print(f"PASS: {len(w2_01_passed)} W2-01 granular-sync guards")
         print(f"PASS: {len(w2_02_passed)} W2-02 message-identity/atomic-import guards")
+        print(f"PASS: {len(w2_03_passed)} W2-03 ledger-schema/scope/dark-write guards")
         print(f"PASS: {len(PASSED)} total permanent behavior guards")
         print("Real database path: disposable PostgreSQL verified")
         print("Real model/API path: not called; embedding/model/HTTP boundaries were mocked")
