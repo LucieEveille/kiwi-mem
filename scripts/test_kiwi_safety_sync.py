@@ -2444,23 +2444,27 @@ async def test_w2_03_schema_and_atomic() -> None:
                 f"{label} key abandon did not emit regen_target_invalid: {capture.getvalue()!r}")
     passed("T-W2-03-9 regenerate abandons on historical or unknown turn_key and keeps the old reply")
 
-    # mixed era: gate-off rows (turn_id NULL) must survive a new-turn regenerate
+    # Mixed era (gate on -> off -> on): the dangerous shape is a gate-off row written
+    # AFTER a proper turn.  Ordering by time alone would then pick the NULL row, so the
+    # legacy row must be the *newest* one here — a legacy row placed before the turn
+    # would be selected correctly even by a broken OR-merged candidate set.
     await _truncate("conversations")
     mix_sid = "w203-mixed"
-    await _pool_execute(
-        "INSERT INTO conversations (session_id, role, content, model) VALUES "
-        "($1,'user','legacy-u','m'), ($1,'assistant','legacy-a','m')", mix_sid
-    )
     await database.append_turn_events_atomic(mix_sid, "new-u", "new-a", "m", turn_key="mk")
+    await _pool_execute(
+        "INSERT INTO conversations (session_id, role, content, model, created_at) "
+        "VALUES ($1, 'assistant', 'gate-off-a', 'm', NOW() + INTERVAL '1 minute')", mix_sid
+    )
     await database.append_turn_events_atomic(
         mix_sid, "new-u", "new-a-regen", "m", is_regenerate=True
     )
     rows = await _ledger_rows(mix_sid)
-    legacy_bodies = [r["content"] for r in rows if r["turn_id"] is None]
-    require(legacy_bodies == ["legacy-u", "legacy-a"],
-            f"mixed-era regenerate damaged the gate-off rows: {legacy_bodies}")
+    require("gate-off-a" in [r["content"] for r in rows],
+            "mixed-era regenerate deleted the gate-off row: the candidate branches were OR-merged")
     require([r["content"] for r in rows if r["turn_id"] is not None] == ["new-u", "new-a-regen"],
             f"mixed-era regenerate did not replace within its own turn: {[r['content'] for r in rows]}")
+    require("new-a" not in [r["content"] for r in rows],
+            "mixed-era regenerate left the superseded reply of its own turn behind")
     passed("T-W2-03-10 mixed-era regenerate stays inside its own turn branch")
 
 
@@ -2580,6 +2584,16 @@ async def test_w2_03_scope_and_order() -> None:
     recent = await database.get_recent_messages(tie_sid, limit=10)
     require([r["content"] for r in recent] == ["u-first", "a-second", "a-third"],
             f"get_recent_messages is unstable on tied timestamps: {[r['content'] for r in recent]}")
+    # A behavioural check alone is not enough here: on a small table PG's sequential
+    # scan happens to return insertion (= id) order, so a missing tiebreak can pass by
+    # luck.  Pin the tiebreak in the SQL of every ledger reader as well.
+    reader_source = (ROOT / "database.py").read_text(encoding="utf-8")
+    for reader in ("get_recent_messages", "get_recent_conversation",
+                   "delete_latest_assistant_message"):
+        body = re.search(rf"async def {reader}\(.*?(?=\nasync def )", reader_source, re.S)
+        require(body, f"{reader} not found for the read-order guard")
+        require("ORDER BY created_at DESC, id DESC" in body.group(0),
+                f"{reader} orders by time without an id tiebreak; tied rows sort arbitrarily")
     await database.delete_latest_assistant_message(tie_sid)
     left = [r["content"] for r in await _ledger_rows(tie_sid)]
     require(left == ["u-first", "a-second"],
