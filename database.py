@@ -296,6 +296,8 @@ async def init_tables():
                 attachments     JSONB,
                 usage           JSONB,
                 summary         TEXT,
+                dream_event     JSONB,
+                turn_key        TEXT,
                 sort_order      INTEGER DEFAULT 0
             );
         """)
@@ -527,6 +529,27 @@ async def init_tables():
             if not has_col:
                 await conn.execute(f"ALTER TABLE chat_messages ADD COLUMN {col_name} {col_def}")
                 print(f"✅ chat_messages 表已添加 {col_name} 列（完整消息同步）")
+
+        # W2-02：chat_messages 表扩展 — dream_event / turn_key
+        #   dream_event：消息气泡里用户可见的 Dream 过程/结果，跨设备与刷新后应保留。
+        #   turn_key：前端消息快照自带的轮次稳定标识，供重放与跨设备对齐使用。
+        #   两列一律可空、无默认、不建索引：旧 payload 缺字段时按兼容合同写 NULL，
+        #   存量行经 ADD COLUMN 自动为 NULL，前一版本代码不感知也不会写坏。
+        #   注意：本列只服务前端消息快照。若日后事件账本（W2-03）出现同名
+        #   conversations.turn_key，二者同名不同义，禁止联表推断轮次归属。
+        for col_name, col_def in [
+            ("dream_event", "JSONB"),
+            ("turn_key", "TEXT"),
+        ]:
+            has_col = await conn.fetchval("""
+                SELECT EXISTS (
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_name = 'chat_messages' AND column_name = $1
+                )
+            """, col_name)
+            if not has_col:
+                await conn.execute(f"ALTER TABLE chat_messages ADD COLUMN {col_name} {col_def}")
+                print(f"✅ chat_messages 表已添加 {col_name} 列（W2-02 消息身份）")
 
         # v5.3：时间有效期窗口（MemPalace 启发）
         for col_name, col_def in [
@@ -2617,11 +2640,13 @@ async def sync_get_conversation(conv_id: str):
         return result
 
 
-async def sync_upsert_conversation(conv: dict):
-    """创建或更新对话元数据（不含消息）"""
-    pool = await get_pool()
-    async with pool.acquire() as conn:
-        await conn.execute("""
+async def _upsert_conversation_tx(conn, conv: dict):
+    """在给定连接/事务内 upsert 对话元数据，不自开连接。
+
+    对应 Gateway G1.1 的 _import_upsert_conversation_tx。供 sync_import_all 把
+    「元数据 + 全量消息」合进同一事务，任一步失败整体回滚，绝不留下空壳对话。
+    """
+    await conn.execute("""
             INSERT INTO chat_conversations (id, title, model, provider_model_id, project_id, pinned, sort_order, created_at, updated_at)
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
             ON CONFLICT (id) DO UPDATE SET
@@ -2642,7 +2667,17 @@ async def sync_upsert_conversation(conv: dict):
             int(conv.get("sortOrder", conv.get("sort_order", 0)) or 0),
             _parse_time(conv.get("createdAt") or conv.get("created_at")),
             _parse_time(conv.get("updatedAt") or conv.get("updated_at")),
-        )
+    )
+
+
+async def sync_upsert_conversation(conv: dict):
+    """创建或更新对话元数据（不含消息）。
+
+    legacy 全量 PUT 仍走这里：单独取连接、单条语句自动提交，行为与 W2-01 冻结时一致。
+    """
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        await _upsert_conversation_tx(conn, conv)
     return True
 
 
@@ -2715,7 +2750,12 @@ async def sync_delete_conversation(conv_id: str):
 
 
 def _message_content_values(msg: dict) -> list:
-    """装配 chat_messages 中 role..summary 的 20 个内容字段。"""
+    """装配 chat_messages 中 role..turn_key 的 22 个内容字段。
+
+    全量 import、legacy 全量替换与 W2-01 单消息 upsert 三条通道共用本函数，
+    新增字段只在这里追加一次，避免通道之间出现字段分叉或默认值分叉。
+    完整快照语义：请求体缺字段即写空值，不保留该列的旧值。
+    """
     return [
         msg.get("role") or "user",
         msg.get("content") or "",
@@ -2737,6 +2777,9 @@ def _message_content_values(msg: dict) -> list:
         _to_json(msg.get("attachments")),
         _to_json(msg.get("usage")),
         msg.get("summary") if isinstance(msg.get("summary"), str) else None,
+        _to_json(msg.get("dreamEvent") or msg.get("dream_event")),
+        (msg.get("turnKey") if isinstance(msg.get("turnKey"), str)
+         else msg.get("turn_key") if isinstance(msg.get("turn_key"), str) else None),
     ]
 
 
@@ -2745,35 +2788,46 @@ _MESSAGE_INSERT_SQL = """
         id, conversation_id, role, content, time, model,
         streaming, error, token_info, thinking, status_events, tool_events,
         memory_result, memory_event, handoff_info, web_search_results, versions, version_index,
-        images, attachments, usage, summary, sort_order
+        images, attachments, usage, summary, dream_event, turn_key, sort_order
     ) VALUES (
         $1, $2, $3, $4, $5, $6,
         $7, $8, $9, $10, $11, $12,
         $13, $14, $15, $16, $17, $18,
-        $19, $20, $21, $22, $23
+        $19, $20, $21, $22, $23, $24, $25
     )
 """
 
 
+async def _replace_messages_tx(conn, conv_id: str, messages: list):
+    """在给定连接/事务内全量替换某对话的消息，不自开连接。
+
+    对应 Gateway G1.1 的 _import_replace_messages_tx。父对话必须已在同一事务内
+    upsert，否则外键约束失败并回滚整个事务。legacy 全量通道与 import 通道共用
+    本函数，SQL 与字段装配全仓只此一份。
+    """
+    await conn.execute("DELETE FROM chat_messages WHERE conversation_id = $1", conv_id)
+    rows = [
+        (
+            str(msg.get("id") or f"m-{conv_id}-{idx}"),
+            conv_id,
+            *_message_content_values(msg),
+            idx,  # sort_order 取数组下标，保持前端顺序
+        )
+        for idx, msg in enumerate(messages)
+    ]
+    if rows:
+        await conn.executemany(_MESSAGE_INSERT_SQL, rows)
+
+
 async def sync_upsert_messages(conv_id: str, messages: list):
-    """批量写入/更新消息（全量替换该对话的所有消息）"""
+    """批量写入/更新消息（全量替换该对话的所有消息）。
+
+    legacy 全量 PUT 仍走这里：单独取连接、单独事务，行为与 W2-01 冻结时一致。
+    """
     pool = await get_pool()
     async with pool.acquire() as conn:
         async with conn.transaction():
-            await conn.execute(
-                "DELETE FROM chat_messages WHERE conversation_id = $1", conv_id
-            )
-            rows = [
-                (
-                    str(msg.get("id") or f"m-{conv_id}-{idx}"),
-                    conv_id,
-                    *_message_content_values(msg),
-                    idx,
-                )
-                for idx, msg in enumerate(messages)
-            ]
-            if rows:
-                await conn.executemany(_MESSAGE_INSERT_SQL, rows)
+            await _replace_messages_tx(conn, conv_id, messages)
     return True
 
 
@@ -2802,12 +2856,12 @@ async def sync_upsert_single_message(conv_id: str, msg_id: str, msg: dict):
                     id, conversation_id, role, content, time, model,
                     streaming, error, token_info, thinking, status_events, tool_events,
                     memory_result, memory_event, handoff_info, web_search_results, versions, version_index,
-                    images, attachments, usage, summary, sort_order
+                    images, attachments, usage, summary, dream_event, turn_key, sort_order
                 ) VALUES (
                     $1, $2, $3, $4, $5, $6,
                     $7, $8, $9, $10, $11, $12,
                     $13, $14, $15, $16, $17, $18,
-                    $19, $20, $21, $22, COALESCE($23, 0)
+                    $19, $20, $21, $22, $23, $24, COALESCE($25, 0)
                 )
                 ON CONFLICT (id) DO UPDATE SET
                     role = EXCLUDED.role,
@@ -2830,7 +2884,9 @@ async def sync_upsert_single_message(conv_id: str, msg_id: str, msg: dict):
                     attachments = EXCLUDED.attachments,
                     usage = EXCLUDED.usage,
                     summary = EXCLUDED.summary,
-                    sort_order = COALESCE($23, chat_messages.sort_order)
+                    dream_event = EXCLUDED.dream_event,
+                    turn_key = EXCLUDED.turn_key,
+                    sort_order = COALESCE($25, chat_messages.sort_order)
                 WHERE chat_messages.conversation_id = EXCLUDED.conversation_id
                 RETURNING id
             """, msg_id, conv_id, *content_values, sort_order)
@@ -2976,43 +3032,188 @@ async def sync_delete_project(proj_id: str):
 # 云端同步 — 批量导入（首次迁移用）（v4.1）
 # ============================================================
 
+# W2-02：import 的受控拒绝码与安全摘要。
+# 回执与日志只使用这里的固定文案，绝不回传数据库原始异常——异常文本常带列值片段。
+_IMPORT_REJECT_SUMMARIES = {
+    "invalid_item": "条目不是 JSON 对象",
+    "missing_id": "缺少非空 id",
+    "duplicate_id": "同批次内 id 重复",
+    "invalid_messages": "messages 不是数组",
+    "invalid_message_item": "messages 内含非对象元素",
+    "duplicate_message_id": "同一对话内消息 id 重复",
+}
+_IMPORT_FAIL_CODE = "write_failed"
+_IMPORT_FAIL_SUMMARY = "数据库写入失败"
+
+
+def _import_entity_id(item: dict):
+    """取实体 ID：只接受非空字符串或整数，其余（None/bool/dict/list）一律视为缺失。"""
+    raw = item.get("id")
+    if isinstance(raw, bool) or not isinstance(raw, (str, int)):
+        return ""
+    return str(raw).strip()
+
+
+def _explicit_message_ids(messages: list) -> list:
+    """取消息数组里显式提供的非空 ID。缺 ID 的消息由写入期按下标合成，不参与重复判定。"""
+    ids = []
+    for msg in messages:
+        raw = msg.get("id")
+        if isinstance(raw, bool) or not isinstance(raw, (str, int)):
+            continue
+        text = str(raw).strip()
+        if text:
+            ids.append(text)
+    return ids
+
+
+def _precheck_import_batch(items: list, *, with_messages: bool) -> list:
+    """整批两遍预检，返回与 items 一一对应的 [(entity_id, messages, reject_code), ...]。
+
+    必须先扫完整批再定论：有效 ID 在同一数组出现多次时，**所有同 ID 副本一起拒绝**，
+    该 ID 零写库。只拒后来者会让先到的那份静默胜出，与冻结合同冲突。
+
+    冻结优先级：invalid_item → missing_id → duplicate_id → messages 检查。
+    messages 为 None 表示 payload 没带 messages 键（只更新 metadata、保留旧消息）；
+    messages 为 [] 表示客户端明确要求清空。二者语义不同，不得合并。
+    reject_code 非空时该实体一律不写库。
+    """
+    # 第一遍：只定结构与 ID，不下重复结论
+    staged = []
+    for item in items:
+        if not isinstance(item, dict):
+            staged.append(("", "invalid_item"))
+            continue
+        entity_id = _import_entity_id(item)
+        staged.append((entity_id, None if entity_id else "missing_id"))
+
+    frequency: dict = {}
+    for entity_id, code in staged:
+        if code is None:
+            frequency[entity_id] = frequency.get(entity_id, 0) + 1
+
+    # 第二遍：按频次统一裁决，再检查 messages
+    resolved = []
+    for item, (entity_id, code) in zip(items, staged):
+        if code is not None:
+            resolved.append((entity_id, None, code))
+            continue
+        if frequency.get(entity_id, 0) > 1:
+            resolved.append((entity_id, None, "duplicate_id"))
+            continue
+        messages = None
+        if with_messages and "messages" in item:
+            messages = item.get("messages")
+            if not isinstance(messages, list):
+                resolved.append((entity_id, None, "invalid_messages"))
+                continue
+            if any(not isinstance(m, dict) for m in messages):
+                resolved.append((entity_id, None, "invalid_message_item"))
+                continue
+            explicit_ids = _explicit_message_ids(messages)
+            if len(explicit_ids) != len(set(explicit_ids)):
+                # 同一对话内显式消息 ID 撞车属于输入不合规，在写库前拒绝整条对话，
+                # 不让它到主键约束处炸成服务器写入失败。
+                resolved.append((entity_id, None, "duplicate_message_id"))
+                continue
+        resolved.append((entity_id, messages, None))
+    return resolved
+
+
 async def sync_import_all(conversations: list, projects: list):
-    """一次性导入所有对话和项目（localStorage → 数据库）"""
-    imported_convs = 0
-    imported_msgs = 0
-    imported_projs = 0
+    """一次性导入所有对话和项目（localStorage → 数据库）。
+
+    W2-02：
+      · 每个对话的「元数据 upsert + 消息替换」合并进同一事务（复用同一连接），
+        任一步失败整体回滚，服务器绝不留下只有元数据的空壳对话；
+      · 项目维持逐项独立原子写，单条失败不阻断其他实体；
+      · 输入预检把畸形条目归入 rejected 并且完全不写库，与数据库执行失败
+        （failed）分开记账，不再静默接受缺 id 的条目；重复的实体 ID 与
+        对话内重复的显式消息 ID 都在写库前整体拒绝；
+      · 计数与成功 ID 仅在实体事务提交后累加，回执可直接对账；
+      · 回执保留既有兼容字段，并新增结构化三态回执（counts 与 rejected_details）。
+    对账不变式：conversations == counts.conversations.success == len(imported_conversation_ids)，
+                projects      == counts.projects.success      == len(imported_project_ids)。
+    """
+    counts = {
+        "conversations": {"success": 0, "rejected": 0, "failed": 0},
+        "projects": {"success": 0, "rejected": 0, "failed": 0},
+        "messages": {"success": 0},
+    }
     errors = []
+    error_details = []
+    rejected_details = []
+    imported_conversation_ids = []
+    imported_project_ids = []
 
-    # 导入项目
-    for proj in projects:
-        try:
-            await sync_upsert_project(proj)
-            imported_projs += 1
-        except Exception as e:
-            errors.append(f"项目 {proj.get('id', '?')}: {e}")
-            print(f"⚠️ 项目导入失败: {proj.get('id', '?')} — {e}")
+    def record_reject(kind: str, entity_id: str, code: str) -> None:
+        counts[f"{kind}s"]["rejected"] += 1
+        rejected_details.append(
+            {"type": kind, "id": entity_id, "code": code, "error": _IMPORT_REJECT_SUMMARIES[code]}
+        )
+        # 观测事件只含实体种类与拒绝码，不含 payload 也不含实体 ID
+        print(f"event=sync_import_reject entity={kind} code={code} increment=1")
 
-    # 导入对话 + 消息
-    for conv in conversations:
+    def record_failure(kind: str, entity_id: str) -> None:
+        counts[f"{kind}s"]["failed"] += 1
+        errors.append(f"{'对话' if kind == 'conversation' else '项目'} {entity_id}: {_IMPORT_FAIL_SUMMARY}")
+        error_details.append(
+            {"type": kind, "id": entity_id, "code": _IMPORT_FAIL_CODE, "error": _IMPORT_FAIL_SUMMARY}
+        )
+        print(f"event=sync_import_failure entity={kind} code={_IMPORT_FAIL_CODE} increment=1")
+
+    pool = await get_pool()
+
+    # 导入项目（单条 upsert 自身原子；逐项记账，失败不牵连其他实体）
+    for proj, (pid, _, reject) in zip(projects, _precheck_import_batch(projects, with_messages=False)):
+        if reject:
+            record_reject("project", pid, reject)
+            continue
+        # 复制后覆盖权威 ID：预检已把首尾空白清理掉，写库必须用同一个值，
+        # 否则回执报清理后的 ID、主键却落成带空白的原值。
+        proj_meta = dict(proj)
+        proj_meta["id"] = pid
         try:
-            # 用 .get() 而非 .pop()，避免修改调用方的原始数据
-            messages = conv.get("messages", [])
-            # 传给 sync_upsert_conversation 时排除 messages 字段
-            conv_meta = {k: v for k, v in conv.items() if k != "messages"}
-            await sync_upsert_conversation(conv_meta)
-            if messages:
-                await sync_upsert_messages(conv_meta.get("id", conv.get("id", "")), messages)
-                imported_msgs += len(messages)
-            imported_convs += 1
-        except Exception as e:
-            errors.append(f"对话 {conv.get('id', '?')}: {e}")
-            print(f"⚠️ 对话导入失败: {conv.get('id', '?')} — {e}")
+            await sync_upsert_project(proj_meta)
+            counts["projects"]["success"] += 1
+            imported_project_ids.append(pid)
+        except Exception:
+            record_failure("project", pid)
+
+    # 导入对话 + 消息（每个对话一个事务：元数据与消息同生共死）
+    for conv, (cid, messages, reject) in zip(conversations, _precheck_import_batch(conversations, with_messages=True)):
+        if reject:
+            record_reject("conversation", cid, reject)
+            continue
+        # 用字典推导而非 .pop()，避免修改调用方的原始数据
+        conv_meta = {k: v for k, v in conv.items() if k != "messages"}
+        conv_meta["id"] = cid
+        try:
+            async with pool.acquire() as conn:
+                async with conn.transaction():
+                    await _upsert_conversation_tx(conn, conv_meta)
+                    # messages 缺失 → 只更新 metadata，保留既有消息；
+                    # 显式 [] → 清空；非空数组 → 完整替换并删除差集。
+                    if messages is not None:
+                        await _replace_messages_tx(conn, cid, messages)
+            # 事务已提交，方才计数并进入成功 ID 数组
+            counts["conversations"]["success"] += 1
+            if messages is not None:
+                counts["messages"]["success"] += len(messages)
+            imported_conversation_ids.append(cid)
+        except Exception:
+            record_failure("conversation", cid)
 
     return {
-        "conversations": imported_convs,
-        "messages": imported_msgs,
-        "projects": imported_projs,
+        "conversations": counts["conversations"]["success"],
+        "messages": counts["messages"]["success"],
+        "projects": counts["projects"]["success"],
         "errors": errors,
+        "imported_conversation_ids": imported_conversation_ids,
+        "imported_project_ids": imported_project_ids,
+        "error_details": error_details,
+        "counts": counts,
+        "rejected_details": rejected_details,
     }
 
 

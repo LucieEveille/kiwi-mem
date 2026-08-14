@@ -23,7 +23,7 @@ import re
 import sys
 import uuid
 import zipfile
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from datetime import date, datetime as StdDateTime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Awaitable, Callable
@@ -1507,6 +1507,701 @@ async def test_w2_01(client: httpx.AsyncClient) -> None:
     require(malformed.status_code == 400, "new JSON-object endpoint accepted an array body")
 
 
+# ---------------------------------------------------------------------------
+# W2-02 | G1.1 message identity fields and atomic import
+# ---------------------------------------------------------------------------
+
+_MESSAGE_CONTENT_COLUMNS = (
+    "role", "content", "time", "model", "streaming", "error",
+    "token_info", "thinking", "status_events", "tool_events",
+    "memory_result", "memory_event", "handoff_info", "web_search_results",
+    "versions", "version_index", "images", "attachments", "usage", "summary",
+    "dream_event", "turn_key",
+)
+
+
+async def _install_fail_trigger(table: str, name: str, column: str, match: str, message: str) -> None:
+    """Raise a server-side exception for one specific row, to prove transaction edges."""
+    await _pool_execute(
+        f"""
+        CREATE OR REPLACE FUNCTION {name}() RETURNS trigger AS $fn$
+        BEGIN
+            IF NEW.{column} = '{match}' THEN RAISE EXCEPTION '{message}'; END IF;
+            RETURN NEW;
+        END; $fn$ LANGUAGE plpgsql
+        """
+    )
+    await _pool_execute(f"DROP TRIGGER IF EXISTS {name}_trg ON {table}")
+    await _pool_execute(
+        f"CREATE TRIGGER {name}_trg BEFORE INSERT OR UPDATE ON {table} "
+        f"FOR EACH ROW EXECUTE FUNCTION {name}()"
+    )
+
+
+async def _drop_fail_trigger(table: str, name: str) -> None:
+    await _pool_execute(f"DROP TRIGGER IF EXISTS {name}_trg ON {table}")
+    await _pool_execute(f"DROP FUNCTION IF EXISTS {name}()")
+
+
+async def test_w2_02(client: httpx.AsyncClient) -> None:
+    """W2-02 G1.1 message identity fields, atomic import, and receipt guards."""
+    prefix = "w202-"
+
+    # ---- schema: additive, nullable, no default, no index -------------------
+    schema_rows = {
+        row["column_name"]: row
+        for row in await _pool_fetch(
+            """
+            SELECT column_name, data_type, is_nullable, column_default
+            FROM information_schema.columns
+            WHERE table_name = 'chat_messages' AND column_name = ANY($1::text[])
+            """,
+            ["dream_event", "turn_key"],
+        )
+    }
+    missing_cols = sorted({"dream_event", "turn_key"} - set(schema_rows))
+    require(not missing_cols, f"W2-02 chat_messages columns missing: {missing_cols}")
+    require(schema_rows["dream_event"]["data_type"] == "jsonb", "dream_event must be jsonb")
+    require(schema_rows["turn_key"]["data_type"] == "text", "turn_key must be text")
+    for col in ("dream_event", "turn_key"):
+        require(schema_rows[col]["is_nullable"] == "YES", f"{col} must be nullable")
+        require(schema_rows[col]["column_default"] is None, f"{col} must have no default")
+    indexed = await _pool_fetchval(
+        """
+        SELECT COUNT(*) FROM pg_indexes
+        WHERE tablename = 'chat_messages'
+          AND (indexdef LIKE '%dream_event%' OR indexdef LIKE '%turn_key%')
+        """
+    )
+    require(indexed == 0, "W2-02 columns must not be indexed in this ticket")
+    passed("T-W2-02-1 dream_event/turn_key are nullable, default-free, unindexed")
+
+    # init_tables() already ran twice in run_suite; re-running here proves the new
+    # migration block is still idempotent after the columns exist.
+    await database.init_tables()
+    recheck = await _pool_fetchval(
+        """
+        SELECT COUNT(*) FROM information_schema.columns
+        WHERE table_name = 'chat_messages' AND column_name = ANY($1::text[])
+        """,
+        ["dream_event", "turn_key"],
+    )
+    require(recheck == 2, "repeat init_tables() disturbed the W2-02 columns")
+    passed("T-W2-02-2 repeat init_tables() is idempotent for the new columns")
+
+    # ---- legacy database upgrade path --------------------------------------
+    await _truncate("chat_messages", "chat_conversations", "chat_projects")
+    legacy_conv, legacy_msg = f"{prefix}old-conv", f"{prefix}old-msg"
+    await _pool_execute("ALTER TABLE chat_messages DROP COLUMN IF EXISTS dream_event")
+    await _pool_execute("ALTER TABLE chat_messages DROP COLUMN IF EXISTS turn_key")
+    await _pool_execute(
+        "INSERT INTO chat_conversations (id, title) VALUES ($1, $2)", legacy_conv, "legacy"
+    )
+    await _pool_execute(
+        "INSERT INTO chat_messages (id, conversation_id, role, content) VALUES ($1, $2, $3, $4)",
+        legacy_msg, legacy_conv, "user", "legacy-body",
+    )
+    await database.init_tables()
+    upgraded = await _pool_fetchrow(
+        "SELECT content, dream_event, turn_key FROM chat_messages WHERE id = $1", legacy_msg
+    )
+    require(upgraded is not None, "legacy row vanished during migration")
+    require(upgraded["content"] == "legacy-body", "migration damaged existing message content")
+    require(upgraded["dream_event"] is None and upgraded["turn_key"] is None,
+            "existing rows must backfill to NULL, never to a synthesized value")
+    passed("T-W2-02-3 old databases upgrade in place with NULL backfill")
+
+    # ---- field assembly: both channels, both key styles ---------------------
+    await _truncate("chat_messages", "chat_conversations", "chat_projects")
+    imp_conv, imp_msg_camel, imp_msg_snake = f"{prefix}imp-c", f"{prefix}imp-m1", f"{prefix}imp-m2"
+    response = await client.post(
+        "/sync/import",
+        json={
+            "conversations": [{
+                "id": imp_conv, "title": "import",
+                "messages": [
+                    {"id": imp_msg_camel, "role": "user", "content": "a",
+                     "dreamEvent": {"stage": "camel"}, "turnKey": "tk-camel"},
+                    {"id": imp_msg_snake, "role": "assistant", "content": "b",
+                     "dream_event": {"stage": "snake"}, "turn_key": "tk-snake"},
+                ],
+            }],
+            "projects": [],
+        },
+    )
+    require(response.status_code == 200, f"import failed: {response.status_code} {response.text}")
+    camel_row = await _pool_fetchrow(
+        "SELECT dream_event, turn_key FROM chat_messages WHERE id = $1", imp_msg_camel
+    )
+    snake_row = await _pool_fetchrow(
+        "SELECT dream_event, turn_key FROM chat_messages WHERE id = $1", imp_msg_snake
+    )
+    require(json.loads(camel_row["dream_event"])["stage"] == "camel" and camel_row["turn_key"] == "tk-camel",
+            "import dropped camelCase dreamEvent/turnKey")
+    require(json.loads(snake_row["dream_event"])["stage"] == "snake" and snake_row["turn_key"] == "tk-snake",
+            "import dropped snake_case dream_event/turn_key")
+    passed("T-W2-02-4 import writes the new fields in both key styles")
+
+    gran_conv, gran_msg = f"{prefix}gran-c", f"{prefix}gran-m"
+    await client.post("/sync/conversations", json={"id": gran_conv, "title": "granular"})
+    response = await client.put(
+        f"/sync/conversations/{gran_conv}/messages/{gran_msg}",
+        json={"role": "user", "content": "a", "dreamEvent": {"stage": "camel"}, "turnKey": "tk-camel"},
+    )
+    require(response.status_code == 200, "granular upsert with new fields failed")
+    gran_row = await _pool_fetchrow(
+        "SELECT dream_event, turn_key FROM chat_messages WHERE id = $1", gran_msg
+    )
+    require(json.loads(gran_row["dream_event"])["stage"] == "camel" and gran_row["turn_key"] == "tk-camel",
+            "granular upsert dropped the new fields")
+    passed("T-W2-02-5 granular upsert writes the new fields")
+
+    # Same payload through both channels must land byte-identical on every content column.
+    both_conv, both_msg = f"{prefix}both-c", f"{prefix}both-m"
+    shared_payload = {
+        "role": "assistant", "content": "shared-body", "model": "m-1",
+        "thinking": "t", "summary": "s", "versionIndex": 3,
+        "tokenInfo": {"in": 1}, "statusEvents": [{"e": 1}], "toolEvents": [{"t": 1}],
+        "memoryResult": {"m": 1}, "memoryEvent": {"me": 1}, "handoffInfo": {"h": 1},
+        "webSearchResults": [{"w": 1}], "versions": [{"v": 1}], "images": [{"i": 1}],
+        "attachments": [{"a": 1}], "usage": {"u": 1},
+        "dreamEvent": {"d": 1}, "turnKey": "tk-shared", "error": True,
+        "time": "2026-05-05T05:05:05Z",
+    }
+    await client.post("/sync/import", json={
+        "conversations": [{"id": both_conv, "title": "both",
+                           "messages": [dict(shared_payload, id=both_msg)]}],
+        "projects": [],
+    })
+    import_cols = await _pool_fetchrow(
+        f"SELECT {', '.join(_MESSAGE_CONTENT_COLUMNS)} FROM chat_messages WHERE id = $1", both_msg
+    )
+    await _pool_execute("DELETE FROM chat_messages WHERE id = $1", both_msg)
+    response = await client.put(
+        f"/sync/conversations/{both_conv}/messages/{both_msg}", json=dict(shared_payload)
+    )
+    require(response.status_code == 200, "granular upsert of the shared payload failed")
+    granular_cols = await _pool_fetchrow(
+        f"SELECT {', '.join(_MESSAGE_CONTENT_COLUMNS)} FROM chat_messages WHERE id = $1", both_msg
+    )
+    divergent = [c for c in _MESSAGE_CONTENT_COLUMNS if import_cols[c] != granular_cols[c]]
+    require(not divergent, f"import and granular channels diverged on: {divergent}")
+    passed("T-W2-02-6 both write channels assemble all 22 content columns identically")
+
+    # ---- old-client compatibility: missing fields fall back to NULL ---------
+    await client.put(
+        f"/sync/conversations/{gran_conv}/messages/{gran_msg}",
+        json={"role": "user", "content": "refilled", "dreamEvent": {"x": 1}, "turnKey": "tk-x"},
+    )
+    response = await client.put(
+        f"/sync/conversations/{gran_conv}/messages/{gran_msg}",
+        json={"role": "user", "content": "old-client"},
+    )
+    require(response.status_code == 200, "old-client payload without the new fields was rejected")
+    stale = await _pool_fetchrow(
+        "SELECT dream_event, turn_key, content FROM chat_messages WHERE id = $1", gran_msg
+    )
+    require(stale["content"] == "old-client", "full-snapshot semantics broke for content")
+    require(stale["dream_event"] is None and stale["turn_key"] is None,
+            "old payload must clear the new fields, not retain stale values")
+    old_import_conv, old_import_msg = f"{prefix}oldimp-c", f"{prefix}oldimp-m"
+    await client.post("/sync/import", json={
+        "conversations": [{"id": old_import_conv, "title": "old",
+                           "messages": [{"id": old_import_msg, "role": "user", "content": "x"}]}],
+        "projects": [],
+    })
+    old_row = await _pool_fetchrow(
+        "SELECT dream_event, turn_key FROM chat_messages WHERE id = $1", old_import_msg
+    )
+    require(old_row["dream_event"] is None and old_row["turn_key"] is None,
+            "old import payload must write NULL for the new fields")
+    passed("T-W2-02-7 payloads lacking the new fields write NULL on both channels")
+
+    # ---- import atomicity: no shell conversations ---------------------------
+    await _truncate("chat_messages", "chat_conversations", "chat_projects")
+    fail_conv, ok_conv = f"{prefix}fail-c", f"{prefix}ok-c"
+    await _install_fail_trigger(
+        "chat_messages", "w202_fail_msg", "conversation_id", fail_conv,
+        "W2-02 injected message failure",
+    )
+    try:
+        response = await client.post("/sync/import", json={
+            "conversations": [
+                {"id": fail_conv, "title": "doomed",
+                 "messages": [{"id": f"{prefix}fail-m", "role": "user", "content": "x"}]},
+                {"id": ok_conv, "title": "healthy",
+                 "messages": [{"id": f"{prefix}ok-m", "role": "user", "content": "y"}]},
+            ],
+            "projects": [],
+        })
+        require(response.status_code == 200, "import must stay 200 for per-entity failures")
+        body = response.json()
+        require(
+            not await _pool_fetchval("SELECT EXISTS(SELECT 1 FROM chat_conversations WHERE id = $1)", fail_conv),
+            "metadata survived a failed message write: half-imported shell conversation",
+        )
+        require(body["counts"]["conversations"]["failed"] == 1, "failed conversation was not counted as failed")
+        require([d["code"] for d in body["error_details"]] == ["write_failed"],
+                f"message-write failure code must be write_failed: {[d.get('code') for d in body['error_details']]}")
+        require(fail_conv not in body["imported_conversation_ids"], "failed conversation entered the success IDs")
+        require(
+            await _pool_fetchval("SELECT EXISTS(SELECT 1 FROM chat_messages WHERE conversation_id = $1)", ok_conv),
+            "a sibling failure blocked a healthy conversation",
+        )
+        require(ok_conv in body["imported_conversation_ids"], "healthy conversation missing from success IDs")
+        passed("T-W2-02-8 message failure rolls back its conversation and spares siblings")
+    finally:
+        await _drop_fail_trigger("chat_messages", "w202_fail_msg")
+
+    # Update path: metadata must not be overwritten when the message write fails.
+    await _truncate("chat_messages", "chat_conversations", "chat_projects")
+    upd_conv, upd_msg = f"{prefix}upd-c", f"{prefix}upd-m"
+    await client.post("/sync/import", json={
+        "conversations": [{"id": upd_conv, "title": "original-title", "model": "original-model",
+                           "messages": [{"id": upd_msg, "role": "user", "content": "original-body"}]}],
+        "projects": [],
+    })
+    await _install_fail_trigger(
+        "chat_messages", "w202_fail_upd", "conversation_id", upd_conv,
+        "W2-02 injected update failure",
+    )
+    try:
+        await client.post("/sync/import", json={
+            "conversations": [{"id": upd_conv, "title": "NEW-title", "model": "NEW-model",
+                               "messages": [{"id": f"{prefix}upd-m2", "role": "user", "content": "NEW-body"}]}],
+            "projects": [],
+        })
+        meta = await _pool_fetchrow("SELECT title, model FROM chat_conversations WHERE id = $1", upd_conv)
+        require(meta["title"] == "original-title" and meta["model"] == "original-model",
+                "conversation metadata was overwritten while its messages rolled back")
+        body_row = await _pool_fetchrow("SELECT content FROM chat_messages WHERE id = $1", upd_msg)
+        require(body_row is not None and body_row["content"] == "original-body",
+                "original messages were lost to a failed update")
+        passed("T-W2-02-9 failed update leaves metadata and messages on the same old version")
+    finally:
+        await _drop_fail_trigger("chat_messages", "w202_fail_upd")
+
+    # ---- per-entity isolation: project / metadata / message failures --------
+    await _truncate("chat_messages", "chat_conversations", "chat_projects")
+    bad_proj, good_proj = f"{prefix}bad-p", f"{prefix}good-p"
+    await _install_fail_trigger("chat_projects", "w202_fail_proj", "id", bad_proj,
+                                "W2-02 injected project failure")
+    try:
+        response = await client.post("/sync/import", json={
+            "conversations": [{"id": f"{prefix}iso-c", "title": "iso", "messages": []}],
+            "projects": [{"id": bad_proj, "name": "doomed"}, {"id": good_proj, "name": "healthy"}],
+        })
+        body = response.json()
+        require(not await _pool_fetchval("SELECT EXISTS(SELECT 1 FROM chat_projects WHERE id = $1)", bad_proj),
+                "failed project left a half state")
+        require(await _pool_fetchval("SELECT EXISTS(SELECT 1 FROM chat_projects WHERE id = $1)", good_proj),
+                "a failed project blocked a healthy sibling project")
+        require(await _pool_fetchval("SELECT EXISTS(SELECT 1 FROM chat_conversations WHERE id = $1)", f"{prefix}iso-c"),
+                "a failed project blocked conversation import")
+        require(body["counts"]["projects"] == {"success": 1, "rejected": 0, "failed": 1},
+                f"project counts wrong: {body['counts']['projects']}")
+        require([d["code"] for d in body["error_details"]] == ["write_failed"],
+                f"project failure code must be write_failed: {[d.get('code') for d in body['error_details']]}")
+        require(body["imported_project_ids"] == [good_proj], "project success IDs include a failed entity")
+        passed("T-W2-02-10 project write failure is isolated to that project")
+    finally:
+        await _drop_fail_trigger("chat_projects", "w202_fail_proj")
+
+    await _truncate("chat_messages", "chat_conversations", "chat_projects")
+    meta_fail_conv = f"{prefix}metafail-c"
+    await _install_fail_trigger("chat_conversations", "w202_fail_meta", "id", meta_fail_conv,
+                                "W2-02 injected metadata failure")
+    try:
+        response = await client.post("/sync/import", json={
+            "conversations": [
+                {"id": meta_fail_conv, "title": "doomed",
+                 "messages": [{"id": f"{prefix}metafail-m", "role": "user", "content": "x"}]},
+                {"id": f"{prefix}metaok-c", "title": "healthy", "messages": []},
+            ],
+            "projects": [{"id": f"{prefix}metaok-p", "name": "healthy"}],
+        })
+        body = response.json()
+        require(not await _pool_fetchval("SELECT EXISTS(SELECT 1 FROM chat_conversations WHERE id = $1)", meta_fail_conv),
+                "failed metadata write left a conversation row")
+        require(not await _pool_fetchval("SELECT EXISTS(SELECT 1 FROM chat_messages WHERE conversation_id = $1)", meta_fail_conv),
+                "messages survived a failed metadata write")
+        require(await _pool_fetchval("SELECT EXISTS(SELECT 1 FROM chat_conversations WHERE id = $1)", f"{prefix}metaok-c"),
+                "a failed conversation blocked a healthy sibling")
+        require(await _pool_fetchval("SELECT EXISTS(SELECT 1 FROM chat_projects WHERE id = $1)", f"{prefix}metaok-p"),
+                "a failed conversation blocked project import")
+        require(body["counts"]["conversations"]["failed"] == 1, "metadata failure was not counted")
+        require([d["code"] for d in body["error_details"]] == ["write_failed"],
+                f"metadata failure code must be write_failed: {[d.get('code') for d in body['error_details']]}")
+        passed("T-W2-02-11 metadata write failure is isolated and leaves no messages")
+    finally:
+        await _drop_fail_trigger("chat_conversations", "w202_fail_meta")
+
+    # ---- structured receipt and reconciliation ------------------------------
+    await _truncate("chat_messages", "chat_conversations", "chat_projects")
+    response = await client.post("/sync/import", json={
+        "conversations": [
+            {"id": f"{prefix}r1", "title": "r1", "messages": [
+                {"id": f"{prefix}r1m1", "role": "user", "content": "a"},
+                {"id": f"{prefix}r1m2", "role": "assistant", "content": "b"},
+            ]},
+            {"id": f"{prefix}r2", "title": "r2", "messages": []},
+            {"title": "no id at all", "messages": []},
+        ],
+        "projects": [{"id": f"{prefix}rp1", "name": "p1"}],
+    })
+    require(response.status_code == 200, "receipt import failed")
+    body = response.json()
+    for legacy_key in ("conversations", "messages", "projects", "errors",
+                       "imported_conversation_ids", "imported_project_ids", "error_details"):
+        require(legacy_key in body, f"receipt dropped the legacy key {legacy_key}")
+    require(body["conversations"] == body["counts"]["conversations"]["success"],
+            "legacy conversation count != counts.conversations.success")
+    require(body["projects"] == body["counts"]["projects"]["success"],
+            "legacy project count != counts.projects.success")
+    require(body["messages"] == body["counts"]["messages"]["success"],
+            "legacy message count != counts.messages.success")
+    require(body["conversations"] == len(body["imported_conversation_ids"]),
+            "conversation success count != committed ID array length")
+    require(body["projects"] == len(body["imported_project_ids"]),
+            "project success count != committed ID array length")
+    require(body["counts"]["conversations"]["rejected"] == 1, "id-less conversation was not rejected")
+    require(len(body["rejected_details"]) == 1 and body["rejected_details"][0]["code"] == "missing_id",
+            f"rejected_details wrong: {body.get('rejected_details')}")
+    require(body["messages"] == 2, "message success count did not match committed rows")
+    passed("T-W2-02-12 receipt keeps legacy keys and reconciles against committed rows")
+
+    # ---- input precheck: top-level 400, per-entity rejected -----------------
+    for bad_body in ([1, 2, 3], {"conversations": "nope"}, {"projects": {"a": 1}}):
+        response = await client.post("/sync/import", json=bad_body)
+        require(response.status_code == 400,
+                f"malformed top-level import body was not 400: {bad_body!r} -> {response.status_code}")
+    passed("T-W2-02-13 malformed top-level import bodies return 400")
+
+    await _truncate("chat_messages", "chat_conversations", "chat_projects")
+    dup_conv, dup_proj = f"{prefix}dup-c", f"{prefix}dup-p"
+    fine_conv, fine_proj = f"{prefix}fine-c", f"{prefix}fine-p"
+    response = await client.post("/sync/import", json={
+        "conversations": [
+            "not-a-dict",
+            {"title": "missing id"},
+            {"id": dup_conv, "title": "first", "messages": []},
+            {"id": dup_conv, "title": "second", "messages": []},
+            {"id": f"{prefix}badmsgs", "title": "bad messages", "messages": "nope"},
+            {"id": f"{prefix}badmsgitem", "title": "bad message item", "messages": ["x"]},
+            {"id": fine_conv, "title": "healthy", "messages": []},
+        ],
+        "projects": [
+            "not-a-dict",
+            {"name": "missing id"},
+            {"id": dup_proj, "name": "p-first"},
+            {"id": dup_proj, "name": "p-second"},
+            {"id": fine_proj, "name": "healthy"},
+        ],
+    })
+    require(response.status_code == 200, "per-entity rejects must not fail the whole batch")
+    body = response.json()
+    codes = [d["code"] for d in body["rejected_details"]]
+    for expected in ("invalid_item", "missing_id", "duplicate_id", "invalid_messages", "invalid_message_item"):
+        require(expected in codes, f"reject code {expected} missing from {codes}")
+    # 重复实体 ID：每一份副本都必须自己进 rejected，先到者不得静默胜出
+    conv_dups = [d for d in body["rejected_details"]
+                 if d["type"] == "conversation" and d["code"] == "duplicate_id"]
+    proj_dups = [d for d in body["rejected_details"]
+                 if d["type"] == "project" and d["code"] == "duplicate_id"]
+    require(len(conv_dups) == 2, f"both duplicate conversation copies must be rejected, got {len(conv_dups)}")
+    require(len(proj_dups) == 2, f"both duplicate project copies must be rejected, got {len(proj_dups)}")
+    require(body["counts"]["conversations"]["rejected"] == 6,
+            f"conversation rejected count wrong: {body['counts']['conversations']}")
+    require(body["counts"]["projects"]["rejected"] == 4,
+            f"project rejected count wrong: {body['counts']['projects']}")
+    require(body["counts"]["conversations"]["success"] == 1, "the one valid conversation did not import")
+    require(body["counts"]["projects"]["success"] == 1, "the one valid project did not import")
+    require(body["imported_conversation_ids"] == [fine_conv],
+            f"conversation success IDs wrong: {body['imported_conversation_ids']}")
+    require(body["imported_project_ids"] == [fine_proj],
+            f"project success IDs wrong: {body['imported_project_ids']}")
+    require(not await _pool_fetchval("SELECT EXISTS(SELECT 1 FROM chat_conversations WHERE id = $1)", dup_conv),
+            "a duplicated conversation id reached the database")
+    require(not await _pool_fetchval("SELECT EXISTS(SELECT 1 FROM chat_projects WHERE id = $1)", dup_proj),
+            "a duplicated project id reached the database")
+    require(not await _pool_fetchval("SELECT EXISTS(SELECT 1 FROM chat_conversations WHERE id = '')"),
+            "an id-less conversation was silently written with an empty id")
+    require(body["counts"]["conversations"]["failed"] == 0 and body["counts"]["projects"]["failed"] == 0,
+            "rejects must not be counted as failures")
+    passed("T-W2-02-14 duplicate entity IDs reject every copy and never reach the database")
+
+    # ---- message semantics: absent / empty / shorter array ------------------
+    await _truncate("chat_messages", "chat_conversations", "chat_projects")
+    sem_conv = f"{prefix}sem-c"
+    await client.post("/sync/import", json={
+        "conversations": [{"id": sem_conv, "title": "v1", "messages": [
+            {"id": f"{prefix}sem-m1", "role": "user", "content": "1"},
+            {"id": f"{prefix}sem-m2", "role": "assistant", "content": "2"},
+            {"id": f"{prefix}sem-m3", "role": "user", "content": "3"},
+        ]}],
+        "projects": [],
+    })
+    require(await _pool_fetchval("SELECT COUNT(*) FROM chat_messages WHERE conversation_id = $1", sem_conv) == 3,
+            "seed import did not write three messages")
+
+    response = await client.post("/sync/import", json={
+        "conversations": [{"id": sem_conv, "title": "v2-metadata-only"}], "projects": [],
+    })
+    require(response.status_code == 200, "metadata-only import failed")
+    require(await _pool_fetchval("SELECT COUNT(*) FROM chat_messages WHERE conversation_id = $1", sem_conv) == 3,
+            "absent messages key must preserve existing messages")
+    require(await _pool_fetchval("SELECT title FROM chat_conversations WHERE id = $1", sem_conv) == "v2-metadata-only",
+            "metadata-only import did not update metadata")
+    require(response.json()["counts"]["messages"]["success"] == 0,
+            "metadata-only import must not claim message writes")
+
+    await client.post("/sync/import", json={
+        "conversations": [{"id": sem_conv, "title": "v3", "messages": [
+            {"id": f"{prefix}sem-m1", "role": "user", "content": "1-kept"},
+        ]}],
+        "projects": [],
+    })
+    remaining = await _pool_fetch(
+        "SELECT id FROM chat_messages WHERE conversation_id = $1 ORDER BY id", sem_conv
+    )
+    require([r["id"] for r in remaining] == [f"{prefix}sem-m1"],
+            "a shorter array must replace the set and delete the difference")
+
+    response = await client.post("/sync/import", json={
+        "conversations": [{"id": sem_conv, "title": "v4", "messages": []}], "projects": [],
+    })
+    require(response.status_code == 200, "explicit empty-array import failed")
+    require(await _pool_fetchval("SELECT COUNT(*) FROM chat_messages WHERE conversation_id = $1", sem_conv) == 0,
+            "explicit empty array must clear the conversation")
+    passed("T-W2-02-15 absent / empty / shorter message arrays have distinct semantics")
+
+    # ---- error safety: no sentinel leaks anywhere ---------------------------
+    await _truncate("chat_messages", "chat_conversations", "chat_projects")
+    sentinel = f"W2_02_SECRET_{uuid.uuid4().hex}"
+    leak_conv = f"{prefix}leak-c"
+    await _install_fail_trigger("chat_messages", "w202_leak", "conversation_id", leak_conv, sentinel)
+    try:
+        capture = io.StringIO()
+        with redirect_stdout(capture):
+            response = await client.post("/sync/import", json={
+                "conversations": [{"id": leak_conv, "title": "leaky",
+                                   "messages": [{"id": f"{prefix}leak-m", "role": "user", "content": "x"}]}],
+                "projects": [],
+            })
+        raw = response.text
+        body = response.json()
+        require(sentinel not in raw, "database error text leaked into the import HTTP response")
+        require(all(sentinel not in str(e) for e in body["errors"]), "sentinel leaked into errors[]")
+        require(all(sentinel not in str(d.get("error", "")) for d in body["error_details"]),
+                "sentinel leaked into error_details[].error")
+        require(sentinel not in capture.getvalue(), "sentinel leaked into structured logs")
+        require(body["error_details"] and body["error_details"][0].get("code"),
+                "error_details must carry a controlled code")
+        require(body["error_details"][0]["id"] == leak_conv,
+                "error_details must still name the entity for reconciliation")
+        passed("T-W2-02-16 database error text never reaches responses or logs")
+    finally:
+        await _drop_fail_trigger("chat_messages", "w202_leak")
+
+    # ---- frozen rule: no 'delete latest assistant message' inference --------
+    # Scope note: this guard covers the chat_messages sync channel only.  The
+    # conversations event-ledger helper delete_latest_assistant_message() is a
+    # known W2-07 debt and is deliberately out of this guard's reach.
+    source = (ROOT / "database.py").read_text(encoding="utf-8")
+    deletes = re.findall(r"DELETE FROM chat_messages[^\"']*", source)
+    require(deletes, "expected at least one chat_messages delete statement to audit")
+    for statement in deletes:
+        flat = " ".join(statement.split())
+        require("WHERE" in flat, f"unconditional chat_messages delete: {flat}")
+        require("ORDER BY" not in flat and "LIMIT" not in flat,
+                f"chat_messages delete infers rows by ordering: {flat}")
+        require("role" not in flat.lower(),
+                f"chat_messages delete branches on role: {flat}")
+    passed("T-W2-02-17 chat_messages deletes stay deterministic, never role/order inferred")
+
+    # ---- per-column landing against an independent expectation table -------
+    # Channel-vs-channel comparison (T-W2-02-6) cannot catch a shift that both
+    # channels share, because they assemble through the same function.  These
+    # expectations are written by hand here and never derived from production code.
+    await _truncate("chat_messages", "chat_conversations", "chat_projects")
+    col_conv, col_msg = f"{prefix}col-c", f"{prefix}col-m"
+    await client.post("/sync/conversations", json={"id": col_conv, "title": "columns"})
+    response = await client.put(f"/sync/conversations/{col_conv}/messages/{col_msg}", json={
+        "role": "assistant", "content": "col-content", "time": "2026-03-04T05:06:07Z",
+        "model": "col-model", "error": True, "thinking": "col-thinking",
+        "summary": "col-summary", "versionIndex": 7, "sortOrder": 41,
+        "tokenInfo": {"col": "token_info"}, "statusEvents": [{"col": "status_events"}],
+        "toolEvents": [{"col": "tool_events"}], "memoryResult": {"col": "memory_result"},
+        "memoryEvent": {"col": "memory_event"}, "handoffInfo": {"col": "handoff_info"},
+        "webSearchResults": [{"col": "web_search_results"}], "versions": [{"col": "versions"}],
+        "images": [{"col": "images"}], "attachments": [{"col": "attachments"}],
+        "usage": {"col": "usage"}, "dreamEvent": {"col": "dream_event"}, "turnKey": "col-turn-key",
+    })
+    require(response.status_code == 200, f"per-column upsert failed: {response.status_code} {response.text}")
+    row = await _pool_fetchrow(
+        f"SELECT {', '.join(_MESSAGE_CONTENT_COLUMNS)}, sort_order FROM chat_messages WHERE id = $1",
+        col_msg,
+    )
+    for col, want in {
+        "role": "assistant", "content": "col-content", "model": "col-model",
+        "streaming": False, "error": True, "thinking": "col-thinking",
+        "version_index": 7, "summary": "col-summary", "turn_key": "col-turn-key",
+        "sort_order": 41,
+    }.items():
+        require(row[col] == want, f"column {col} landed as {row[col]!r}, expected {want!r}")
+    for col in ("token_info", "status_events", "tool_events", "memory_result", "memory_event",
+                "handoff_info", "web_search_results", "versions", "images", "attachments",
+                "usage", "dream_event"):
+        want = [{"col": col}] if col in {
+            "status_events", "tool_events", "web_search_results", "versions", "images", "attachments"
+        } else {"col": col}
+        require(json.loads(row[col]) == want, f"column {col} landed as {row[col]!r}, expected {want!r}")
+    require((row["time"].year, row["time"].month, row["time"].day) == (2026, 3, 4),
+            f"time column landed as {row['time']!r}")
+
+    # Update the two new fields while omitting sortOrder: they must change, it must survive.
+    response = await client.put(f"/sync/conversations/{col_conv}/messages/{col_msg}", json={
+        "role": "assistant", "content": "col-content-2",
+        "dreamEvent": {"col": "dream_event_2"}, "turnKey": "col-turn-key-2",
+    })
+    require(response.status_code == 200, "second per-column upsert failed")
+    row = await _pool_fetchrow(
+        "SELECT dream_event, turn_key, sort_order, content FROM chat_messages WHERE id = $1", col_msg
+    )
+    require(json.loads(row["dream_event"]) == {"col": "dream_event_2"}, "dream_event did not update")
+    require(row["turn_key"] == "col-turn-key-2", "turn_key did not update")
+    require(row["content"] == "col-content-2", "content did not update")
+    require(row["sort_order"] == 41,
+            f"sort_order must survive an update that omits sortOrder, got {row['sort_order']!r}")
+    passed("T-W2-02-18 every content column lands on its own independently expected value")
+
+    # ---- duplicate explicit message IDs are input errors, not write failures ----
+    await _truncate("chat_messages", "chat_conversations", "chat_projects")
+    dupmsg_conv, idless_conv = f"{prefix}dupmsg-c", f"{prefix}idless-c"
+    response = await client.post("/sync/import", json={
+        "conversations": [
+            {"id": dupmsg_conv, "title": "dup messages", "messages": [
+                {"id": f"{prefix}dm1", "role": "user", "content": "a"},
+                {"id": f"{prefix}dm1", "role": "assistant", "content": "b"},
+            ]},
+            {"id": idless_conv, "title": "id-less messages", "messages": [
+                {"role": "user", "content": "no explicit id"},
+                {"role": "assistant", "content": "also no explicit id"},
+            ]},
+        ],
+        "projects": [],
+    })
+    require(response.status_code == 200, "duplicate message id must not fail the whole batch")
+    body = response.json()
+    dup_msg_rejects = [d for d in body["rejected_details"] if d["code"] == "duplicate_message_id"]
+    require(len(dup_msg_rejects) == 1 and dup_msg_rejects[0]["id"] == dupmsg_conv,
+            f"duplicate_message_id reject missing: {body['rejected_details']}")
+    require(body["counts"]["conversations"]["rejected"] == 1, "duplicate message id was not counted as rejected")
+    require(body["counts"]["conversations"]["failed"] == 0,
+            "an input-level duplicate message id must not be counted as a write failure")
+    require(not await _pool_fetchval("SELECT EXISTS(SELECT 1 FROM chat_conversations WHERE id = $1)", dupmsg_conv),
+            "rejected conversation metadata reached the database")
+    require(not await _pool_fetchval("SELECT EXISTS(SELECT 1 FROM chat_messages WHERE conversation_id = $1)", dupmsg_conv),
+            "rejected conversation messages reached the database")
+    # Messages without an explicit id keep synthesizing distinct ids and must still commit.
+    require(await _pool_fetchval("SELECT COUNT(*) FROM chat_messages WHERE conversation_id = $1", idless_conv) == 2,
+            "id-less messages must not be treated as duplicates")
+    require(body["counts"]["conversations"]["success"] == 1, "healthy sibling conversation did not commit")
+    passed("T-W2-02-19 duplicate explicit message IDs reject the conversation before any write")
+
+    # ---- whole-request crash path leaks nothing --------------------------------
+    crash_sentinel = f"W2_02_CRASH_{uuid.uuid4().hex}"
+
+    async def _crashing_import(*args, **kwargs):
+        raise RuntimeError(crash_sentinel)
+
+    out_capture, err_capture = io.StringIO(), io.StringIO()
+    with patch.object(app_module, "sync_import_all", _crashing_import):
+        with redirect_stdout(out_capture), redirect_stderr(err_capture):
+            response = await client.post("/sync/import", json={"conversations": [], "projects": []})
+    require(response.status_code == 500, f"top-level crash must return 500, got {response.status_code}")
+    require(crash_sentinel not in response.text, "top-level exception text leaked into the HTTP response")
+    require(response.json() == {"error": "导入失败"},
+            f"top-level 500 must use the fixed safe message, got {response.text}")
+    require(crash_sentinel not in out_capture.getvalue(), "top-level exception text leaked into stdout")
+    require(crash_sentinel not in err_capture.getvalue(), "top-level exception text leaked into stderr")
+    passed("T-W2-02-20 whole-request crash returns a fixed safe message and leaks nothing")
+
+    # ---- cleaned ids must equal the actual primary keys ------------------------
+    await _truncate("chat_messages", "chat_conversations", "chat_projects")
+    padded_proj, padded_conv = f"{prefix}pad-p", f"{prefix}pad-c"
+    response = await client.post("/sync/import", json={
+        "conversations": [{"id": f"  {padded_conv}  ", "title": "padded", "messages": []}],
+        "projects": [{"id": f"  {padded_proj}  ", "name": "padded"}],
+    })
+    require(response.status_code == 200, "whitespace-padded ids failed to import")
+    body = response.json()
+    require(body["imported_project_ids"] == [padded_proj],
+            f"project receipt must report the cleaned id: {body['imported_project_ids']}")
+    require(body["imported_conversation_ids"] == [padded_conv],
+            f"conversation receipt must report the cleaned id: {body['imported_conversation_ids']}")
+    for table, cleaned in (("chat_projects", padded_proj), ("chat_conversations", padded_conv)):
+        require(await _pool_fetchval(f"SELECT EXISTS(SELECT 1 FROM {table} WHERE id = $1)", cleaned),
+                f"{table}: the cleaned id is not the actual primary key")
+        require(not await _pool_fetchval(f"SELECT EXISTS(SELECT 1 FROM {table} WHERE id = $1)", f"  {cleaned}  "),
+                f"{table}: the raw padded id reached the database as a separate primary key")
+    passed("T-W2-02-21 receipt ids and database primary keys agree after whitespace cleanup")
+
+    # ---- observability events carry codes, never entity IDs -------------------
+    # Scope: ordinary logs only.  The HTTP receipt deliberately keeps entity IDs so
+    # callers can reconcile (see T-W2-02-12), so nothing here asserts on the response.
+    # T-W2-02-16 guards database exception text and T-W2-02-20 guards whole-request
+    # crash text; this guard is about the IDs themselves and does not replace either.
+    await _truncate("chat_messages", "chat_conversations", "chat_projects")
+    reject_id = f"W2_02_REJECT_ID_{uuid.uuid4().hex}"
+    failure_id = f"W2_02_FAILURE_ID_{uuid.uuid4().hex}"
+    # The injected exception text is a fixed safe sentinel: never put the entity ID
+    # into the database error itself, or a leak could not be attributed to logging.
+    trigger_text = "W2_02_OBSERVABILITY_TRIGGER_FAILURE"
+
+    reject_out, reject_err = io.StringIO(), io.StringIO()
+    with redirect_stdout(reject_out), redirect_stderr(reject_err):
+        response = await client.post("/sync/import", json={
+            "conversations": [{"id": reject_id, "title": "rejected", "messages": "not-an-array"}],
+            "projects": [],
+        })
+    require(response.status_code == 200, "reject-path import must stay 200")
+    reject_logs = reject_out.getvalue() + reject_err.getvalue()
+
+    await _install_fail_trigger("chat_messages", "w202_obs", "conversation_id", failure_id, trigger_text)
+    try:
+        failure_out, failure_err = io.StringIO(), io.StringIO()
+        with redirect_stdout(failure_out), redirect_stderr(failure_err):
+            response = await client.post("/sync/import", json={
+                "conversations": [{"id": failure_id, "title": "doomed", "messages": [
+                    {"id": f"{prefix}obs-m", "role": "user", "content": "x"},
+                ]}],
+                "projects": [],
+            })
+        require(response.status_code == 200, "failure-path import must stay 200")
+        failure_logs = failure_out.getvalue() + failure_err.getvalue()
+    finally:
+        await _drop_fail_trigger("chat_messages", "w202_obs")
+
+    require(reject_id not in reject_logs, "reject observability leaked the entity ID into ordinary logs")
+    require(failure_id not in failure_logs, "failure observability leaked the entity ID into ordinary logs")
+    reject_events = [line.strip() for line in reject_logs.splitlines()
+                     if line.startswith("event=sync_import_reject ")]
+    failure_events = [line.strip() for line in failure_logs.splitlines()
+                      if line.startswith("event=sync_import_failure ")]
+    require(reject_events, f"no sync_import_reject event was emitted: {reject_logs!r}")
+    require(failure_events, f"no sync_import_failure event was emitted: {failure_logs!r}")
+    for event in reject_events + failure_events:
+        for field in ("entity=", "code=", "increment="):
+            require(field in event, f"observability event lost the controlled field {field}: {event!r}")
+    # The rejected entity must also stay out of the database entirely.
+    require(not await _pool_fetchval("SELECT EXISTS(SELECT 1 FROM chat_conversations WHERE id = $1)", reject_id),
+            "rejected conversation reached the database")
+    require(not await _pool_fetchval("SELECT EXISTS(SELECT 1 FROM chat_conversations WHERE id = $1)", failure_id),
+            "failed conversation left a half state")
+    passed("T-W2-02-22 reject and failure observability keep codes and drop entity IDs")
+
+
 async def run_suite(test_dsn: str) -> None:
     global database, config, app_module, memory_extractor
 
@@ -1547,6 +2242,7 @@ async def run_suite(test_dsn: str) -> None:
         await test_w1_08()
         await test_w1_01()
         await test_w2_01(client)
+        await test_w2_02(client)
 
 
 async def async_main() -> int:
@@ -1561,11 +2257,13 @@ async def async_main() -> int:
         w1_06_passed = [name for name in PASSED if name.startswith("T-W1-06-")]
         w1_08_passed = [name for name in PASSED if name.startswith("T-W1-08-")]
         w2_01_passed = [name for name in PASSED if name.startswith("T-W2-01-")]
+        w2_02_passed = [name for name in PASSED if name.startswith("T-W2-02-")]
         print(f"\nPASS: {len(legacy_passed)} permanent S1-S6 behavior guards")
         print(f"PASS: {len(w1_01_passed)} W1-01 isolation/permanent guards")
         print(f"PASS: {len(w1_06_passed)} W1-06 calendar-delete atomicity guards")
         print(f"PASS: {len(w1_08_passed)} W1-08 calendar-period guards")
         print(f"PASS: {len(w2_01_passed)} W2-01 granular-sync guards")
+        print(f"PASS: {len(w2_02_passed)} W2-02 message-identity/atomic-import guards")
         print(f"PASS: {len(PASSED)} total permanent behavior guards")
         print("Real database path: disposable PostgreSQL verified")
         print("Real model/API path: not called; embedding/model/HTTP boundaries were mocked")
