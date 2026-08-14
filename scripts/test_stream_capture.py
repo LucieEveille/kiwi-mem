@@ -115,7 +115,11 @@ async def fake_finalize(
     emotion_level,
     project_id,
     is_regenerate,
+    **ledger_kwargs,
 ):
+    # W2-03 扩了 _finalize_stream_memories 的关键字参数（record_events / extract_enabled /
+    # usage / ledger_ctx）。替身照单收下并记录，本脚本断言的仍是 W1-02 的流式合同：
+    # 何时 spawn、spawn 几次、正文捕获是否完整。
     FINALIZE_CALLS.append(
         {
             "mem_enabled": mem_enabled,
@@ -126,6 +130,7 @@ async def fake_finalize(
             "emotion_level": emotion_level,
             "project_id": project_id,
             "is_regenerate": is_regenerate,
+            **ledger_kwargs,
         }
     )
     return {"action": "skip"}

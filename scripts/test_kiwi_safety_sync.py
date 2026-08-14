@@ -2225,6 +2225,26 @@ async def _ledger_rows(session_id: str) -> list:
     )
 
 
+async def _await_ledger(session_id: str, expected: int, timeout: float = 5.0) -> list:
+    """等后台落账 task 跑完。
+
+    暗写被 _spawn_background_task 提成独立任务（断连也要跑完），HTTP 响应返回时
+    它通常还没落库，所以这里轮询而不是直接断言。
+    """
+    loop = asyncio.get_event_loop()
+    deadline = loop.time() + timeout
+    rows = await _ledger_rows(session_id)
+    while len(rows) < expected and loop.time() < deadline:
+        await asyncio.sleep(0.05)
+        rows = await _ledger_rows(session_id)
+    return rows
+
+
+async def _settle_background(seconds: float = 0.4) -> None:
+    """给后台任务一个真实的落库窗口，再断言「什么都没写」。"""
+    await asyncio.sleep(seconds)
+
+
 async def _set_ledger_gate(enabled: bool) -> None:
     await _upsert_config("memory_event_ledger_write_enabled", "true" if enabled else "false")
 
@@ -2535,7 +2555,10 @@ async def test_w2_03_scope_and_order() -> None:
 
     # ---- 18. turn_key must never be joined across tables --------------------
     db_source = (ROOT / "database.py").read_text(encoding="utf-8")
-    joined = re.findall(r"JOIN[^;]{0,200}turn_key|turn_key[^;]{0,200}JOIN", db_source, re.I)
+    # Scan code only: the prohibition itself is spelled out in comments, and a
+    # comment saying "never JOIN on turn_key" must not read as a JOIN on turn_key.
+    code_only = "\n".join(ln for ln in db_source.splitlines() if not ln.strip().startswith("#"))
+    joined = re.findall(r"JOIN[^;]{0,200}turn_key|turn_key[^;]{0,200}JOIN", code_only, re.I)
     require(not joined, f"turn_key appears in a JOIN: {joined[:1]}")
     require(db_source.count("同名不同义") >= 2,
             "both turn_key columns must carry the same-name-different-meaning warning")
@@ -2544,12 +2567,14 @@ async def test_w2_03_scope_and_order() -> None:
     # ---- 19. deterministic read order on tied timestamps --------------------
     await _truncate("conversations")
     tie_sid = "w203-tie"
-    tied = "2026-05-05 05:05:05+00"
+    # Identical timestamps on purpose: PG's NOW() is constant inside one transaction,
+    # so an atomic turn writes both rows with the exact same created_at.
+    tied = StdDateTime(2026, 5, 5, 5, 5, 5, tzinfo=timezone.utc)
     await _pool_execute(
         "INSERT INTO conversations (session_id, role, content, model, created_at) VALUES "
-        "($1,'user','u-first','m',$2::timestamptz), "
-        "($1,'assistant','a-second','m',$2::timestamptz), "
-        "($1,'assistant','a-third','m',$2::timestamptz)",
+        "($1,'user','u-first','m',$2), "
+        "($1,'assistant','a-second','m',$2), "
+        "($1,'assistant','a-third','m',$2)",
         tie_sid, tied,
     )
     recent = await database.get_recent_messages(tie_sid, limit=10)
@@ -2602,7 +2627,9 @@ async def test_w2_03_entry_and_panel(client: httpx.AsyncClient) -> None:
         require(key in config.CONFIG_SCHEMA, f"{key} is missing from the backend registry")
         require(re.search(rf"\b{key}\s*:", schema_js),
                 f"{key} is missing from config-schema.js CONFIG_META (the panel would not show it)")
-        require(re.search(rf"['\"]{key}['\"]", schema_js.split("CONFIG_PAGES")[-1]),
+        # Split at the *first* CONFIG_PAGES (its definition); the name also appears
+        # later where the table is consumed, and splitting on that would drop the groups.
+        require(re.search(rf"['\"]{key}['\"]", schema_js.split("CONFIG_PAGES", 1)[-1]),
                 f"{key} is registered but never placed in a CONFIG_PAGES group")
     gate_key = "memory_event_ledger_write_enabled"
     had_row = await _pool_fetchval("SELECT EXISTS(SELECT 1 FROM gateway_config WHERE key = $1)", gate_key)
@@ -2622,7 +2649,10 @@ async def test_w2_03_entry_and_panel(client: httpx.AsyncClient) -> None:
     passed("T-W2-03-24 both gates are dual-registered and settable through the admin endpoint")
 
     # ---- 25. CORS actually exposes the session header ----------------------
-    response = await client.get("/", headers={"Origin": "http://kiwi.example"})
+    # Use an origin the deployment actually allows: CORS headers are only emitted
+    # for allowed origins, so a foreign origin would fail this guard for the wrong reason.
+    allowed_origin = (os.environ.get("CORS_ORIGINS", "http://localhost:5173").split(",")[0]).strip()
+    response = await client.get("/", headers={"Origin": allowed_origin})
     exposed = response.headers.get("access-control-expose-headers", "")
     require("X-Kiwi-Session-Id" in exposed,
             f"CORS does not expose X-Kiwi-Session-Id (browsers could not read it): {exposed!r}")
@@ -2691,13 +2721,19 @@ _USAGE_TAIL = _sse({"choices": [], "usage": {"prompt_tokens": 11, "completion_to
 
 async def _chat(client, body, *, sse_events=None, json_body=None, status_code=200):
     """POST /v1/chat/completions against a canned upstream; returns the response."""
-    async def fake_resolve(_model):
-        return "http://127.0.0.1:9/mock-chat", "mock-key", "openai"
+    async def fake_provider(_model, provider_model_id=None):
+        return {
+            "model_id": "mock-model",
+            "api_key": "mock-key",
+            "api_format": "openai",
+            "api_base_url": "http://127.0.0.1:9/mock-chat",
+            "provider_name": "mock-provider",
+        }
 
     with (
         patch.object(app_module.httpx, "AsyncClient",
                      _fake_upstream(sse_events=sse_events, json_body=json_body, status_code=status_code)),
-        patch.object(database, "resolve_model_endpoint", fake_resolve),
+        patch.object(app_module, "resolve_provider_for_model", fake_provider),
     ):
         return await client.post("/v1/chat/completions", json=body)
 
@@ -2716,14 +2752,16 @@ async def test_w2_03_chat_paths(client: httpx.AsyncClient) -> None:
         await _upsert_config(mem_key, "false")
 
         # ---- 20. memory off still records events, never extracts ------------
-        await _truncate("conversations")
+        # memories is cleared too: earlier guards seed it, and "zero extraction"
+        # must be measured against an empty table, not against their leftovers.
+        await _truncate("conversations", "memories")
         await _set_identity_gate(False)
         response = await _chat(client, {
             "model": "mock-model", "stream": False, "conversation_id": "w203-layer-a",
             "messages": [{"role": "user", "content": "hi"}],
         }, json_body={"choices": [{"message": {"content": "a-body"}}], "model": "mock-model"})
         require(response.status_code == 200, f"buffered chat failed: {response.status_code} {response.text[:200]}")
-        rows = await _ledger_rows("w203-layer-a")
+        rows = await _await_ledger("w203-layer-a", 2)
         require(len(rows) == 2, f"memory-off chat must still write 2 ledger rows, got {len(rows)}")
         require(await _pool_fetchval("SELECT COUNT(*) FROM memories") == 0,
                 "memory-off chat must not extract any memory")
@@ -2737,6 +2775,7 @@ async def test_w2_03_chat_paths(client: httpx.AsyncClient) -> None:
             "messages": [{"role": "user", "content": "summarize"}],
         }, json_body={"choices": [{"message": {"content": "title"}}], "model": "mock-model"})
         require(response.status_code == 200, "internal request failed")
+        await _settle_background()
         require(not await _ledger_rows("w203-internal"),
                 "an internal request (skip_system_prompt) must not touch the ledger")
         passed("T-W2-03-21 internal requests write neither events nor memories")
@@ -2767,12 +2806,16 @@ async def test_w2_03_chat_paths(client: httpx.AsyncClient) -> None:
         passed("T-W2-03-13 identity v2 gives distinct full-uuid sessions and never echoes client IDs")
 
         await _set_identity_gate(False)
+        # Let the previous block's background writes land before truncating, or
+        # their late rows reappear inside this guard's window.
+        await _settle_background()
         await _truncate("conversations")
         for _ in range(2):
             await _chat(client, {
                 "model": "mock-model", "stream": False,
                 "messages": [{"role": "user", "content": "same opening line"}],
             }, json_body={"choices": [{"message": {"content": "a"}}], "model": "mock-model"})
+        await _settle_background()
         legacy_sessions = {r["session_id"] for r in await _pool_fetch(
             "SELECT DISTINCT session_id FROM conversations")}
         require(len(legacy_sessions) == 1 and next(iter(legacy_sessions)).startswith("auto-"),
@@ -2822,9 +2865,12 @@ async def test_w2_03_chat_paths(client: httpx.AsyncClient) -> None:
         response = await _chat(client, {
             "model": "mock-model", "stream": True, "conversation_id": "w203-usage",
             "messages": [{"role": "user", "content": "count me"}],
-        }, sse_events=[_DELTA, _USAGE_TAIL, "data: [DONE]\n\n"])
+        }, sse_events=[_DELTA, _USAGE_TAIL, "data: [DONE]\n\n"],
+           json_body={"choices": [{"message": {"content": "a-body"}}], "model": "mock-model",
+                      "usage": {"prompt_tokens": 11, "completion_tokens": 5,
+                                "prompt_tokens_details": {"cached_tokens": 2}}})
         require(response.status_code == 200, "usage stream failed")
-        rows = await _ledger_rows("w203-usage")
+        rows = await _await_ledger("w203-usage", 2)
         require(len(rows) == 2, f"usage stream must land a full turn: {len(rows)} rows")
         require(json.loads(rows[1]["usage"]) == {"prompt": 11, "completion": 5, "cached": 2},
                 f"streamed usage was not captured/normalized: {rows[1]['usage']!r}")
@@ -2834,7 +2880,7 @@ async def test_w2_03_chat_paths(client: httpx.AsyncClient) -> None:
             "model": "mock-model", "stream": True, "conversation_id": "w203-nousage",
             "messages": [{"role": "user", "content": "no usage block"}],
         }, sse_events=[_DELTA, "data: [DONE]\n\n"])
-        rows = await _ledger_rows("w203-nousage")
+        rows = await _await_ledger("w203-nousage", 2)
         require(rows and rows[1]["usage"] is None,
                 f"a stream without a usage block must store NULL: {rows[1]['usage'] if rows else 'no rows'!r}")
         passed("T-W2-03-16 usage is normalized for both vendors and captured/NULL across streams")
