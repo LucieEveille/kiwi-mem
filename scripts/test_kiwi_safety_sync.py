@@ -23,7 +23,7 @@ import re
 import sys
 import uuid
 import zipfile
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from datetime import date, datetime as StdDateTime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Awaitable, Callable
@@ -1741,6 +1741,8 @@ async def test_w2_02(client: httpx.AsyncClient) -> None:
             "metadata survived a failed message write: half-imported shell conversation",
         )
         require(body["counts"]["conversations"]["failed"] == 1, "failed conversation was not counted as failed")
+        require([d["code"] for d in body["error_details"]] == ["write_failed"],
+                f"message-write failure code must be write_failed: {[d.get('code') for d in body['error_details']]}")
         require(fail_conv not in body["imported_conversation_ids"], "failed conversation entered the success IDs")
         require(
             await _pool_fetchval("SELECT EXISTS(SELECT 1 FROM chat_messages WHERE conversation_id = $1)", ok_conv),
@@ -1798,6 +1800,8 @@ async def test_w2_02(client: httpx.AsyncClient) -> None:
                 "a failed project blocked conversation import")
         require(body["counts"]["projects"] == {"success": 1, "rejected": 0, "failed": 1},
                 f"project counts wrong: {body['counts']['projects']}")
+        require([d["code"] for d in body["error_details"]] == ["write_failed"],
+                f"project failure code must be write_failed: {[d.get('code') for d in body['error_details']]}")
         require(body["imported_project_ids"] == [good_proj], "project success IDs include a failed entity")
         passed("T-W2-02-10 project write failure is isolated to that project")
     finally:
@@ -1826,6 +1830,8 @@ async def test_w2_02(client: httpx.AsyncClient) -> None:
         require(await _pool_fetchval("SELECT EXISTS(SELECT 1 FROM chat_projects WHERE id = $1)", f"{prefix}metaok-p"),
                 "a failed conversation blocked project import")
         require(body["counts"]["conversations"]["failed"] == 1, "metadata failure was not counted")
+        require([d["code"] for d in body["error_details"]] == ["write_failed"],
+                f"metadata failure code must be write_failed: {[d.get('code') for d in body['error_details']]}")
         passed("T-W2-02-11 metadata write failure is isolated and leaves no messages")
     finally:
         await _drop_fail_trigger("chat_conversations", "w202_fail_meta")
@@ -1872,34 +1878,57 @@ async def test_w2_02(client: httpx.AsyncClient) -> None:
     passed("T-W2-02-13 malformed top-level import bodies return 400")
 
     await _truncate("chat_messages", "chat_conversations", "chat_projects")
-    dup = f"{prefix}dup-c"
+    dup_conv, dup_proj = f"{prefix}dup-c", f"{prefix}dup-p"
+    fine_conv, fine_proj = f"{prefix}fine-c", f"{prefix}fine-p"
     response = await client.post("/sync/import", json={
         "conversations": [
             "not-a-dict",
             {"title": "missing id"},
-            {"id": dup, "title": "first", "messages": []},
-            {"id": dup, "title": "second", "messages": []},
+            {"id": dup_conv, "title": "first", "messages": []},
+            {"id": dup_conv, "title": "second", "messages": []},
             {"id": f"{prefix}badmsgs", "title": "bad messages", "messages": "nope"},
             {"id": f"{prefix}badmsgitem", "title": "bad message item", "messages": ["x"]},
+            {"id": fine_conv, "title": "healthy", "messages": []},
         ],
-        "projects": ["not-a-dict", {"name": "missing id"}],
+        "projects": [
+            "not-a-dict",
+            {"name": "missing id"},
+            {"id": dup_proj, "name": "p-first"},
+            {"id": dup_proj, "name": "p-second"},
+            {"id": fine_proj, "name": "healthy"},
+        ],
     })
     require(response.status_code == 200, "per-entity rejects must not fail the whole batch")
     body = response.json()
     codes = [d["code"] for d in body["rejected_details"]]
     for expected in ("invalid_item", "missing_id", "duplicate_id", "invalid_messages", "invalid_message_item"):
         require(expected in codes, f"reject code {expected} missing from {codes}")
-    require(body["counts"]["conversations"]["rejected"] == 5,
+    # 重复实体 ID：每一份副本都必须自己进 rejected，先到者不得静默胜出
+    conv_dups = [d for d in body["rejected_details"]
+                 if d["type"] == "conversation" and d["code"] == "duplicate_id"]
+    proj_dups = [d for d in body["rejected_details"]
+                 if d["type"] == "project" and d["code"] == "duplicate_id"]
+    require(len(conv_dups) == 2, f"both duplicate conversation copies must be rejected, got {len(conv_dups)}")
+    require(len(proj_dups) == 2, f"both duplicate project copies must be rejected, got {len(proj_dups)}")
+    require(body["counts"]["conversations"]["rejected"] == 6,
             f"conversation rejected count wrong: {body['counts']['conversations']}")
-    require(body["counts"]["projects"]["rejected"] == 2,
+    require(body["counts"]["projects"]["rejected"] == 4,
             f"project rejected count wrong: {body['counts']['projects']}")
     require(body["counts"]["conversations"]["success"] == 1, "the one valid conversation did not import")
-    require(await _pool_fetchval("SELECT title FROM chat_conversations WHERE id = $1", dup) == "first",
-            "duplicate id overwrote the first accepted conversation")
+    require(body["counts"]["projects"]["success"] == 1, "the one valid project did not import")
+    require(body["imported_conversation_ids"] == [fine_conv],
+            f"conversation success IDs wrong: {body['imported_conversation_ids']}")
+    require(body["imported_project_ids"] == [fine_proj],
+            f"project success IDs wrong: {body['imported_project_ids']}")
+    require(not await _pool_fetchval("SELECT EXISTS(SELECT 1 FROM chat_conversations WHERE id = $1)", dup_conv),
+            "a duplicated conversation id reached the database")
+    require(not await _pool_fetchval("SELECT EXISTS(SELECT 1 FROM chat_projects WHERE id = $1)", dup_proj),
+            "a duplicated project id reached the database")
     require(not await _pool_fetchval("SELECT EXISTS(SELECT 1 FROM chat_conversations WHERE id = '')"),
             "an id-less conversation was silently written with an empty id")
-    require(body["counts"]["conversations"]["failed"] == 0, "rejects must not be counted as failures")
-    passed("T-W2-02-14 per-entity rejects are coded, counted, and never written")
+    require(body["counts"]["conversations"]["failed"] == 0 and body["counts"]["projects"]["failed"] == 0,
+            "rejects must not be counted as failures")
+    passed("T-W2-02-14 duplicate entity IDs reject every copy and never reach the database")
 
     # ---- message semantics: absent / empty / shorter array ------------------
     await _truncate("chat_messages", "chat_conversations", "chat_projects")
@@ -1989,6 +2018,134 @@ async def test_w2_02(client: httpx.AsyncClient) -> None:
         require("role" not in flat.lower(),
                 f"chat_messages delete branches on role: {flat}")
     passed("T-W2-02-17 chat_messages deletes stay deterministic, never role/order inferred")
+
+    # ---- per-column landing against an independent expectation table -------
+    # Channel-vs-channel comparison (T-W2-02-6) cannot catch a shift that both
+    # channels share, because they assemble through the same function.  These
+    # expectations are written by hand here and never derived from production code.
+    await _truncate("chat_messages", "chat_conversations", "chat_projects")
+    col_conv, col_msg = f"{prefix}col-c", f"{prefix}col-m"
+    await client.post("/sync/conversations", json={"id": col_conv, "title": "columns"})
+    response = await client.put(f"/sync/conversations/{col_conv}/messages/{col_msg}", json={
+        "role": "assistant", "content": "col-content", "time": "2026-03-04T05:06:07Z",
+        "model": "col-model", "error": True, "thinking": "col-thinking",
+        "summary": "col-summary", "versionIndex": 7, "sortOrder": 41,
+        "tokenInfo": {"col": "token_info"}, "statusEvents": [{"col": "status_events"}],
+        "toolEvents": [{"col": "tool_events"}], "memoryResult": {"col": "memory_result"},
+        "memoryEvent": {"col": "memory_event"}, "handoffInfo": {"col": "handoff_info"},
+        "webSearchResults": [{"col": "web_search_results"}], "versions": [{"col": "versions"}],
+        "images": [{"col": "images"}], "attachments": [{"col": "attachments"}],
+        "usage": {"col": "usage"}, "dreamEvent": {"col": "dream_event"}, "turnKey": "col-turn-key",
+    })
+    require(response.status_code == 200, f"per-column upsert failed: {response.status_code} {response.text}")
+    row = await _pool_fetchrow(
+        f"SELECT {', '.join(_MESSAGE_CONTENT_COLUMNS)}, sort_order FROM chat_messages WHERE id = $1",
+        col_msg,
+    )
+    for col, want in {
+        "role": "assistant", "content": "col-content", "model": "col-model",
+        "streaming": False, "error": True, "thinking": "col-thinking",
+        "version_index": 7, "summary": "col-summary", "turn_key": "col-turn-key",
+        "sort_order": 41,
+    }.items():
+        require(row[col] == want, f"column {col} landed as {row[col]!r}, expected {want!r}")
+    for col in ("token_info", "status_events", "tool_events", "memory_result", "memory_event",
+                "handoff_info", "web_search_results", "versions", "images", "attachments",
+                "usage", "dream_event"):
+        want = [{"col": col}] if col in {
+            "status_events", "tool_events", "web_search_results", "versions", "images", "attachments"
+        } else {"col": col}
+        require(json.loads(row[col]) == want, f"column {col} landed as {row[col]!r}, expected {want!r}")
+    require((row["time"].year, row["time"].month, row["time"].day) == (2026, 3, 4),
+            f"time column landed as {row['time']!r}")
+
+    # Update the two new fields while omitting sortOrder: they must change, it must survive.
+    response = await client.put(f"/sync/conversations/{col_conv}/messages/{col_msg}", json={
+        "role": "assistant", "content": "col-content-2",
+        "dreamEvent": {"col": "dream_event_2"}, "turnKey": "col-turn-key-2",
+    })
+    require(response.status_code == 200, "second per-column upsert failed")
+    row = await _pool_fetchrow(
+        "SELECT dream_event, turn_key, sort_order, content FROM chat_messages WHERE id = $1", col_msg
+    )
+    require(json.loads(row["dream_event"]) == {"col": "dream_event_2"}, "dream_event did not update")
+    require(row["turn_key"] == "col-turn-key-2", "turn_key did not update")
+    require(row["content"] == "col-content-2", "content did not update")
+    require(row["sort_order"] == 41,
+            f"sort_order must survive an update that omits sortOrder, got {row['sort_order']!r}")
+    passed("T-W2-02-18 every content column lands on its own independently expected value")
+
+    # ---- duplicate explicit message IDs are input errors, not write failures ----
+    await _truncate("chat_messages", "chat_conversations", "chat_projects")
+    dupmsg_conv, idless_conv = f"{prefix}dupmsg-c", f"{prefix}idless-c"
+    response = await client.post("/sync/import", json={
+        "conversations": [
+            {"id": dupmsg_conv, "title": "dup messages", "messages": [
+                {"id": f"{prefix}dm1", "role": "user", "content": "a"},
+                {"id": f"{prefix}dm1", "role": "assistant", "content": "b"},
+            ]},
+            {"id": idless_conv, "title": "id-less messages", "messages": [
+                {"role": "user", "content": "no explicit id"},
+                {"role": "assistant", "content": "also no explicit id"},
+            ]},
+        ],
+        "projects": [],
+    })
+    require(response.status_code == 200, "duplicate message id must not fail the whole batch")
+    body = response.json()
+    dup_msg_rejects = [d for d in body["rejected_details"] if d["code"] == "duplicate_message_id"]
+    require(len(dup_msg_rejects) == 1 and dup_msg_rejects[0]["id"] == dupmsg_conv,
+            f"duplicate_message_id reject missing: {body['rejected_details']}")
+    require(body["counts"]["conversations"]["rejected"] == 1, "duplicate message id was not counted as rejected")
+    require(body["counts"]["conversations"]["failed"] == 0,
+            "an input-level duplicate message id must not be counted as a write failure")
+    require(not await _pool_fetchval("SELECT EXISTS(SELECT 1 FROM chat_conversations WHERE id = $1)", dupmsg_conv),
+            "rejected conversation metadata reached the database")
+    require(not await _pool_fetchval("SELECT EXISTS(SELECT 1 FROM chat_messages WHERE conversation_id = $1)", dupmsg_conv),
+            "rejected conversation messages reached the database")
+    # Messages without an explicit id keep synthesizing distinct ids and must still commit.
+    require(await _pool_fetchval("SELECT COUNT(*) FROM chat_messages WHERE conversation_id = $1", idless_conv) == 2,
+            "id-less messages must not be treated as duplicates")
+    require(body["counts"]["conversations"]["success"] == 1, "healthy sibling conversation did not commit")
+    passed("T-W2-02-19 duplicate explicit message IDs reject the conversation before any write")
+
+    # ---- whole-request crash path leaks nothing --------------------------------
+    crash_sentinel = f"W2_02_CRASH_{uuid.uuid4().hex}"
+
+    async def _crashing_import(*args, **kwargs):
+        raise RuntimeError(crash_sentinel)
+
+    out_capture, err_capture = io.StringIO(), io.StringIO()
+    with patch.object(app_module, "sync_import_all", _crashing_import):
+        with redirect_stdout(out_capture), redirect_stderr(err_capture):
+            response = await client.post("/sync/import", json={"conversations": [], "projects": []})
+    require(response.status_code == 500, f"top-level crash must return 500, got {response.status_code}")
+    require(crash_sentinel not in response.text, "top-level exception text leaked into the HTTP response")
+    require(response.json() == {"error": "导入失败"},
+            f"top-level 500 must use the fixed safe message, got {response.text}")
+    require(crash_sentinel not in out_capture.getvalue(), "top-level exception text leaked into stdout")
+    require(crash_sentinel not in err_capture.getvalue(), "top-level exception text leaked into stderr")
+    passed("T-W2-02-20 whole-request crash returns a fixed safe message and leaks nothing")
+
+    # ---- cleaned ids must equal the actual primary keys ------------------------
+    await _truncate("chat_messages", "chat_conversations", "chat_projects")
+    padded_proj, padded_conv = f"{prefix}pad-p", f"{prefix}pad-c"
+    response = await client.post("/sync/import", json={
+        "conversations": [{"id": f"  {padded_conv}  ", "title": "padded", "messages": []}],
+        "projects": [{"id": f"  {padded_proj}  ", "name": "padded"}],
+    })
+    require(response.status_code == 200, "whitespace-padded ids failed to import")
+    body = response.json()
+    require(body["imported_project_ids"] == [padded_proj],
+            f"project receipt must report the cleaned id: {body['imported_project_ids']}")
+    require(body["imported_conversation_ids"] == [padded_conv],
+            f"conversation receipt must report the cleaned id: {body['imported_conversation_ids']}")
+    for table, cleaned in (("chat_projects", padded_proj), ("chat_conversations", padded_conv)):
+        require(await _pool_fetchval(f"SELECT EXISTS(SELECT 1 FROM {table} WHERE id = $1)", cleaned),
+                f"{table}: the cleaned id is not the actual primary key")
+        require(not await _pool_fetchval(f"SELECT EXISTS(SELECT 1 FROM {table} WHERE id = $1)", f"  {cleaned}  "),
+                f"{table}: the raw padded id reached the database as a separate primary key")
+    passed("T-W2-02-21 receipt ids and database primary keys agree after whitespace cleanup")
 
 
 async def run_suite(test_dsn: str) -> None:

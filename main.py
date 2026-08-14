@@ -5493,7 +5493,10 @@ async def api_sync_import(request: Request):
         )
         return {"status": "ok", **result}
     except Exception as e:
-        return JSONResponse(status_code=500, content={"error": str(e)})
+        # 整体崩溃路径：只暴露固定文案与异常类型名，绝不回传异常正文。
+        # 异常正文常带 payload 片段、消息内容或 DSN；逐实体失败路径同理（见 record_failure）。
+        print(f"event=sync_import_crash exception={type(e).__name__} code=import_failed increment=1")
+        return JSONResponse(status_code=500, content={"error": "导入失败"})
 
 
 # ──── 用户/助手配置同步（复用 config 表） ────

@@ -3040,8 +3040,9 @@ _IMPORT_REJECT_SUMMARIES = {
     "duplicate_id": "同批次内 id 重复",
     "invalid_messages": "messages 不是数组",
     "invalid_message_item": "messages 内含非对象元素",
+    "duplicate_message_id": "同一对话内消息 id 重复",
 }
-_IMPORT_FAIL_CODE = "db_error"
+_IMPORT_FAIL_CODE = "write_failed"
 _IMPORT_FAIL_SUMMARY = "数据库写入失败"
 
 
@@ -3053,28 +3054,70 @@ def _import_entity_id(item: dict):
     return str(raw).strip()
 
 
-def _precheck_import_entity(item, seen_ids: set, *, with_messages: bool):
-    """返回 (entity_id, messages, reject_code)。
+def _explicit_message_ids(messages: list) -> list:
+    """取消息数组里显式提供的非空 ID。缺 ID 的消息由写入期按下标合成，不参与重复判定。"""
+    ids = []
+    for msg in messages:
+        raw = msg.get("id")
+        if isinstance(raw, bool) or not isinstance(raw, (str, int)):
+            continue
+        text = str(raw).strip()
+        if text:
+            ids.append(text)
+    return ids
 
+
+def _precheck_import_batch(items: list, *, with_messages: bool) -> list:
+    """整批两遍预检，返回与 items 一一对应的 [(entity_id, messages, reject_code), ...]。
+
+    必须先扫完整批再定论：有效 ID 在同一数组出现多次时，**所有同 ID 副本一起拒绝**，
+    该 ID 零写库。只拒后来者会让先到的那份静默胜出，与冻结合同冲突。
+
+    冻结优先级：invalid_item → missing_id → duplicate_id → messages 检查。
     messages 为 None 表示 payload 没带 messages 键（只更新 metadata、保留旧消息）；
     messages 为 [] 表示客户端明确要求清空。二者语义不同，不得合并。
     reject_code 非空时该实体一律不写库。
     """
-    if not isinstance(item, dict):
-        return "", None, "invalid_item"
-    entity_id = _import_entity_id(item)
-    if not entity_id:
-        return "", None, "missing_id"
-    if entity_id in seen_ids:
-        return entity_id, None, "duplicate_id"
-    messages = None
-    if with_messages and "messages" in item:
-        messages = item.get("messages")
-        if not isinstance(messages, list):
-            return entity_id, None, "invalid_messages"
-        if any(not isinstance(m, dict) for m in messages):
-            return entity_id, None, "invalid_message_item"
-    return entity_id, messages, None
+    # 第一遍：只定结构与 ID，不下重复结论
+    staged = []
+    for item in items:
+        if not isinstance(item, dict):
+            staged.append(("", "invalid_item"))
+            continue
+        entity_id = _import_entity_id(item)
+        staged.append((entity_id, None if entity_id else "missing_id"))
+
+    frequency: dict = {}
+    for entity_id, code in staged:
+        if code is None:
+            frequency[entity_id] = frequency.get(entity_id, 0) + 1
+
+    # 第二遍：按频次统一裁决，再检查 messages
+    resolved = []
+    for item, (entity_id, code) in zip(items, staged):
+        if code is not None:
+            resolved.append((entity_id, None, code))
+            continue
+        if frequency.get(entity_id, 0) > 1:
+            resolved.append((entity_id, None, "duplicate_id"))
+            continue
+        messages = None
+        if with_messages and "messages" in item:
+            messages = item.get("messages")
+            if not isinstance(messages, list):
+                resolved.append((entity_id, None, "invalid_messages"))
+                continue
+            if any(not isinstance(m, dict) for m in messages):
+                resolved.append((entity_id, None, "invalid_message_item"))
+                continue
+            explicit_ids = _explicit_message_ids(messages)
+            if len(explicit_ids) != len(set(explicit_ids)):
+                # 同一对话内显式消息 ID 撞车属于输入不合规，在写库前拒绝整条对话，
+                # 不让它到主键约束处炸成服务器写入失败。
+                resolved.append((entity_id, None, "duplicate_message_id"))
+                continue
+        resolved.append((entity_id, messages, None))
+    return resolved
 
 
 async def sync_import_all(conversations: list, projects: list):
@@ -3085,9 +3128,10 @@ async def sync_import_all(conversations: list, projects: list):
         任一步失败整体回滚，服务器绝不留下只有元数据的空壳对话；
       · 项目维持逐项独立原子写，单条失败不阻断其他实体；
       · 输入预检把畸形条目归入 rejected 并且完全不写库，与数据库执行失败
-        （failed）分开记账，不再静默接受缺 id 的条目；
+        （failed）分开记账，不再静默接受缺 id 的条目；重复的实体 ID 与
+        对话内重复的显式消息 ID 都在写库前整体拒绝；
       · 计数与成功 ID 仅在实体事务提交后累加，回执可直接对账；
-      · 回执保留旧七个键，新增 counts 三态与 rejected_details。
+      · 回执保留既有兼容字段，并新增结构化三态回执（counts 与 rejected_details）。
     对账不变式：conversations == counts.conversations.success == len(imported_conversation_ids)，
                 projects      == counts.projects.success      == len(imported_project_ids)。
     """
@@ -3121,28 +3165,26 @@ async def sync_import_all(conversations: list, projects: list):
     pool = await get_pool()
 
     # 导入项目（单条 upsert 自身原子；逐项记账，失败不牵连其他实体）
-    seen_projects: set = set()
-    for proj in projects:
-        pid, _, reject = _precheck_import_entity(proj, seen_projects, with_messages=False)
+    for proj, (pid, _, reject) in zip(projects, _precheck_import_batch(projects, with_messages=False)):
         if reject:
             record_reject("project", pid, reject)
             continue
-        seen_projects.add(pid)
+        # 复制后覆盖权威 ID：预检已把首尾空白清理掉，写库必须用同一个值，
+        # 否则回执报清理后的 ID、主键却落成带空白的原值。
+        proj_meta = dict(proj)
+        proj_meta["id"] = pid
         try:
-            await sync_upsert_project(proj)
+            await sync_upsert_project(proj_meta)
             counts["projects"]["success"] += 1
             imported_project_ids.append(pid)
         except Exception:
             record_failure("project", pid)
 
     # 导入对话 + 消息（每个对话一个事务：元数据与消息同生共死）
-    seen_conversations: set = set()
-    for conv in conversations:
-        cid, messages, reject = _precheck_import_entity(conv, seen_conversations, with_messages=True)
+    for conv, (cid, messages, reject) in zip(conversations, _precheck_import_batch(conversations, with_messages=True)):
         if reject:
             record_reject("conversation", cid, reject)
             continue
-        seen_conversations.add(cid)
         # 用字典推导而非 .pop()，避免修改调用方的原始数据
         conv_meta = {k: v for k, v in conv.items() if k != "messages"}
         conv_meta["id"] = cid
