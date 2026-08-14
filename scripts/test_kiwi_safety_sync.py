@@ -2147,6 +2147,60 @@ async def test_w2_02(client: httpx.AsyncClient) -> None:
                 f"{table}: the raw padded id reached the database as a separate primary key")
     passed("T-W2-02-21 receipt ids and database primary keys agree after whitespace cleanup")
 
+    # ---- observability events carry codes, never entity IDs -------------------
+    # Scope: ordinary logs only.  The HTTP receipt deliberately keeps entity IDs so
+    # callers can reconcile (see T-W2-02-12), so nothing here asserts on the response.
+    # T-W2-02-16 guards database exception text and T-W2-02-20 guards whole-request
+    # crash text; this guard is about the IDs themselves and does not replace either.
+    await _truncate("chat_messages", "chat_conversations", "chat_projects")
+    reject_id = f"W2_02_REJECT_ID_{uuid.uuid4().hex}"
+    failure_id = f"W2_02_FAILURE_ID_{uuid.uuid4().hex}"
+    # The injected exception text is a fixed safe sentinel: never put the entity ID
+    # into the database error itself, or a leak could not be attributed to logging.
+    trigger_text = "W2_02_OBSERVABILITY_TRIGGER_FAILURE"
+
+    reject_out, reject_err = io.StringIO(), io.StringIO()
+    with redirect_stdout(reject_out), redirect_stderr(reject_err):
+        response = await client.post("/sync/import", json={
+            "conversations": [{"id": reject_id, "title": "rejected", "messages": "not-an-array"}],
+            "projects": [],
+        })
+    require(response.status_code == 200, "reject-path import must stay 200")
+    reject_logs = reject_out.getvalue() + reject_err.getvalue()
+
+    await _install_fail_trigger("chat_messages", "w202_obs", "conversation_id", failure_id, trigger_text)
+    try:
+        failure_out, failure_err = io.StringIO(), io.StringIO()
+        with redirect_stdout(failure_out), redirect_stderr(failure_err):
+            response = await client.post("/sync/import", json={
+                "conversations": [{"id": failure_id, "title": "doomed", "messages": [
+                    {"id": f"{prefix}obs-m", "role": "user", "content": "x"},
+                ]}],
+                "projects": [],
+            })
+        require(response.status_code == 200, "failure-path import must stay 200")
+        failure_logs = failure_out.getvalue() + failure_err.getvalue()
+    finally:
+        await _drop_fail_trigger("chat_messages", "w202_obs")
+
+    require(reject_id not in reject_logs, "reject observability leaked the entity ID into ordinary logs")
+    require(failure_id not in failure_logs, "failure observability leaked the entity ID into ordinary logs")
+    reject_events = [line.strip() for line in reject_logs.splitlines()
+                     if line.startswith("event=sync_import_reject ")]
+    failure_events = [line.strip() for line in failure_logs.splitlines()
+                      if line.startswith("event=sync_import_failure ")]
+    require(reject_events, f"no sync_import_reject event was emitted: {reject_logs!r}")
+    require(failure_events, f"no sync_import_failure event was emitted: {failure_logs!r}")
+    for event in reject_events + failure_events:
+        for field in ("entity=", "code=", "increment="):
+            require(field in event, f"observability event lost the controlled field {field}: {event!r}")
+    # The rejected entity must also stay out of the database entirely.
+    require(not await _pool_fetchval("SELECT EXISTS(SELECT 1 FROM chat_conversations WHERE id = $1)", reject_id),
+            "rejected conversation reached the database")
+    require(not await _pool_fetchval("SELECT EXISTS(SELECT 1 FROM chat_conversations WHERE id = $1)", failure_id),
+            "failed conversation left a half state")
+    passed("T-W2-02-22 reject and failure observability keep codes and drop entity IDs")
+
 
 async def run_suite(test_dsn: str) -> None:
     global database, config, app_module, memory_extractor
