@@ -2,6 +2,14 @@
 
 你在这个仓库里施工时，除了完成任务本身，还要按本文件执行**阶段验收**并留下**可追溯的报告**。本文件是规矩，不是建议；不清楚时按最保守的一档做，并在报告里写明。
 
+施工前先阅读 `AGENTS.md`。三份文件各管一层：
+
+- `AGENTS.md` 管全仓库共同边界、施工流程与授权纪律；
+- `docs/Release Acceptance.md` 管正式验收项目、通过标准与证据要求；
+- 本文件只补充 Claude Code 的具体执行方式。
+
+本文件与 `AGENTS.md` 冲突时，以 `AGENTS.md` 为准；具体测试内容或通过标准冲突时，以 `docs/Release Acceptance.md` 为准，并在交付报告中指出冲突。
+
 ---
 
 ## 0. 三条铁律（先读）
@@ -17,19 +25,34 @@
 | 触发 | 做什么 |
 |---|---|
 | **一张票（PR）施工完成、准备交付** | 跑 §2「PR 级自检」——只是常规交付前自检，不产出验收报告 |
-| **一个阶段收口**（露露/任务说明里明确说"阶段验收"、"准备发版"、"跑 Release Acceptance"、或版本号被改动） | 跑 §3「阶段验收」——按清单逐项执行，**产出报告** `docs/acceptance/vX.Y.Z.md` |
-| 不确定属于哪种 | 按 PR 级自检做，并在交付说明里问一句"要不要跑阶段验收" |
+| **明确的发布候选版本**（露露/任务说明明确给出目标版本，并说"准备发版"、"跑 Release Acceptance"，或版本号被改动） | 跑 §3「版本验收」——按清单逐项执行，**产出报告** `docs/acceptance/vX.Y.Z.md` |
+| **阶段收口但尚无目标版本** | 跑 §2「PR 级自检」，结果留在 PR/阶段交付说明；询问目标版本，**不创建** `docs/acceptance/` 报告 |
+| 不确定属于哪种 | 按 PR 级自检做，并在交付说明里确认"是否已有目标版本并需要跑版本验收" |
 
 ---
 
 ## 2. PR 级自检（每票必做，最小集）
 
 ```bash
-python -m compileall -q .                       # 语法
-git diff --check                                 # 空白/行尾
-# 12 套既有回归（逐个跑，全部 exit 0）
-for t in scripts/test_*.py; do python "$t" || echo "FAIL $t"; done
+set -euo pipefail
+
+python -m compileall -q .
+git diff --check
+
+# 12 套既有回归：与 .github/workflows/ci.yml 保持一致，任一失败立即停止。
+python scripts/test_drawer_stability.py
+python scripts/test_gateway_tool_streaming.py
+python scripts/test_stream_capture.py
+python scripts/test_calendar_summary_generation.py
+python scripts/test_calendar_json_parser.py
+python scripts/test_mcp_recall.py
+python scripts/test_compression_reasoning.py
+python scripts/test_calendar_delete_atomicity.py
+python scripts/test_mcp_calendar_sections.py
+python scripts/test_calendar_period_guards.py
+python scripts/test_admin_panel_cache.py
 node scripts/test_calendar_period_defaults.mjs
+
 # 真库守卫（需要本机 PostgreSQL 16；没有则依赖 CI 结果并在交付里注明）
 KIWI_TEST_DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5432/postgres \
   python scripts/test_kiwi_safety_sync.py
@@ -41,17 +64,17 @@ CI 上对应：`syntax-check` job；`behavior-tests` job 的"运行既有开源�
 
 ---
 
-## 3. 阶段验收（产出报告）
+## 3. 版本验收（产出报告）
 
 ### 3.1 准备
 1. 打开 `docs/Release Acceptance.md`，通读一遍（尤其 §〇 环境规则、A 表、B 表、D 页）。
-2. 复制它为 `docs/acceptance/v<目标版本>.md`（版本号 = 该阶段要发的版本；若尚未定版本，用 `v<当前 VERSION>-stage-<日期>.md`，报告里注明"版本待定"）。
+2. 复制它为 `docs/acceptance/v<目标版本>.md`（版本号 = 该阶段确定要发布的版本）。尚未确定目标版本时停止本节，不猜版本、不创建 `stage` 报告；先按 §2 留下阶段自检结果并向露露确认版本。
 3. 报告顶部加一段**元信息**：执行者（Claude Code + 模型名）、日期、目标 commit SHA、上一正式 tag、执行环境（GitHub Actions / 本机 / 一次性容器）、本次触发原因。
 
 ### 3.2 执行 A 表（22 项固定）
 - 能自动跑的（A1-A3、A4）：跑，贴证据（Run 号 / 输出尾行）。
 - 能在一次性容器里做的（A5-A7、A9-A11、A17-A21）：起 `docker compose -p kiwi-acc` + 独立卷，按清单"执行方式"做，贴证据。**A10-A18 用能捕获请求的模拟上游**（判断注入以"网关实际发出的请求里有没有"为准，不以模型回答为准）。
-- 你在当前环境做不了的（无 Docker、无浏览器、无真实 key）：写 `⏸ BLOCKED` + 缺什么；A22（真实供应商）与需要浏览器/真人观察的项默认写"**待人工：露露**"并列出操作步骤。
+- 你在当前环境做不了的（无 Docker、无浏览器、无真实 key）：写 `⏸ BLOCKED` + 缺什么；A22（真实供应商）与需要浏览器/真人观察的项写成 `⏸ BLOCKED（待人工：露露）`，并列出操作步骤。人工证据补齐后才能改为 PASS。
 - **A 区不允许填 N/A。**
 
 ### 3.3 执行 B 表（按改动追加）
@@ -74,7 +97,7 @@ CI 上对应：`syntax-check` job；`behavior-tests` job 的"运行既有开源�
 - 每项四格齐全：执行方式 / 通过标准 / 证据 / 结论（✅ PASS · ❌ FAIL · ⏸ BLOCKED · N/A 仅 B 区）。
 - 证据要能被人复核：Run 号、命令与输出尾行、SQL 与结果、捕获请求摘要。"跑过了"不算。
 - **不得**出现真实密钥、完整消息正文、DSN。测试用密钥用 `KIWI_ACCEPTANCE_SECRET_<随机串>`，报告里只写"哨兵串零命中"。
-- 报告只增不改：验收后又改了代码，**新起一份**报告（或在原报告底部追加"复验"节并注明新 commit），不覆盖旧结论。
+- 一个版本只保留一份报告。验收后目标 commit 改变时，在原报告底部追加带日期、旧 SHA、新 SHA 的"复验"节，保留旧证据与旧结论，重跑受影响项目及其依赖项，再更新最终裁决。不得覆盖旧证据，也不得为同一版本另建 `final`、`new` 等随意命名的报告。
 
 ---
 
@@ -98,4 +121,4 @@ CI 上对应：`syntax-check` job；`behavior-tests` job 的"运行既有开源�
 
 ---
 
-*本文件 v1.0 · 2026-08-15 · 与 `docs/Release Acceptance.md` v1.1 配套。清单升版时同步检查本文件的坐标（job 名、服务名、脚本名）是否仍准确。*
+*本文件 v1.1 · 2026-08-15 · 与 `docs/Release Acceptance.md` v1.1 配套。v1.1 对齐 `AGENTS.md` 权威关系，修复 PR 自检吞错与真库守卫重复执行风险，冻结版本报告触发条件、一版本一报告和待人工 BLOCKED 语义。清单升版时同步检查本文件的坐标（job 名、服务名、脚本名）是否仍准确。*
