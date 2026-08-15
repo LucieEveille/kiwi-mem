@@ -2422,7 +2422,42 @@ async def test_w2_03_schema_and_atomic() -> None:
     require(rows[0]["id"] == before[0]["id"], "regenerate must not touch the user row")
     require(rows[1]["content"] == "a1-regenerated", "regenerate did not replace the assistant body")
     require(rows[1]["turn_id"] == target_turn, "regenerated assistant lost its turn anchor")
-    passed("T-W2-03-8 keyless regenerate replaces the newest assistant of the newest turn")
+    # A keyless regenerate must not blank the turn's key: the user row still says k1,
+    # so an assistant carrying NULL would split the turn's identity in half.
+    require(rows[1]["turn_key"] == "k1",
+            f"replacement assistant must inherit the user's turn_key, got {rows[1]['turn_key']!r}")
+
+    # The turn's scope is decided once, when the turn is written.  If the conversation
+    # is later moved into a project (or its metadata only syncs afterwards), a regenerate
+    # must still inherit the original attribution — otherwise one turn ends up "question
+    # global, answer in project", and W2-06's scope-based consumers tear it apart.
+    await _truncate("conversations", "chat_conversations", "chat_projects")
+    moved_sid = "w203-moved"
+    await _pool_execute("INSERT INTO chat_projects (id, name) VALUES ('w203-moved-p', 'moved')")
+    await _pool_execute(
+        "INSERT INTO chat_conversations (id, title, project_id) VALUES ($1, 'c', NULL)", moved_sid
+    )
+    await database.append_turn_events_atomic(
+        moved_sid, "u", "a", "m", client_gave_conv_id=True, turn_key="mk"
+    )
+    original = await _ledger_rows(moved_sid)
+    await _pool_execute(
+        "UPDATE chat_conversations SET project_id = 'w203-moved-p' WHERE id = $1", moved_sid
+    )
+    await database.append_turn_events_atomic(
+        moved_sid, "u", "a-after-move", "m", client_gave_conv_id=True, is_regenerate=True
+    )
+    after = await _ledger_rows(moved_sid)
+    require(len(after) == 2, f"regenerate after a move must still leave one turn: {len(after)} rows")
+    require((after[0]["scope_known"], after[0]["project_id"])
+            == (after[1]["scope_known"], after[1]["project_id"]),
+            f"regenerate split the turn's scope: user={(after[0]['scope_known'], after[0]['project_id'])} "
+            f"assistant={(after[1]['scope_known'], after[1]['project_id'])}")
+    require((after[1]["scope_known"], after[1]["project_id"])
+            == (original[0]["scope_known"], original[0]["project_id"]),
+            "replacement assistant re-judged scope instead of inheriting the original turn's")
+    require(after[1]["turn_key"] == "mk", "replacement assistant lost the original turn_key")
+    passed("T-W2-03-8 keyless regenerate replaces within the turn and inherits its whole identity")
 
     # historical key -> abandon, unknown key -> abandon; the old assistant survives both
     await _truncate("conversations")
@@ -2526,11 +2561,35 @@ async def test_w2_03_scope_and_order() -> None:
 
     # ---- 16 (pure half). usage normalization shapes ------------------------
     normalize = app_module._normalize_usage_for_storage
+    # OpenAI: prompt_tokens already includes the cached part — adding it again double counts.
     require(normalize({"prompt_tokens": 7, "completion_tokens": 2,
                        "prompt_tokens_details": {"cached_tokens": 5}})
-            == {"prompt": 7, "completion": 2, "cached": 5}, "OpenAI usage shape mis-normalized")
+            == {"prompt": 7, "completion": 2, "cached": 5},
+            "OpenAI prompt_tokens already counts cached tokens; it must not be added twice")
+    # Anthropic: input_tokens EXCLUDES cache creation and cache read, so the real total
+    # input is input + creation + read (Anthropic's own billing definition).  Three
+    # distinct values so a dropped term cannot coincidentally produce the right sum.
+    require(normalize({"input_tokens": 9, "output_tokens": 3,
+                       "cache_creation_input_tokens": 40, "cache_read_input_tokens": 100})
+            == {"prompt": 149, "completion": 3, "cached": 100},
+            "Anthropic prompt must add cache creation and cache read to input_tokens")
     require(normalize({"input_tokens": 9, "output_tokens": 3, "cache_read_input_tokens": 1})
-            == {"prompt": 9, "completion": 3, "cached": 1}, "Anthropic usage shape mis-normalized")
+            == {"prompt": 10, "completion": 3, "cached": 1},
+            "Anthropic read-only cache still belongs in the prompt total")
+    require(normalize({"input_tokens": 9, "output_tokens": 3})
+            == {"prompt": 9, "completion": 3, "cached": 0},
+            "Anthropic without cache must stay unchanged")
+    require(normalize({"prompt": 149, "completion": 3, "cached": 100})
+            == {"prompt": 149, "completion": 3, "cached": 100},
+            "already-normalized usage must pass through unchanged (streams re-normalize on write)")
+    # Multi-round aggregation adds field by field.
+    acc = app_module._accumulate_usage(None, normalize(
+        {"input_tokens": 9, "output_tokens": 3, "cache_creation_input_tokens": 40,
+         "cache_read_input_tokens": 100}))
+    acc = app_module._accumulate_usage(acc, normalize(
+        {"input_tokens": 1, "output_tokens": 2, "cache_read_input_tokens": 7}))
+    require(acc == {"prompt": 157, "completion": 5, "cached": 107},
+            f"multi-round usage aggregation is wrong: {acc}")
     for empty in (None, "", [], {}, 0):
         require(normalize(empty) is None, f"non-dict usage must normalize to None: {empty!r}")
     # Counted once, together with the streaming half, as T-W2-03-16.
@@ -2617,23 +2676,44 @@ async def test_w2_03_entry_and_panel(client: httpx.AsyncClient) -> None:
     passed("T-W2-03-11 explicitly invalid turn_key is rejected at the request entry")
 
     # ---- 23. project turns keep their scope and still skip extraction -------
-    await _truncate("conversations", "chat_conversations", "chat_projects")
+    # This must go through process_memories_background with memory ON and a trigger
+    # word present, so the turn would genuinely reach extraction if the project skip
+    # were removed.  Calling append_turn_events_atomic directly would never enter the
+    # extraction path at all, and the guard would stay green with the skip deleted.
+    await _truncate("conversations", "chat_conversations", "chat_projects", "memories")
     await _pool_execute("INSERT INTO chat_projects (id, name) VALUES ('w203-proj', 'p')")
     await _pool_execute(
         "INSERT INTO chat_conversations (id, title, project_id) VALUES ('w203-proj-c','c','w203-proj')"
     )
-    await database.append_turn_events_atomic(
-        "w203-proj-c", "u", "a", "m", client_gave_conv_id=True, turn_key="pk"
-    )
-    rows = await _ledger_rows("w203-proj-c")
-    require(len(rows) == 2, f"project turn must still land two ledger rows, got {len(rows)}")
-    require(all(r["scope_known"] is True and r["project_id"] == "w203-proj" for r in rows),
-            f"project turn lost its scope: {[(r['scope_known'], r['project_id']) for r in rows]}")
-    require(not await _pool_fetchval(
-        "SELECT EXISTS(SELECT 1 FROM conversations WHERE session_id = 'w203-proj-c' "
-        "AND scope_known = TRUE AND project_id IS NULL)"),
-        "a project turn must never satisfy the global scope condition")
-    passed("T-W2-03-23 project turns carry their scope and stay out of the global pool")
+    mem_key = "memory_enabled"
+    mem_had = await _pool_fetchval("SELECT EXISTS(SELECT 1 FROM gateway_config WHERE key = $1)", mem_key)
+    mem_prev = await _config_row(mem_key)
+    try:
+        await _upsert_config(mem_key, "true")
+        trigger_word = next(w for w in app_module.MEMORY_TRIGGER_WORDS if w)
+        result = await app_module.process_memories_background(
+            "w203-proj-c", f"{trigger_word}我最喜欢奇异果", "好，我记住了", "m",
+            project_id="w203-proj", extract_enabled=True,
+            client_gave_conv_id=True, turn_key="pk",
+        )
+        require(isinstance(result, dict) and result.get("action") == "skip_project",
+                f"a project turn must short-circuit before extraction, got {result!r}")
+        rows = await _ledger_rows("w203-proj-c")
+        require(len(rows) == 2, f"project turn must still land two ledger rows, got {len(rows)}")
+        require(all(r["scope_known"] is True and r["project_id"] == "w203-proj" for r in rows),
+                f"project turn lost its scope: {[(r['scope_known'], r['project_id']) for r in rows]}")
+        require(await _pool_fetchval("SELECT COUNT(*) FROM memories") == 0,
+                "a project turn leaked fragments into the global memory pool")
+        require(not await _pool_fetchval(
+            "SELECT EXISTS(SELECT 1 FROM conversations WHERE session_id = 'w203-proj-c' "
+            "AND scope_known = TRUE AND project_id IS NULL)"),
+            "a project turn must never satisfy the global scope condition")
+    finally:
+        if mem_had:
+            await _upsert_config(mem_key, mem_prev)
+        else:
+            await _pool_execute("DELETE FROM gateway_config WHERE key = $1", mem_key)
+    passed("T-W2-03-23 project turns record their scope and never reach global extraction")
 
     # ---- 24. both gates are registered on both sides and settable ----------
     schema_js = (ROOT / "admin-panel" / "js" / "config-schema.js").read_text(encoding="utf-8")
@@ -2897,6 +2977,21 @@ async def test_w2_03_chat_paths(client: httpx.AsyncClient) -> None:
         rows = await _await_ledger("w203-nousage", 2)
         require(rows and rows[1]["usage"] is None,
                 f"a stream without a usage block must store NULL: {rows[1]['usage'] if rows else 'no rows'!r}")
+
+        # End to end with an Anthropic-shaped usage block.  The tool loop normalizes the
+        # raw upstream usage *before* from_anthropic_response(), so this is the shape that
+        # actually reaches the ledger there — a dropped cache term shows up as a low prompt.
+        await _truncate("conversations")
+        await _chat(client, {
+            "model": "mock-model", "stream": True, "conversation_id": "w203-anthropic-usage",
+            "messages": [{"role": "user", "content": "cached prompt"}],
+        }, sse_events=[_DELTA, "data: [DONE]\n\n"],
+           json_body={"choices": [{"message": {"content": "a-body"}}], "model": "mock-model",
+                      "usage": {"input_tokens": 9, "output_tokens": 3,
+                                "cache_creation_input_tokens": 40, "cache_read_input_tokens": 100}})
+        rows = await _await_ledger("w203-anthropic-usage", 2)
+        require(json.loads(rows[1]["usage"]) == {"prompt": 149, "completion": 3, "cached": 100},
+                f"Anthropic cache tokens were lost end to end: {rows[1]['usage']!r}")
         passed("T-W2-03-16 usage is normalized for both vendors and captured/NULL across streams")
     finally:
         for key, had, prev in ((mem_key, mem_had, mem_prev), (id_key, id_had, id_prev)):

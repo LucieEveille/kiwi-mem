@@ -1083,12 +1083,29 @@ def normalize_usage_for_storage(usage):
         return None
     if set(usage) == _NORMALIZED_USAGE_KEYS:
         return dict(usage)
+
+    cache_creation = usage.get("cache_creation_input_tokens") or 0
+    cache_read = usage.get("cache_read_input_tokens") or 0
+
+    prompt_tokens = usage.get("prompt_tokens")
+    if prompt_tokens is None:
+        # Anthropic 口径：input_tokens **不含**缓存部分，真实总输入还要把
+        # cache_creation_input_tokens 与 cache_read_input_tokens 加回来。
+        # 工具循环在 from_anthropic_response() 之前就归一化原始 usage，拿到的
+        # 正是这种形状；漏加会让开了 prompt cache 的多轮工具聊天持续少记。
+        prompt = (usage.get("input_tokens") or 0) + cache_creation + cache_read
+    else:
+        # OpenAI 口径：prompt_tokens 已经把 cached_tokens 算在内，不得重复累加。
+        prompt = prompt_tokens
+
     details = usage.get("prompt_tokens_details")
     cached = details.get("cached_tokens") if isinstance(details, dict) else None
     if cached is None:
-        cached = usage.get("cached_tokens") or usage.get("cache_read_input_tokens") or 0
+        # cached 只记「读命中」，不含 cache creation——后者是首次写入的成本。
+        cached = usage.get("cached_tokens") or cache_read or 0
+
     return {
-        "prompt": usage.get("prompt_tokens") or usage.get("input_tokens") or 0,
+        "prompt": prompt,
         "completion": usage.get("completion_tokens") or usage.get("output_tokens") or 0,
         "cached": cached or 0,
     }
@@ -1109,8 +1126,11 @@ async def _regen_turn_tx(conn, session_id, assistant_content, model,
     混合期（闸门开→关→开）关闸行与新轮并存时，OR 混选会让带合法 turn_id 的新轮
     误删后写入的 NULL 行。
     """
+    # 连身份一起取回：替换进来的 assistant 必须继承目标 user 的轮次与归属，
+    # 而不是用「本次请求」重新判定的那份——否则同一轮会被撕成两半。
     latest_user = await conn.fetchrow(
-        "SELECT id, turn_id FROM conversations WHERE session_id = $1 AND role = 'user' "
+        "SELECT id, turn_id, turn_key, scope_known, project_id FROM conversations "
+        "WHERE session_id = $1 AND role = 'user' "
         "ORDER BY created_at DESC, id DESC LIMIT 1",
         session_id,
     )
@@ -1163,9 +1183,16 @@ async def _regen_turn_tx(conn, session_id, assistant_content, model,
             session_id, user_id,
         )
 
+    # 身份四件套一律继承目标 user，不用本次请求重新判定的值：
+    #   · 旧客户端重生成不带 turn_key 时，用请求值会把 user 的 k1 配上 assistant 的 NULL；
+    #   · 会话在原轮之后被移进/移出项目，或 metadata 此时才同步完成，用当前判定会让
+    #     同一轮出现「问题在全局、回答在项目」，W2-06 按 scope 消费时这一轮会被撕开，
+    #     项目侧的回答甚至可能单边进入全局池。
+    # 当前 scope 判定只在没有目标 user 可继承的 orphan 分支里兜底。
     await conn.execute(
         _LEDGER_INSERT_SQL, session_id, "assistant", assistant_content, model,
-        project_id, scope_known, _to_json(normalize_usage_for_storage(usage)), latest_turn, turn_key,
+        latest_user["project_id"], latest_user["scope_known"],
+        _to_json(normalize_usage_for_storage(usage)), latest_turn, latest_user["turn_key"],
     )
     return {"ok": True, "path": "regen", "turn_id": latest_turn}
 
