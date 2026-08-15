@@ -551,6 +551,35 @@ async def init_tables():
                 await conn.execute(f"ALTER TABLE chat_messages ADD COLUMN {col_name} {col_def}")
                 print(f"✅ chat_messages 表已添加 {col_name} 列（W2-02 消息身份）")
 
+        # W2-03：事件账本 conversations 扩展 — 项目、轮次、用量三重身份。
+        # 三态语义（scope_known 取代空串哨兵，与 memories.project_id IS NULL=全局 对齐）：
+        #   scope_known=TRUE  + project_id NULL → 明确全局
+        #   scope_known=TRUE  + project_id 非空 → 项目对话（含项目已删的历史归属行；
+        #                        归属是历史事实，TRUE+非空永不进全局，安全等价且信息保留）
+        #   scope_known=FALSE + project_id NULL → 归属未知（存量 + 关闸期 + 不可证），
+        #                        不参与任何新循环，永不自动宣称全局
+        # 存量行由 DEFAULT FALSE 永久留白，无需也不得回填。
+        # turn_id = 该轮 user 事件自身 id，同轮 user 与 assistant 共享。
+        # turn_key 是客户端稳定轮次键：它与 chat_messages.turn_key **同名不同义**——
+        # 后者只服务前端消息快照，本列服务不可变事件账本，禁止跨表 JOIN 或互推。
+        await conn.execute("ALTER TABLE conversations ADD COLUMN IF NOT EXISTS project_id TEXT DEFAULT NULL")
+        await conn.execute("ALTER TABLE conversations ADD COLUMN IF NOT EXISTS scope_known BOOLEAN NOT NULL DEFAULT FALSE")
+        await conn.execute("ALTER TABLE conversations ADD COLUMN IF NOT EXISTS usage JSONB DEFAULT NULL")
+        await conn.execute("ALTER TABLE conversations ADD COLUMN IF NOT EXISTS turn_id BIGINT DEFAULT NULL")
+        await conn.execute("ALTER TABLE conversations ADD COLUMN IF NOT EXISTS turn_key TEXT DEFAULT NULL")
+
+        # W2-03：每会话提取游标 + 原子认领的载体。本票只建表、零读写，
+        # 接线留给 W2-07（游标、租约、失败重试与历史重生成）。
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS memory_extraction_state (
+                session_id                TEXT PRIMARY KEY,
+                last_extracted_message_id BIGINT NOT NULL DEFAULT 0,
+                claimed_until             TIMESTAMPTZ DEFAULT NULL,
+                updated_at                TIMESTAMPTZ DEFAULT NOW()
+            );
+        """)
+        await conn.execute("ALTER TABLE memory_extraction_state ADD COLUMN IF NOT EXISTS claim_token TEXT")
+
         # v5.3：时间有效期窗口（MemPalace 启发）
         for col_name, col_def in [
             ("valid_from", "TIMESTAMPTZ DEFAULT NOW()"),
@@ -935,6 +964,12 @@ def calculate_heat(row, params: dict = None) -> float:
 # 对话记录操作
 # ============================================================
 
+# W2-03：全局事件的唯一判定式。TRUE+非空（项目对话，含项目已删的历史归属行）与
+# FALSE+NULL（归属未知）都不满足它，因此都进不了全局循环。消费者一律引用本常量，
+# 不得就地手写条件，避免各处漂移。
+CONVERSATIONS_GLOBAL_SCOPE = "scope_known = TRUE AND project_id IS NULL"
+
+
 async def save_message(session_id: str, role: str, content: str, model: str = ""):
     pool = await get_pool()
     async with pool.acquire() as conn:
@@ -953,7 +988,7 @@ async def delete_latest_assistant_message(session_id: str):
             WHERE id = (
                 SELECT id FROM conversations
                 WHERE session_id = $1 AND role = 'assistant'
-                ORDER BY created_at DESC
+                ORDER BY created_at DESC, id DESC
                 LIMIT 1
             )
             """,
@@ -965,7 +1000,8 @@ async def get_recent_messages(session_id: str, limit: int = 20):
     pool = await get_pool()
     async with pool.acquire() as conn:
         rows = await conn.fetch(
-            "SELECT role, content, created_at FROM conversations WHERE session_id = $1 ORDER BY created_at DESC LIMIT $2",
+            "SELECT role, content, created_at FROM conversations WHERE session_id = $1 "
+            "ORDER BY created_at DESC, id DESC LIMIT $2",
             session_id, limit,
         )
         return list(reversed(rows))
@@ -976,10 +1012,252 @@ async def get_recent_conversation(limit: int = 20):
     pool = await get_pool()
     async with pool.acquire() as conn:
         rows = await conn.fetch(
-            "SELECT role, content, created_at FROM conversations ORDER BY created_at DESC LIMIT $1",
+            "SELECT role, content, created_at FROM conversations "
+            "ORDER BY created_at DESC, id DESC LIMIT $1",
             limit,
         )
         return list(reversed(rows))
+
+
+async def _resolve_scope_tx(conn, session_id: str, *, client_gave_conv_id: bool,
+                            project_id_present: bool, payload_project_id):
+    """在事务内判定本轮事件的归属，返回 (scope_known, project_id, event_code|None)。
+
+    七行权威表（判定与写入共用同一事务快照）：
+      1. metadata 有且项目存在        → TRUE + metadata 值（payload 不一致仍以 metadata 为准）
+      2. metadata 有但项目已删        → TRUE + 原 project_id（历史归属是事实；TRUE+非空永不进全局）
+      3. metadata 有且 project_id 空  → TRUE + NULL（明确全局）
+      4. 服务端生成 session + 显式 null → TRUE + NULL（当轮唯一证据，采信）
+      5. 服务端生成 session + 有效项目 → TRUE + payload 值
+      6. 客户端给了 conversation_id 但 metadata 查无 → FALSE + NULL（无论 payload 写什么）
+      7. 其余（缺键 / 空串 / 项目不存在）→ FALSE + NULL
+    未经服务端验证的 payload 永不升格为权威：这正是行 6 与行 5 的分界。
+    """
+    metadata = await conn.fetchrow(
+        "SELECT project_id FROM chat_conversations WHERE id = $1", session_id
+    )
+    if metadata is not None:
+        meta_pid = metadata["project_id"]
+        if meta_pid:
+            project_alive = await conn.fetchval(
+                "SELECT EXISTS(SELECT 1 FROM chat_projects WHERE id = $1)", meta_pid
+            )
+            if not project_alive:
+                return True, meta_pid, "scope_project_missing"
+            if project_id_present and payload_project_id != meta_pid:
+                return True, meta_pid, "scope_mismatch"
+            return True, meta_pid, None
+        return True, None, None
+
+    if client_gave_conv_id:
+        # 同步缺口：会话身份来自客户端却查不到 metadata，无法证实归属
+        return False, None, "scope_unverified"
+
+    if project_id_present:
+        if payload_project_id is None:
+            return True, None, None
+        if payload_project_id:
+            payload_alive = await conn.fetchval(
+                "SELECT EXISTS(SELECT 1 FROM chat_projects WHERE id = $1)", payload_project_id
+            )
+            if payload_alive:
+                return True, payload_project_id, "scope_payload_trusted"
+        return False, None, "scope_unverified"
+    return False, None, None
+
+
+_NORMALIZED_USAGE_KEYS = {"prompt", "completion", "cached"}
+
+
+def normalize_usage_for_storage(usage):
+    """把一份 usage 归一化为 {prompt, completion, cached}，供事件账本落 usage 列。
+
+    兼容 OpenAI（prompt_tokens / completion_tokens / prompt_tokens_details.cached_tokens）
+    与 Anthropic 风格（input_tokens / output_tokens / cache_read_input_tokens）。
+    非 dict 或空 → None。
+
+    **幂等**：已经是归一化形状的输入原样返回。流式路径按轮累加的是归一化值，
+    落库时会再经过本函数一次；若不幂等，第二次会把三个字段全部清零。
+    """
+    if not isinstance(usage, dict) or not usage:
+        return None
+    if set(usage) == _NORMALIZED_USAGE_KEYS:
+        return dict(usage)
+
+    cache_creation = usage.get("cache_creation_input_tokens") or 0
+    cache_read = usage.get("cache_read_input_tokens") or 0
+
+    prompt_tokens = usage.get("prompt_tokens")
+    if prompt_tokens is None:
+        # Anthropic 口径：input_tokens **不含**缓存部分，真实总输入还要把
+        # cache_creation_input_tokens 与 cache_read_input_tokens 加回来。
+        # 工具循环在 from_anthropic_response() 之前就归一化原始 usage，拿到的
+        # 正是这种形状；漏加会让开了 prompt cache 的多轮工具聊天持续少记。
+        prompt = (usage.get("input_tokens") or 0) + cache_creation + cache_read
+    else:
+        # OpenAI 口径：prompt_tokens 已经把 cached_tokens 算在内，不得重复累加。
+        prompt = prompt_tokens
+
+    details = usage.get("prompt_tokens_details")
+    cached = details.get("cached_tokens") if isinstance(details, dict) else None
+    if cached is None:
+        # cached 只记「读命中」，不含 cache creation——后者是首次写入的成本。
+        cached = usage.get("cached_tokens") or cache_read or 0
+
+    return {
+        "prompt": prompt,
+        "completion": usage.get("completion_tokens") or usage.get("output_tokens") or 0,
+        "cached": cached or 0,
+    }
+
+
+_LEDGER_INSERT_SQL = (
+    "INSERT INTO conversations "
+    "(session_id, role, content, model, project_id, scope_known, usage, turn_id, turn_key) "
+    "VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)"
+)
+
+
+async def _regen_turn_tx(conn, session_id, assistant_content, model,
+                         scope_known, project_id, usage, turn_key):
+    """事务内的重生成：先定目标轮，再互斥选材，最后按 id 精确删并追加新回复。
+
+    绝不先删后猜。turn_id 非空与 legacy NULL 两条候选分支互斥、禁止 OR 混选——
+    混合期（闸门开→关→开）关闸行与新轮并存时，OR 混选会让带合法 turn_id 的新轮
+    误删后写入的 NULL 行。
+    """
+    # 连身份一起取回：替换进来的 assistant 必须继承目标 user 的轮次与归属，
+    # 而不是用「本次请求」重新判定的那份——否则同一轮会被撕成两半。
+    latest_user = await conn.fetchrow(
+        "SELECT id, turn_id, turn_key, scope_known, project_id FROM conversations "
+        "WHERE session_id = $1 AND role = 'user' "
+        "ORDER BY created_at DESC, id DESC LIMIT 1",
+        session_id,
+    )
+
+    if latest_user is None:
+        # 账本里没有该 session 的 user 行：带键必然查无 → 放弃；缺键走 orphan 分支。
+        # 本分支没有 user_id，不得复用 id > user_id 条件。
+        if turn_key is not None:
+            print("event=regen_target_invalid increment=1")
+            return {"ok": False, "path": "regen", "code": "regen_target_invalid"}
+        await conn.execute(
+            "DELETE FROM conversations WHERE id = ("
+            "  SELECT id FROM conversations WHERE session_id = $1 AND role = 'assistant' "
+            "  AND turn_id IS NULL ORDER BY created_at DESC, id DESC LIMIT 1)",
+            session_id,
+        )
+        await conn.execute(
+            _LEDGER_INSERT_SQL, session_id, "assistant", assistant_content, model,
+            project_id, scope_known, _to_json(normalize_usage_for_storage(usage)), None, turn_key,
+        )
+        print("event=turn_orphan increment=1")
+        return {"ok": True, "path": "regen", "turn_id": None}
+
+    user_id, latest_turn = latest_user["id"], latest_user["turn_id"]
+
+    if turn_key is not None:
+        # 事务内解析（不走独立连接，保证与选材/删除同一快照）：
+        # 键指向的轮必须就是最新轮，否则一律放弃——绝不猜测，也绝不改写历史轮。
+        key_turn = await conn.fetchval(
+            "SELECT turn_id FROM conversations WHERE session_id = $1 AND role = 'user' "
+            "AND turn_key = $2 ORDER BY id DESC LIMIT 1",
+            session_id, turn_key,
+        )
+        if key_turn is None or key_turn != latest_turn:
+            print("event=regen_target_invalid increment=1")
+            return {"ok": False, "path": "regen", "code": "regen_target_invalid"}
+
+    if latest_turn is not None:
+        await conn.execute(
+            "DELETE FROM conversations WHERE id = ("
+            "  SELECT id FROM conversations WHERE session_id = $1 AND role = 'assistant' "
+            "  AND turn_id = $2 ORDER BY created_at DESC, id DESC LIMIT 1)",
+            session_id, latest_turn,
+        )
+    else:
+        await conn.execute(
+            "DELETE FROM conversations WHERE id = ("
+            "  SELECT id FROM conversations WHERE session_id = $1 AND role = 'assistant' "
+            "  AND turn_id IS NULL AND id > $2 ORDER BY created_at DESC, id DESC LIMIT 1)",
+            session_id, user_id,
+        )
+
+    # 身份四件套一律继承目标 user，不用本次请求重新判定的值：
+    #   · 旧客户端重生成不带 turn_key 时，用请求值会把 user 的 k1 配上 assistant 的 NULL；
+    #   · 会话在原轮之后被移进/移出项目，或 metadata 此时才同步完成，用当前判定会让
+    #     同一轮出现「问题在全局、回答在项目」，W2-06 按 scope 消费时这一轮会被撕开，
+    #     项目侧的回答甚至可能单边进入全局池。
+    # 当前 scope 判定只在没有目标 user 可继承的 orphan 分支里兜底。
+    await conn.execute(
+        _LEDGER_INSERT_SQL, session_id, "assistant", assistant_content, model,
+        latest_user["project_id"], latest_user["scope_known"],
+        _to_json(normalize_usage_for_storage(usage)), latest_turn, latest_user["turn_key"],
+    )
+    return {"ok": True, "path": "regen", "turn_id": latest_turn}
+
+
+async def append_turn_events_atomic(
+    session_id: str,
+    user_content: str,
+    assistant_content: str,
+    model: str = "",
+    *,
+    client_gave_conv_id: bool = False,
+    project_id_present: bool = False,
+    payload_project_id=None,
+    usage=None,
+    turn_key: str = None,
+    is_regenerate: bool = False,
+) -> dict:
+    """把一轮交互作为单个事务追加进事件账本。
+
+    正常轮：INSERT user（带 scope 与 turn_key）→ 用其自身 id 锚定 turn_id →
+    INSERT assistant（同 scope、同 turn_id/turn_key，外加归一化 usage）。
+    任一步失败整体回滚，绝不留下半轮。
+
+    失败不抛给调用方：暗写失败不得打断聊天，只记一条无标识的安全计数事件。
+    """
+    path = "regen" if is_regenerate else "atomic"
+    pool = await get_pool()
+    try:
+        async with pool.acquire() as conn:
+            async with conn.transaction():
+                scope_known, project_id, scope_event = await _resolve_scope_tx(
+                    conn, session_id,
+                    client_gave_conv_id=client_gave_conv_id,
+                    project_id_present=project_id_present,
+                    payload_project_id=payload_project_id,
+                )
+                if scope_event:
+                    print(f"event={scope_event} increment=1")
+
+                if is_regenerate:
+                    return await _regen_turn_tx(
+                        conn, session_id, assistant_content, model,
+                        scope_known, project_id, usage, turn_key,
+                    )
+
+                user_id = await conn.fetchval(
+                    "INSERT INTO conversations "
+                    "(session_id, role, content, model, project_id, scope_known, turn_key) "
+                    "VALUES ($1, 'user', $2, $3, $4, $5, $6) RETURNING id",
+                    session_id, user_content, model, project_id, scope_known, turn_key,
+                )
+                await conn.execute(
+                    "UPDATE conversations SET turn_id = id WHERE id = $1", user_id
+                )
+                await conn.execute(
+                    _LEDGER_INSERT_SQL, session_id, "assistant", assistant_content, model,
+                    project_id, scope_known, _to_json(normalize_usage_for_storage(usage)), user_id, turn_key,
+                )
+                return {"ok": True, "path": path, "turn_id": user_id,
+                        "scope_known": scope_known, "project_id": project_id}
+    except Exception as e:
+        # 无 payload、无正文、无 session/project 标识；异常类名单列，异常正文永不外泄。
+        print(f"event=ledger_write_failed path={path} code=write_failed "
+              f"exception_type={type(e).__name__} increment=1")
+        return {"ok": False, "path": path, "code": "write_failed"}
 
 
 async def get_handoff_source(exclude_conversation_id: str = None, project_id: str = None):

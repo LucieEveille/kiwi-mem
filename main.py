@@ -28,6 +28,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from database import (
     init_tables, close_pool, get_pool, save_message, delete_latest_assistant_message, search_memories, save_memory,
+    append_turn_events_atomic, normalize_usage_for_storage as _normalize_usage_for_storage,
     track_memory_recall, touch_permanent_memories, search_scenes,
     get_all_memories_count, get_recent_memories, get_recent_conversation, delete_memory,
     batch_delete_memories_guarded, clear_all_memories, update_memory, check_memory_duplicate,
@@ -314,6 +315,9 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    # W2-03：会话身份 v2 把服务端生成的身份放在响应头里回传。浏览器 fetch 默认
+    # 读不到自定义响应头，必须显式 expose，否则前端拿不到、下轮无法带回。
+    expose_headers=["X-Kiwi-Session-Id"],
 )
 
 # ============================================================
@@ -1168,7 +1172,7 @@ def emotion_to_weight(level: str) -> int:
 MEMORY_TRIGGER_WORDS = ["记住", "记下", "帮我记", "请记", "别忘了", "不要忘记", "你要记得", "记一下"]
 
 
-async def process_memories_background(session_id: str, user_msg: str, assistant_msg: str, model: str, emotion_level: str = "normal", project_id: str = None, is_regenerate: bool = False):
+async def process_memories_background(session_id: str, user_msg: str, assistant_msg: str, model: str, emotion_level: str = "normal", project_id: str = None, is_regenerate: bool = False, *, extract_enabled: bool = True, usage: dict = None, turn_key: str = None, client_gave_conv_id: bool = False, project_id_present: bool = False, payload_project_id=None):
     """
     后台异步：存储对话 + 按间隔提取记忆（不阻塞主流程）
     
@@ -1198,12 +1202,27 @@ async def process_memories_background(session_id: str, user_msg: str, assistant_
     assistant_msg = strip_dream_tag(assistant_msg)
 
     try:
-        # 对话始终保存
-        if is_regenerate:
-            await delete_latest_assistant_message(session_id)
+        # 对话始终保存。W2-03：两条写法互斥，绝不双写——
+        #   闸门开 → 单事务原子落账（项目/轮次/用量三重身份）；
+        #   闸门关 → 字节级旧路径（两次独立 save_message，新列全默认）。
+        if await get_config_bool("memory_event_ledger_write_enabled", fallback=True):
+            await append_turn_events_atomic(
+                session_id, user_msg, assistant_msg, model,
+                client_gave_conv_id=client_gave_conv_id,
+                project_id_present=project_id_present,
+                payload_project_id=payload_project_id,
+                usage=usage, turn_key=turn_key, is_regenerate=is_regenerate,
+            )
         else:
-            await save_message(session_id, "user", user_msg, model)
-        await save_message(session_id, "assistant", assistant_msg, model)
+            if is_regenerate:
+                await delete_latest_assistant_message(session_id)
+            else:
+                await save_message(session_id, "user", user_msg, model)
+            await save_message(session_id, "assistant", assistant_msg, model)
+
+        # W2-03 分层：事件已经落账，但记忆关闭或内部请求时到此为止。
+        if not extract_enabled:
+            return {"action": "skip_extract_disabled"}
 
         # 项目对话默认不提取碎片（对话已保存，但不走记忆提取流程）
         # 未来做"碎片进全局"开关后，这里加条件判断
@@ -1837,10 +1856,35 @@ async def chat_completions(request: Request):
     }
     
     # v5.8：项目 ID（前端传来，用于项目指令/记忆/文件注入）
+    # W2-03：键存在性先于取值——缺键 / 显式 null / 空串是三种不同输入，
+    # 归属判定必须能区分它们，所以在 pop 抹平之前先记下来。
+    project_id_present = "project_id" in body
+    raw_project_id = body.get("project_id")
     project_id = body.pop('project_id', None) or None
     # v6.0：前端对话 ID，用于无缝换窗时避免衔接到当前对话自身
     conversation_id = body.pop('conversation_id', None) or None
     is_regenerate = bool(body.pop('is_regenerate', False))
+    # W2-03：客户端稳定轮次键。缺键放行（旧客户端兼容，重生成按最新轮）；
+    # 显式提供却非法则一律 400，不分是否重生成——把显式错误静默转成 None
+    # 等于让它伪装成旧客户端，与 W2-02 的两层拒绝哲学相悖。
+    _turn_key_raw = body.pop('turn_key', None)
+    if _turn_key_raw is None:
+        turn_key = None
+    elif (not isinstance(_turn_key_raw, str) or isinstance(_turn_key_raw, bool)
+          or not _turn_key_raw.strip() or len(_turn_key_raw) > 200):
+        return JSONResponse(status_code=400, content={"error": "turn_key 必须是 1-200 字符的非空字符串"})
+    else:
+        turn_key = _turn_key_raw.strip()
+    # 身份来源标记：贯穿 scope 判定——只有服务端自己生成 session 的请求，
+    # 其 payload 才可能成为归属的唯一证据。
+    client_gave_conv_id = bool(conversation_id)
+    # 归属上下文打包传递：从请求入口一路带到暗写，避免每层都摊开四个参数。
+    ledger_ctx = {
+        "client_gave_conv_id": client_gave_conv_id,
+        "project_id_present": project_id_present,
+        "payload_project_id": raw_project_id,
+        "turn_key": turn_key,
+    }
 
     # 先确定最终模型，后面的 prompt cache 判断要用它。
     # 如果客户端没传 model，这里会补上默认值，避免误判为“非 Claude”而跳过缓存。
@@ -1897,7 +1941,15 @@ async def chat_completions(request: Request):
     is_anthropic_fmt = (api_format == "anthropic")
     is_openrouter = "openrouter" in chat_api_url.lower()
 
-    mem_enabled = await get_memory_enabled()
+    # W2-03 分层双开关：把「记不记事件」与「提不提记忆」拆开。
+    #   record_events   —— 只要是真实聊天就落账，即使记忆总开关是关的；
+    #                      内部请求（标题生成、上下文压缩）不落原文。
+    #   extract_enabled —— 记忆开且非内部请求，才计数、提取、写 memories。
+    # mem_enabled 的下游语义仍是「记忆系统可用」（提示词注入等），等同 extract_enabled。
+    _raw_mem_enabled = await get_memory_enabled()
+    record_events = not skip_prompt
+    extract_enabled = _raw_mem_enabled and not skip_prompt
+    mem_enabled = extract_enabled
     prompt_meta = {}
     cache_on = False
     cache_ttl = "1h"
@@ -2103,8 +2155,16 @@ async def chat_completions(request: Request):
     # Bug #3：前端不传 conversation_id 时，退回用「首条用户消息」的 hash —— 它在同一段
     # 对话的多轮间稳定（不像 uuid 每轮都变），让上面说的“跨轮稳定”在无 conversation_id
     # 时也成立。
+    # W2-03 身份 v2（默认关）：短 hash 会把两段不同对话的相同开场白合并成同一 session，
+    # 事件、提取游标、工具抽屉与 OpenRouter 黏性路由会一起串线。开关打开后改用
+    # auto-r- + 完整 uuid4，并把身份回传给客户端，让它下轮带回来继续同一会话。
+    session_generated = False
     if conversation_id:
         session_id = conversation_id
+    elif await get_config_bool("session_identity_v2_enabled", fallback=False):
+        session_id = "auto-r-" + uuid.uuid4().hex
+        session_generated = True
+        print("event=session_generated increment=1")
     else:
         first_user = next(
             (
@@ -2390,7 +2450,7 @@ async def chat_completions(request: Request):
         print(f"🔧 工具模式: 共 {len(openai_tools)} 个工具可用")
 
         return StreamingResponse(
-            _stream_with_tools(
+            _with_ev_session(_stream_with_tools(
                 messages=messages,
                 tools=openai_tools,
                 tool_map=tool_map,
@@ -2410,17 +2470,25 @@ async def chat_completions(request: Request):
                 is_regenerate=is_regenerate,
                 reasoning_effort=reasoning_effort,
                 skip_prompt=skip_prompt,
-            ),
+                record_events=record_events,
+                extract_enabled=extract_enabled,
+                ledger_ctx=ledger_ctx,
+            ), session_id, session_generated),
             media_type="text/event-stream",
-            headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"},
+            headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no",
+                     **_session_headers(session_id, session_generated)},
         )
 
     # ========== 正常转发模式 ==========
     if is_stream:
         return StreamingResponse(
-            stream_and_capture(headers, body, session_id, user_message, model, tool_events, api_url=chat_api_url, project_id=project_id, prompt_meta=prompt_meta, api_format=api_format, api_key=chat_api_key, is_regenerate=is_regenerate, mem_enabled=mem_enabled),
+            _with_ev_session(
+                stream_and_capture(headers, body, session_id, user_message, model, tool_events, api_url=chat_api_url, project_id=project_id, prompt_meta=prompt_meta, api_format=api_format, api_key=chat_api_key, is_regenerate=is_regenerate, mem_enabled=mem_enabled, record_events=record_events, extract_enabled=extract_enabled, ledger_ctx=ledger_ctx),
+                session_id, session_generated,
+            ),
             media_type="text/event-stream",
-            headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"},
+            headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no",
+                     **_session_headers(session_id, session_generated)},
         )
     else:
         # 非流式：Anthropic 格式需要转换请求和响应
@@ -2440,22 +2508,32 @@ async def chat_completions(request: Request):
                     pass
                 dream_triggered = detect_dream_trigger(assistant_msg)
                 
-                if mem_enabled and user_message and assistant_msg:
+                # W2-03：落账门是 record_events（关记忆也记事件），提取由 extract_enabled 控制。
+                if record_events and user_message and assistant_msg:
                     _emo = merge_emotion_levels(detect_emotion_from_user_msg(user_message), detect_emotion_from_response(assistant_msg))
                     _spawn_background_task(
-                        process_memories_background(session_id, user_message, assistant_msg, model, emotion_level=_emo, project_id=project_id, is_regenerate=is_regenerate)
+                        process_memories_background(
+                            session_id, user_message, assistant_msg, model,
+                            emotion_level=_emo, project_id=project_id, is_regenerate=is_regenerate,
+                            extract_enabled=extract_enabled,
+                            usage=_normalize_usage_for_storage(resp_data.get("usage")),
+                            **ledger_ctx,
+                        )
                     )
                 
                 if dream_triggered:
                     print(f"🌙 检测到 Dream 标记，后台启动 Dream（非流式响应无 SSE 事件）...")
                     _launch_dream_from_marker()
-                return JSONResponse(status_code=200, content=resp_data)
+                return JSONResponse(status_code=200, content=resp_data,
+                                    headers=_session_headers(session_id, session_generated))
             else:
                 try:
                     err_content = response.json()
                 except Exception:
                     err_content = {"error": response.text[:500]}
-                return JSONResponse(status_code=response.status_code, content=err_content)
+                # 身份已受理即回传：它表示「重试时继续用哪个会话」，与上游是否成功无关。
+                return JSONResponse(status_code=response.status_code, content=err_content,
+                                    headers=_session_headers(session_id, session_generated))
 
 
 async def _execute_gateway_tool(tool_name: str, arguments: dict, tool_info: dict) -> tuple:
@@ -2641,7 +2719,7 @@ async def _execute_gateway_tool(tool_name: str, arguments: dict, tool_info: dict
     return f"未知的内置工具: {tool_name}", extra
 
 
-async def _stream_with_tools(messages, tools, tool_map, model, temperature, tool_events, session_id, user_message, mem_enabled, api_url=None, api_key=None, project_id=None, prompt_meta=None, api_format="openai", is_regenerate: bool = False, reasoning_effort: str = None, skip_prompt: bool = False, top_p=None, max_tokens=None):
+async def _stream_with_tools(messages, tools, tool_map, model, temperature, tool_events, session_id, user_message, mem_enabled, api_url=None, api_key=None, project_id=None, prompt_meta=None, api_format="openai", is_regenerate: bool = False, reasoning_effort: str = None, skip_prompt: bool = False, top_p=None, max_tokens=None, record_events: bool = None, extract_enabled: bool = None, ledger_ctx: dict = None):
     """
     工具 + 流式模式：tool call 轮次用非流式（需要完整看 tool_calls），
     最终回复直接输出已获得的内容（模拟流式），不再重复请求 LLM。
@@ -2649,6 +2727,7 @@ async def _stream_with_tools(messages, tools, tool_map, model, temperature, tool
     """
     import httpx as _httpx
 
+    _usage_total = None  # W2-03：D1 聚合——把每个工具轮的 usage 累加后落账本
     _request_meta_context = tool_map.get("_drawer_request_tools", {})
     if _request_meta_context.get("type") == "meta":
         _request_disabled_categories = set(_request_meta_context.get("disabled_categories") or ())
@@ -2745,6 +2824,8 @@ async def _stream_with_tools(messages, tools, tool_map, model, temperature, tool
                 yield "data: [DONE]\n\n"
                 return
             data = resp.json()
+            # W2-03 D1：工具循环每一轮的 usage 都累加，账本存整轮聚合值
+            _usage_total = _accumulate_usage(_usage_total, _normalize_usage_for_storage(data.get("usage")))
             # Anthropic 响应转回 OpenAI 格式
             if api_format == "anthropic":
                 data = from_anthropic_response(data, model)
@@ -2786,7 +2867,9 @@ async def _stream_with_tools(messages, tools, tool_map, model, temperature, tool
                     return
                 _emo = merge_emotion_levels(detect_emotion_from_user_msg(user_message), detect_emotion_from_response(assistant_msg))
                 mem_task = _spawn_background_task(
-                    _finalize_stream_memories(mem_enabled, session_id, user_message, assistant_msg, model, _emo, project_id, is_regenerate)
+                    _finalize_stream_memories(mem_enabled, session_id, user_message, assistant_msg, model, _emo, project_id, is_regenerate,
+                                              record_events=record_events, extract_enabled=extract_enabled,
+                                              usage=_usage_total, ledger_ctx=ledger_ctx)
                 )
 
             def _tool_spawn_dream():
@@ -3102,7 +3185,7 @@ async def _dream_fallback_after_grace(trigger_type: str = "auto", grace: float =
     _launch_dream_detached(trigger_type)
 
 
-async def _finalize_stream_memories(mem_enabled, session_id, user_message, assistant_msg, model, emotion_level, project_id, is_regenerate):
+async def _finalize_stream_memories(mem_enabled, session_id, user_message, assistant_msg, model, emotion_level, project_id, is_regenerate, *, record_events=None, extract_enabled=None, usage=None, ledger_ctx=None):
     """流式收尾的记忆工作（消息入库 + 情绪权重 + 按周期提取）。
 
     独立成协程，供上层用 _spawn_background_task 提为独立后台 task：客户端断连时
@@ -3112,11 +3195,16 @@ async def _finalize_stream_memories(mem_enabled, session_id, user_message, assis
     mem_enabled 由调用方传入（转发路径内联 get_memory_enabled()，工具路径用其 mem_enabled 参数，
     后者已含 skip_prompt 覆盖），保持与各自原有判定完全一致。
     """
-    if not (mem_enabled and user_message and assistant_msg):
+    # W2-03：落账门是 record_events（关记忆也记事件），提取门是 extract_enabled。
+    # 两者缺省时退回 mem_enabled，保持未迁移调用方的原有语义。
+    _record = mem_enabled if record_events is None else record_events
+    _extract = mem_enabled if extract_enabled is None else extract_enabled
+    if not (_record and user_message and assistant_msg):
         return None
     return await process_memories_background(
         session_id, user_message, assistant_msg, model,
         emotion_level=emotion_level, project_id=project_id, is_regenerate=is_regenerate,
+        extract_enabled=_extract, usage=usage, **(ledger_ctx or {}),
     )
 
 
@@ -3156,9 +3244,67 @@ def _capture_openai_sse_event(event: str, full_response: list) -> tuple[int, dic
     return reasoning_chunks, first_delta
 
 
-async def stream_and_capture(headers: dict, body: dict, session_id: str, user_message: str, model: str, tool_events: list = None, api_url: str = None, project_id: str = None, prompt_meta: dict = None, api_format: str = "openai", api_key: str = None, is_regenerate: bool = False, mem_enabled: bool = True):
+def _capture_stream_usage(event: str):
+    """从一个完整 SSE 事件里取出 usage 并归一化；没有就返回 None。
+
+    纯函数，只读事件文本，不写库也不改流。usage 通常在流末的独立事件里，
+    工具循环则每轮都有一份——由调用方按轮累加（D1 聚合）。
+    """
+    for line in event.split("\n"):
+        line = line.strip()
+        if not line.startswith("data: ") or line == "data: [DONE]":
+            continue
+        try:
+            data = json.loads(line[6:])
+        except (json.JSONDecodeError, TypeError, ValueError):
+            continue
+        if isinstance(data, dict) and isinstance(data.get("usage"), dict):
+            return _normalize_usage_for_storage(data["usage"])
+    return None
+
+
+def _accumulate_usage(total, addition):
+    """按字段累加两份归一化 usage；任一为空时返回另一份。"""
+    if not addition:
+        return total
+    if not total:
+        return dict(addition)
+    return {key: (total.get(key) or 0) + (addition.get(key) or 0)
+            for key in ("prompt", "completion", "cached")}
+
+
+def _ev_session_frame(session_id: str) -> bytes:
+    """服务端自产会话身份的流内回传帧。
+
+    语义＝「重试时继续使用的会话身份」，不表示模型调用成功：响应头先于生成器发出，
+    上游失败时收不回，语义上也不该收回。
+    """
+    payload = json.dumps({"ev_session": {"id": session_id, "generated": True}}, ensure_ascii=False)
+    return f"data: {payload}\n\n".encode("utf-8")
+
+
+def _with_ev_session(inner, session_id: str, generated: bool):
+    """把 ev_session 放在流的最前面（先于 ev_handoff / ev_tool / 正文 delta），每流恰一次。"""
+    if not generated:
+        return inner
+
+    async def _wrapped():
+        yield _ev_session_frame(session_id)
+        async for chunk in inner:
+            yield chunk
+
+    return _wrapped()
+
+
+def _session_headers(session_id: str, generated: bool) -> dict:
+    """服务端生成身份时才回传；客户端自带 conversation_id 一律零回显。"""
+    return {"X-Kiwi-Session-Id": session_id} if generated else {}
+
+
+async def stream_and_capture(headers: dict, body: dict, session_id: str, user_message: str, model: str, tool_events: list = None, api_url: str = None, project_id: str = None, prompt_meta: dict = None, api_format: str = "openai", api_key: str = None, is_regenerate: bool = False, mem_enabled: bool = True, record_events: bool = None, extract_enabled: bool = None, ledger_ctx: dict = None):
     """流式响应 + 捕获完整回复 + 工具事件"""
     _api_url = api_url or API_BASE_URL
+    _usage_total = None  # W2-03：按事件累加归一化 usage，流结束时落账本
 
     # 先发送衔接提示（如果有无缝切窗）
     if prompt_meta and prompt_meta.get("handoff"):
@@ -3191,7 +3337,9 @@ async def stream_and_capture(headers: dict, body: dict, session_id: str, user_me
             return
         _emo = merge_emotion_levels(detect_emotion_from_user_msg(user_message), detect_emotion_from_response(_asmsg))
         mem_task = _spawn_background_task(
-            _finalize_stream_memories(mem_enabled, session_id, user_message, _asmsg, model, _emo, project_id, is_regenerate)
+            _finalize_stream_memories(mem_enabled, session_id, user_message, _asmsg, model, _emo, project_id, is_regenerate,
+                                      record_events=record_events, extract_enabled=extract_enabled,
+                                      usage=_usage_total, ledger_ctx=ledger_ctx)
         )
         finalize_spawned = True
 
@@ -3234,11 +3382,13 @@ async def stream_and_capture(headers: dict, body: dict, session_id: str, user_me
                             if not event or event == "data: [DONE]":
                                 continue
                             captured_reasoning, _ = _capture_openai_sse_event(event, full_response)
+                            _usage_total = _accumulate_usage(_usage_total, _capture_stream_usage(event))
                             _reasoning_chunks += captured_reasoning
                             yield (event + "\n\n").encode("utf-8")
                     _tail = _ev_buf.strip()
                     if _tail and _tail != "data: [DONE]":
                         captured_reasoning, _ = _capture_openai_sse_event(_tail, full_response)
+                        _usage_total = _accumulate_usage(_usage_total, _capture_stream_usage(_tail))
                         _reasoning_chunks += captured_reasoning
                         yield (_tail + "\n\n").encode("utf-8")
         else:
@@ -3273,6 +3423,7 @@ async def stream_and_capture(headers: dict, body: dict, session_id: str, user_me
                             if not event or event == "data: [DONE]":
                                 continue
                             captured_reasoning, first_delta = _capture_openai_sse_event(event, full_response)
+                            _usage_total = _accumulate_usage(_usage_total, _capture_stream_usage(event))
                             _reasoning_chunks += captured_reasoning
 
                             # 🔍 调试日志：记录第一个有效delta的所有字段
@@ -3290,6 +3441,7 @@ async def stream_and_capture(headers: dict, body: dict, session_id: str, user_me
                     _tail = buffer.strip()
                     if _tail and _tail != "data: [DONE]":
                         captured_reasoning, _ = _capture_openai_sse_event(_tail, full_response)
+                        _usage_total = _accumulate_usage(_usage_total, _capture_stream_usage(_tail))
                         _reasoning_chunks += captured_reasoning
                         yield (_tail + "\n\n").encode("utf-8")
     finally:

@@ -119,6 +119,13 @@ CONFIG_SCHEMA = {
     #       外部 mcp_servers 仍走原路径并合并，对模型表现为一组完整工具
     "tool_drawer_enabled":   ("",                        "false","工具抽屉开关",      "bool"),
     "reminder_tools_enabled":("",                        "true", "提醒工具",          "bool"),
+    # W2-03：事件账本暗写闸门。默认开——开=一轮进单事务原子落账（带项目/轮次/用量身份），
+    #        关=退回旧的两次独立写入且新列全默认。两者互斥，绝不双写。
+    "memory_event_ledger_write_enabled": ("",            "true", "事件账本原子写入",  "bool"),
+    # W2-03：会话身份 v2。默认关——开=无 conversation_id 时用 auto-r- + 完整 uuid4，
+    #        并把身份回传给客户端；关=沿用旧的首条文本 md5 短 hash。
+    #        开启后未采纳回传的第三方客户端会每轮换 session，断 OpenRouter 黏性与抽屉状态。
+    "session_identity_v2_enabled": ("",                  "false","会话身份 v2",       "bool"),
 }
 
 
