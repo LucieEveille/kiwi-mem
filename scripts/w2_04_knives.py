@@ -85,7 +85,7 @@ KNIVES = [
             assistant_blocked = False''', ()),
 
     ("R2-noline", "落账不记 source_message_id", "database.py", "T-W2-04-36",
-     "sweep the key-less ledger rows",
+     "both ledger rows must record which message they came from",
      '''                    "VALUES ($1, 'user', $2, $3, $4, $5, $6, $7) RETURNING id",
                         session_id, user_content, model, project_id, scope_known, turn_key,
                         user_message_id,''',
@@ -94,7 +94,7 @@ KNIVES = [
                         None,''', ()),
 
     ("R3a", "换窗压缩后不做终检", "main.py", "T-W2-04-37",
-     "the final check must notice the source died",
+     "the prompt builder injected a handoff whose source was deleted mid-flight",
      '''                    still_there = await handoff_source_unchanged(
                         data["source_session_id"], data["source_rev"])''',
      '''                    still_there = True''', ()),
@@ -181,10 +181,10 @@ async def _handoff_source_alive_tx''', ()),
                     return ("对话素材已变化", 409, "sources_changed")''', ()),
 
     ("R6", "爹爹刀 κ：只清第一条自动 divider", "database.py", "T-W2-04-24",
-     "every auto divider must be counted",
+     "every purged auto divider must be stamped",
      '''            if doomed_dividers:''',
      '''            doomed_dividers = doomed_dividers[:1]
-            if doomed_dividers:''', ("T-W2-04-7-purge-receipt",)),
+            if doomed_dividers:''', ("T-W2-04-7-purge-receipt", "T-W2-04-7-divider-count")),
 
     ("epsilon", "爹爹刀 ε：import/全量替换不滤已盖章 ID", "database.py", "T-W2-04-30",
      "import re-seeded a stamped message id",

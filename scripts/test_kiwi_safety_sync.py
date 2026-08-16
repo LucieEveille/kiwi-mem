@@ -3365,7 +3365,8 @@ async def test_w2_04_message_delete_and_ledger(client: httpx.AsyncClient) -> Non
     require(await _pool_fetchval(
         "SELECT COUNT(*) FROM chat_messages WHERE conversation_id = $1 AND role = 'divider' "
         "AND summary IS NOT NULL AND handoff_info IS NULL", conv_c) == 0,
-        "auto-compression dividers must be purged with the message")
+        "auto-compression dividers must be purged with the message",
+        tag="T-W2-04-7-divider-count")
     require(await _pool_fetchval(
         "SELECT EXISTS(SELECT 1 FROM chat_messages WHERE id = 'w204-c-h1')"),
         "handoff dividers are not compression copies and must survive")
