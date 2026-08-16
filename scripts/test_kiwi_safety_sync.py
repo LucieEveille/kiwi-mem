@@ -3458,6 +3458,42 @@ async def test_w2_04_message_delete_and_ledger(client: httpx.AsyncClient) -> Non
     require(await _pool_fetchval(
         "SELECT COUNT(*) FROM conversations WHERE session_id = 'w204-gen'") == 0,
         "a stale-generation write must leave zero rows")
+
+    # The closed-gate legacy path is a second way into the same ledger, and privacy does not
+    # care which door a row came through: it must stop at exactly the same stamps.  Both of
+    # its rows also have to be one transaction — two independent writes let a delete land in
+    # between and leave half a turn behind.
+    legacy_sid = "w204-legacy-stamped"
+    await _seed_conversation(legacy_sid)
+    await client.delete(f"/sync/conversations/{legacy_sid}")
+    result = await database.append_legacy_turn_if_not_deleted(legacy_sid, "u", "a", "m")
+    require(result.get("path") == "tombstoned" and result.get("reason") == "session",
+            f"the closed-gate legacy path ignored the session stamp: {result}")
+    require(await _pool_fetchval(
+        "SELECT COUNT(*) FROM conversations WHERE session_id = $1", legacy_sid) == 0,
+        "a refused legacy write still left ledger rows")
+    generation = await _pool_fetchval("SELECT reset_generation FROM deletion_epoch")
+    result = await database.append_legacy_turn_if_not_deleted(
+        "w204-legacy-gen", "u", "a", "m", reset_generation=generation - 1)
+    require(result.get("path") == "tombstoned" and result.get("reason") == "reset",
+            f"the closed-gate legacy path ignored a stale generation: {result}")
+    live_sid = "w204-legacy-live"
+    await _seed_conversation(live_sid)
+    result = await database.append_legacy_turn_if_not_deleted(live_sid, "u", "a", "m")
+    require(result.get("ok") is True, f"an unstamped legacy write must land: {result}")
+    require(await _pool_fetchval(
+        "SELECT COUNT(*) FROM conversations WHERE session_id = $1", live_sid) == 2,
+        "the legacy path must write both rows")
+    legacy_source = re.search(
+        r"async def append_legacy_turn_if_not_deleted\(.*?(?=\nasync def |\ndef )",
+        (ROOT / "database.py").read_text(encoding="utf-8"), re.S)
+    require(legacy_source and legacy_source.group(0).count("conn.transaction()") == 1
+            and "save_message(" not in legacy_source.group(0),
+            "the legacy pair must land in one transaction, not two independent save_message calls")
+    main_source = (ROOT / "main.py").read_text(encoding="utf-8")
+    require("append_legacy_turn_if_not_deleted(" in main_source
+            and "await save_message(session_id," not in main_source,
+            "the closed-gate branch still calls save_message directly, bypassing the stamps")
     passed("T-W2-04-8 session stamps, turn stamps and stale generations all stop the write")
 
     # ---- 9. interleaved delete vs in-flight write: one deterministic outcome
@@ -3767,6 +3803,56 @@ async def test_w2_04_background_snapshots(client: httpx.AsyncClient) -> None:
         async with conn.transaction():
             status, _ = await database.save_if_sources_unchanged(conn, stale, _save_one)
     require(status == "changed", f"a reset must invalidate every in-flight snapshot, got {status}")
+
+    # Comparing revisions is only safe if the save actually waits for a delete that is
+    # already in flight.  Without the shared session lock the save can read the revision
+    # *before* the delete commits, match its snapshot, and save material the delete is
+    # about to erase — the comparison passes and the leak happens anyway.
+    await _w204_reset_tables()
+    await _truncate("memories")
+    lock_sid = "w204-lock-race"
+    await _seed_conversation(lock_sid, events=[("user", "lock-body", "lk")])
+    locked_snapshot = await database.snapshot_recent_conversation(limit=20)
+    reached_delete = asyncio.Event()
+    release_delete = asyncio.Event()
+    original_stamp = database._stamp_session_tx
+
+    async def _paused_stamp(conn, session_id):
+        # Runs inside the real delete transaction, while it holds the exclusive session lock.
+        await original_stamp(conn, session_id)
+        if session_id == lock_sid:
+            reached_delete.set()
+            await release_delete.wait()
+
+    async def _save_under_lock():
+        async with pool.acquire() as conn:
+            async with conn.transaction():
+                return await database.save_if_sources_unchanged(
+                    conn, locked_snapshot,
+                    lambda c: database._insert_memory_tx(
+                        c, content="w204-lockrace-mem", importance=5, source_session=lock_sid),
+                )
+
+    save_status = None
+    with patch.object(database, "_stamp_session_tx", _paused_stamp):
+        deleter = asyncio.create_task(database.sync_delete_conversation(lock_sid))
+        saver = None
+        try:
+            await asyncio.wait_for(reached_delete.wait(), timeout=15)
+            saver = asyncio.create_task(_save_under_lock())
+            await asyncio.sleep(0.6)
+            require(not saver.done(),
+                    "the save did not wait for the in-flight delete: the shared session lock is missing")
+        finally:
+            release_delete.set()
+            await asyncio.wait_for(deleter, timeout=20)
+            if saver is not None:
+                save_status, _ = await asyncio.wait_for(saver, timeout=20)
+    require(save_status == "changed",
+            f"a save released after the delete committed must see the new revision, got {save_status}")
+    require(await _pool_fetchval(
+        "SELECT COUNT(*) FROM memories WHERE content = 'w204-lockrace-mem'") == 0,
+        "the save landed material from a conversation the user had just deleted")
     passed("T-W2-04-13 saves are refused when any source session changed or a reset intervened")
 
     # ---- 14. calendar three-state double check (W2-06a hook) ---------------
