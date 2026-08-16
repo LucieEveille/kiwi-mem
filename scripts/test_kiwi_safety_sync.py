@@ -60,9 +60,22 @@ memory_extractor: Any = None
 PASSED: list[str] = []
 
 
-def require(condition: Any, message: str) -> None:
-    if not condition:
-        raise AssertionError(message)
+# 变异刀专用的静默通道。红点被更早的同通道守卫抢走时，刀本用它临时让开那一条，
+# 好证明目标守卫自己也能咬住——**不改测试文件**，只靠环境变量。
+# 只有显式带 tag 的断言可以被让开；任何一次静默都会在收尾处大声记账，
+# 静默过的运行永远不会打印那行「全绿」总数，不可能被误当成干净结果。
+_MUTED_TAGS = {tag.strip() for tag in os.environ.get("KIWI_KNIFE_MUTE", "").split(",") if tag.strip()}
+_MUTES_USED: list[str] = []
+
+
+def require(condition: Any, message: str, *, tag: str = None) -> None:
+    if condition:
+        return
+    if tag and tag in _MUTED_TAGS:
+        _MUTES_USED.append(tag)
+        print(f"  MUTED {tag} (KIWI_KNIFE_MUTE) — this run is NOT a clean pass")
+        return
+    raise AssertionError(message)
 
 
 def passed(name: str) -> None:
@@ -3620,11 +3633,13 @@ async def test_w2_04_no_resurrection(client: httpx.AsyncClient) -> None:
     require(response.status_code == 200,
             f"a stamped message must not fail the whole replace: {response.status_code} {response.text}")
     require(response.json().get("skipped_deleted_messages") == ["w204-live-m2"],
-            f"the replace must name the message ids it refused to restore: {response.text}")
+            f"the replace must name the message ids it refused to restore: {response.text}",
+            tag="T-W2-04-10-replace-names")
     ids = sorted(r["id"] for r in await _pool_fetch(
         "SELECT id FROM chat_messages WHERE conversation_id = $1", live))
     require(ids == ["w204-live-m1", "w204-live-m3"],
-            f"the stamped message came back through the replace channel: {ids}")
+            f"the stamped message came back through the replace channel: {ids}",
+            tag="T-W2-04-10-replace-state")
 
     # ---- the one and only place a stamp is lifted: explicit backup restore --
     backup = _backup_zip([
@@ -4400,14 +4415,15 @@ async def test_w2_04_turn_stamps_and_late_writes(client: httpx.AsyncClient) -> N
         {"id": "w204-dv-auto", "role": "divider", "content": "", "summary": "auto-summary",
          "summarySourceRev": rev_now}]})
     require("w204-dv-auto" in (response.json().get("skipped_deleted_messages") or []),
-            f"the purged divider came back through a full replace: {response.text}")
+            f"the purged divider came back through a full replace: {response.text}",
+            tag="T-W2-04-24-replace")
     response = await client.post("/sync/import", json={"projects": [], "conversations": [
         {"id": dsid, "title": "t", "messages": [
             {"id": "w204-dv-auto", "role": "divider", "content": "", "summary": "auto-summary",
              "summarySourceRev": rev_now}]}]})
     require(not await _pool_fetchval(
         "SELECT EXISTS(SELECT 1 FROM chat_messages WHERE id = 'w204-dv-auto')"),
-        "the purged divider came back through import")
+        "the purged divider came back through import", tag="T-W2-04-24-import")
 
     # a stale-rev auto divider under a fresh id is dropped and named
     response = await client.put(f"/sync/conversations/{dsid}", json={"title": "t", "messages": [
@@ -5250,7 +5266,12 @@ async def async_main() -> int:
         print(f"PASS: {len(w2_02_passed)} W2-02 message-identity/atomic-import guards")
         print(f"PASS: {len(w2_03_passed)} W2-03 ledger-schema/scope/dark-write guards")
         print(f"PASS: {len(w2_04_passed)} W2-04 session-delete/privacy guards")
-        print(f"PASS: {len(PASSED)} total permanent behavior guards")
+        if _MUTES_USED:
+            print(f"MUTED: {len(_MUTES_USED)} assertion(s) let through via KIWI_KNIFE_MUTE: "
+                  f"{sorted(set(_MUTES_USED))}")
+            print("NOT A CLEAN RUN — mutes are for mutation-knife evidence only")
+        else:
+            print(f"PASS: {len(PASSED)} total permanent behavior guards")
         print("Real database path: disposable PostgreSQL verified")
         print("Real model/API path: not called; embedding/model/HTTP boundaries were mocked")
         return 0
