@@ -151,7 +151,7 @@ async def _handoff_source_alive_tx''',
 async def _handoff_source_alive_tx''', ()),
 
     ("R3c-lockorder", "跨会话取锁不排序", "database.py", "T-W2-04-38",
-     "",  # 死锁表现为超时，见 verdict 说明
+     "session locks must be taken in ascending id order",
      '''    for session_id in sorted({s for s in session_ids if s}):
         await _lock_session(conn, session_id)''',
      '''    for session_id in {s for s in session_ids if s}:
@@ -184,7 +184,7 @@ async def _handoff_source_alive_tx''', ()),
      "every auto divider must be counted",
      '''            if doomed_dividers:''',
      '''            doomed_dividers = doomed_dividers[:1]
-            if doomed_dividers:''', ()),
+            if doomed_dividers:''', ("T-W2-04-7-purge-receipt",)),
 
     ("epsilon", "爹爹刀 ε：import/全量替换不滤已盖章 ID", "database.py", "T-W2-04-30",
      "import re-seeded a stamped message id",

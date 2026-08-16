@@ -3347,7 +3347,8 @@ async def test_w2_04_message_delete_and_ledger(client: httpx.AsyncClient) -> Non
             f"a keyed message delete must mirror through the turn branch: {body}")
     require(body["purged"] == {"compression_summaries": 2, "compression_dividers": 2,
                                "handoff_dividers": 0},
-            f"compression copies were not purged exactly: {body}")
+            f"compression copies were not purged exactly: {body}",
+            tag="T-W2-04-7-purge-receipt")
     require(body["source_rev"] == 1, f"message delete must bump and report the rev: {body}")
     k1_roles = [r["role"] for r in await _pool_fetch(
         "SELECT role FROM conversations WHERE session_id = $1 AND turn_key = 'k1'", conv_c)]
@@ -4955,6 +4956,34 @@ async def test_w2_04_message_identity_barrier(client: httpx.AsyncClient) -> None
         require(role_under_test not in legacy_roles,
                 f"the closed-gate path ignored the {role_under_test} stamp: {legacy_roles}")
 
+    # ---- the link is written, and the not-present delete really uses it ----
+    # Without it the delete can only fall back to the blunt key-less sweep, which cannot
+    # touch a keyed row — so the background write of a message the user already deleted
+    # would survive.  This is what makes the column load-bearing rather than decorative.
+    await _w204_reset_tables()
+    lsid = "w204-link"
+    await _seed_conversation(lsid)
+    kwargs = {"turn_key": "lk1"}
+    if _accepts(database.append_turn_events_atomic, "user_message_id", "assistant_message_id"):
+        kwargs["user_message_id"] = "w204-link-u1"
+        kwargs["assistant_message_id"] = "w204-link-a1"
+    await database.append_turn_events_atomic(lsid, "u-body", "a-body", "m", **kwargs)
+    require(await _pool_fetchval(
+        "SELECT COUNT(*) FROM conversations WHERE session_id = $1 AND source_message_id IS NOT NULL",
+        lsid) == 2,
+        "both ledger rows must record which message they came from")
+
+    response = await client.delete(f"/sync/conversations/{lsid}/messages/w204-link-a1")
+    require(response.status_code == 200, f"not-present delete failed: {response.text}")
+    body = response.json()
+    require(body["ledger_mode"] == "not_present", f"expected the not-present branch: {body}")
+    require(body["ledger_events_deleted"] == 1,
+            f"the link must delete exactly the one row it points at: {body}")
+    surviving = sorted(r["role"] for r in await _pool_fetch(
+        "SELECT role FROM conversations WHERE session_id = $1", lsid))
+    require(surviving == ["user"],
+            f"the linked assistant row must go and the user row must stay, got {surviving}")
+
     # ---- a fresh assistant id in the same turn is still allowed ------------
     await _w204_reset_tables()
     rsid = "w204-barrier-regen"
@@ -4996,6 +5025,38 @@ async def test_w2_04_handoff_copies(client: httpx.AsyncClient) -> None:
     await client.delete(f"/sync/conversations/{src}")
     require(not await database.handoff_source_unchanged(src, data["source_rev"]),
             "the final check must notice the source died while we were compressing")
+
+    # ---- 37a-real. the production prompt builder must run that final check ----
+    # Testing handoff_source_unchanged() on its own proves the function works, not that
+    # anyone calls it.  Drive the real builder, kill the source mid-read, and require that
+    # no handoff section and no ev_handoff payload come out the other side.
+    await _w204_reset_tables()
+    real_src = "w204-ho-real"
+    await _seed_conversation(
+        real_src,
+        messages=[("w204-hr-u1", "user", "u1", "rk1"), ("w204-hr-a1", "assistant", "a1", "rk1"),
+                  ("w204-hr-u2", "user", "u2", "rk2"), ("w204-hr-a2", "assistant", "a2", "rk2")],
+    )
+    original_msgs = database._handoff_messages_tx
+    killed = []
+
+    async def _kill_source_mid_read(conn, conv_id):
+        rows = await original_msgs(conn, conv_id)
+        if conv_id == real_src and not killed:
+            killed.append(True)
+            await database.sync_delete_conversation(real_src)
+        return rows
+
+    await _upsert_config("handoff_enabled", "true")
+    with patch.object(database, "_handoff_messages_tx", _kill_source_mid_read):
+        with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+            _prompt, meta = await app_module.build_system_prompt_with_memories(
+                "hello", user_msg_count=1, conversation_id="w204-ho-new")
+    require(killed, "the hook never fired; the builder did not read handoff data at all")
+    require("handoff" not in meta,
+            "the prompt builder injected a handoff whose source was deleted mid-flight")
+    require("上一个对话衔接" not in (_prompt or ""),
+            "the deleted source's summary reached the prompt text")
 
     # ---- 37b. a divider whose source is gone is refused by all three channels ----
     await _w204_reset_tables()
@@ -5085,6 +5146,30 @@ async def test_w2_04_handoff_copies(client: httpx.AsyncClient) -> None:
     require(not await _pool_fetchval(
         "SELECT EXISTS(SELECT 1 FROM chat_messages WHERE id = 'w204-x3-copy')"),
         "reset left a handoff copy behind")
+
+    # the lock order itself must be ascending, not "whatever the set happened to yield".
+    # Two conversations that carry each other over need {A,B} and {B,A} to resolve to the
+    # same order; a plain set iterates by hash, which is stable within one process and so
+    # hides the bug from any pure timing test.  Watch the order directly instead.
+    await _w204_reset_tables()
+    hi, lo = "w204-zz-source", "w204-aa-target"   # source sorts after target on purpose
+    for sid in (hi, lo):
+        await _seed_conversation(sid, messages=[(f"{sid}-m1", "user", "u", "k1")])
+    await _seed_handoff_divider(lo, "w204-order-copy", source_id=hi)
+    taken = []
+    original_lock = database._lock_session
+
+    async def _record(conn, session_id):
+        taken.append(session_id)
+        return await original_lock(conn, session_id)
+
+    with patch.object(database, "_lock_session", _record):
+        await client.delete(f"/sync/conversations/{hi}")
+    require(taken, "no session lock was taken at all")
+    require(taken == sorted(taken),
+            f"session locks must be taken in ascending id order, got {taken}")
+    require(lo in taken and hi in taken,
+            f"both the source and its handoff target must be locked, got {taken}")
 
     # two conversations that carried each other over: deleting both must not deadlock
     await _w204_reset_tables()
