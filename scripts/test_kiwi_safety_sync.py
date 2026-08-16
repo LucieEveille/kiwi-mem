@@ -630,14 +630,15 @@ async def test_s5(client: httpx.AsyncClient) -> None:
     passed("T-S5-1 strict command-tag truth table")
 
     await _truncate("chat_conversations", "compression_summaries")
+    # W2-04 起对话删除还回报清掉的原始副本计数；"deleted" 仍然只说目录行有没有被删掉。
     response = await client.delete("/sync/conversations/missing-conv")
-    require(response.status_code == 200 and response.json() == {"deleted": False}, response.text)
+    require(response.status_code == 200 and response.json()["deleted"] is False, response.text)
     await _pool_execute("INSERT INTO chat_conversations (id, title) VALUES ('conv-live', 'live')")
     await _pool_execute(
         "INSERT INTO compression_summaries (conversation_id, summary) VALUES ('conv-live', 'summary')"
     )
     response = await client.delete("/sync/conversations/conv-live")
-    require(response.json() == {"deleted": True}, response.text)
+    require(response.json()["deleted"] is True, response.text)
     require(await _pool_fetchval("SELECT COUNT(*) FROM compression_summaries WHERE conversation_id='conv-live'") == 0, "summary cleanup regressed")
 
     await _truncate("chat_projects", "project_file_chunks")
@@ -1423,12 +1424,13 @@ async def test_w2_01(client: httpx.AsyncClient) -> None:
     require(await _pool_fetchval("SELECT conversation_id FROM chat_messages WHERE id = $1", concurrent_id) == winner, "concurrent winner ownership changed")
     passed("T-W2-01-7 concurrent same-ID cross-owner writes have exactly one winner")
 
+    # W2-04 起单消息删除还回报镜像清账本的结果；"deleted" 仍然只说这条消息有没有被删掉。
     response = await client.delete(f"/sync/conversations/{conv_b}/messages/{msg_id}")
-    require(response.status_code == 200 and response.json() == {"deleted": False}, "wrong-owner delete was not rejected")
+    require(response.status_code == 200 and response.json()["deleted"] is False, "wrong-owner delete was not rejected")
     response = await client.delete(message_url)
-    require(response.status_code == 200 and response.json() == {"deleted": True}, "correct-owner delete failed")
+    require(response.status_code == 200 and response.json()["deleted"] is True, "correct-owner delete failed")
     response = await client.delete(message_url)
-    require(response.status_code == 200 and response.json() == {"deleted": False}, "repeat delete was not idempotent")
+    require(response.status_code == 200 and response.json()["deleted"] is False, "repeat delete was not idempotent")
     passed("T-W2-01-8 single-message delete is owner-scoped and idempotent")
 
     atomic_conv, atomic_msg = f"{prefix}atomic-conv", f"{prefix}atomic-msg"
@@ -2014,15 +2016,22 @@ async def test_w2_02(client: httpx.AsyncClient) -> None:
     # conversations event-ledger helper delete_latest_assistant_message() is a
     # known W2-07 debt and is deliberately out of this guard's reach.
     source = (ROOT / "database.py").read_text(encoding="utf-8")
-    deletes = re.findall(r"DELETE FROM chat_messages[^\"']*", source)
+    # 只在 Python 字符串定界符（"）处收尾，SQL 里的单引号常量照收——否则带常量的语句
+    # 只能被看到前半截，ORDER BY / LIMIT 躲在常量后面就查不出来了。
+    deletes = re.findall(r"DELETE FROM chat_messages[^\"]*", source)
     require(deletes, "expected at least one chat_messages delete statement to audit")
     for statement in deletes:
         flat = " ".join(statement.split())
         require("WHERE" in flat, f"unconditional chat_messages delete: {flat}")
         require("ORDER BY" not in flat and "LIMIT" not in flat,
                 f"chat_messages delete infers rows by ordering: {flat}")
-        require("role" not in flat.lower(),
-                f"chat_messages delete branches on role: {flat}")
+        if "role" in flat.lower():
+            # W2-04 起的唯一例外：清自动压缩 divider。它必须带齐三条结构判据
+            # （role=divider、有 summary、非 handoff），因此只可能命中压缩副本，
+            # 退化不成"猜最后一条 assistant"——那正是本条守卫要挡的东西。
+            require("role = 'divider'" in flat and "summary IS NOT NULL" in flat
+                    and "handoff_info IS NULL" in flat,
+                    f"chat_messages delete branches on role: {flat}")
     passed("T-W2-02-17 chat_messages deletes stay deterministic, never role/order inferred")
 
     # ---- per-column landing against an independent expectation table -------
@@ -2651,12 +2660,21 @@ async def test_w2_03_scope_and_order() -> None:
     # scan happens to return insertion (= id) order, so a missing tiebreak can pass by
     # luck.  Pin the tiebreak in the SQL of every ledger reader as well.
     reader_source = (ROOT / "database.py").read_text(encoding="utf-8")
+    # 表别名可有可无（W2-04 起 get_recent_conversation 要 JOIN 版本表，列必须带前缀），
+    # 但两级排序键一个都不能少。
+    order_by = re.compile(r"ORDER BY (?:\w+\.)?created_at DESC, (?:\w+\.)?id DESC")
     for reader in ("get_recent_messages", "get_recent_conversation",
-                   "delete_latest_assistant_message"):
+                   "_delete_latest_assistant_message_tx"):
         body = re.search(rf"async def {reader}\(.*?(?=\nasync def )", reader_source, re.S)
         require(body, f"{reader} not found for the read-order guard")
-        require("ORDER BY created_at DESC, id DESC" in body.group(0),
+        require(order_by.search(body.group(0)),
                 f"{reader} orders by time without an id tiebreak; tied rows sort arbitrarily")
+    # 公开入口只准委托给那条受审的 SQL，不许自己另写一份。
+    wrapper = re.search(r"async def delete_latest_assistant_message\(.*?(?=\nasync def )",
+                        reader_source, re.S)
+    require(wrapper and "_delete_latest_assistant_message_tx(" in wrapper.group(0)
+            and "DELETE" not in wrapper.group(0),
+            "delete_latest_assistant_message grew a second, unguarded delete path")
     await database.delete_latest_assistant_message(tie_sid)
     left = [r["content"] for r in await _ledger_rows(tie_sid)]
     require(left == ["u-first", "a-second"],
@@ -3012,6 +3030,11 @@ async def test_w2_03_chat_paths(client: httpx.AsyncClient) -> None:
 _W204_TOMBSTONE_TABLES = ("session_tombstones", "turn_tombstones", "message_tombstones")
 
 
+async def _reset_all(client: httpx.AsyncClient):
+    """httpx 的 delete() 不收 json=，全局重置只能走 request()。"""
+    return await client.request("DELETE", "/sync/reset", json={"confirm": "RESET_ALL_DATA"})
+
+
 async def _w204_reset_tables() -> None:
     await _truncate(
         "conversations", "chat_messages", "chat_conversations", "chat_projects",
@@ -3231,7 +3254,7 @@ async def test_w2_04_schema_and_conversation_delete(client: httpx.AsyncClient) -
         "INSERT INTO calendar_pages (date, type, diary) VALUES ('2026-08-15', 'day', 'w204-keep-page')"
     )
     await _pool_execute(
-        "INSERT INTO mem_scenes (title, description) VALUES ('w204-keep-scene', 'd')"
+        "INSERT INTO mem_scenes (title, narrative) VALUES ('w204-keep-scene', 'n')"
     )
     await _pool_execute("INSERT INTO dream_logs (status) VALUES ('completed')")
     before = {t: await _pool_fetchval(f"SELECT COUNT(*) FROM {t}")
@@ -3296,8 +3319,9 @@ async def test_w2_04_message_delete_and_ledger(client: httpx.AsyncClient) -> Non
     await _seed_divider(conv_c, "w204-c-d1", summary="auto-1")
     await _seed_divider(conv_c, "w204-c-d2", summary="auto-2")
     await _seed_divider(conv_c, "w204-c-h1", summary="handoff-sum", handoff=True)
-    # A different conversation reusing the same turn_key / message id must stay untouched.
-    await _seed_conversation(conv_d, messages=[("w204-c-a1", "assistant", "d-a1", "k1")],
+    # A different conversation reusing the same turn_key must stay untouched.  (Message ids
+    # are globally unique by schema, so cross-session collision is only possible on turn_key.)
+    await _seed_conversation(conv_d, messages=[("w204-d-a1", "assistant", "d-a1", "k1")],
                              events=[("assistant", "d-a1", "k1")])
 
     # ① delete the k1 assistant: mirror one ledger row, stamp the message, keep the turn alive
@@ -3338,9 +3362,14 @@ async def test_w2_04_message_delete_and_ledger(client: httpx.AsyncClient) -> Non
     require(response.status_code == 200,
             f"regenerating the same turn under a fresh message id must succeed: {response.text}")
 
-    # ② delete the k1 user too: now the whole turn is stamped
+    # ② empty the turn completely: the regenerated reply keeps it alive until it goes too
     response = await client.delete(f"/sync/conversations/{conv_c}/messages/w204-c-u1")
     require(response.status_code == 200, "second message delete failed")
+    require(not await _pool_fetchval(
+        "SELECT EXISTS(SELECT 1 FROM turn_tombstones WHERE session_id = $1 AND turn_key = 'k1')", conv_c),
+        "a turn that still holds the regenerated reply must not be stamped yet")
+    response = await client.delete(f"/sync/conversations/{conv_c}/messages/w204-c-a1b")
+    require(response.status_code == 200, "third message delete failed")
     require(await _pool_fetchval(
         "SELECT EXISTS(SELECT 1 FROM turn_tombstones WHERE session_id = $1 AND turn_key = 'k1')", conv_c),
         "emptying a turn must stamp it so the old turn can never be re-landed")
@@ -3355,9 +3384,12 @@ async def test_w2_04_message_delete_and_ledger(client: httpx.AsyncClient) -> Non
     require(await _pool_fetchval(
         "SELECT COUNT(*) FROM conversations WHERE session_id = $1", conv_d) == 1,
         "stamps and mirrors must be scoped per session")
-    require(await _pool_fetchval("SELECT EXISTS(SELECT 1 FROM chat_messages WHERE id = 'w204-c-a1' "
+    require(await _pool_fetchval("SELECT EXISTS(SELECT 1 FROM chat_messages WHERE id = 'w204-d-a1' "
                                  "AND conversation_id = $1)", conv_d),
-            "another conversation's identically-named message was deleted")
+            "another conversation's same-turn_key message was deleted")
+    require(not await _pool_fetchval(
+        "SELECT EXISTS(SELECT 1 FROM turn_tombstones WHERE session_id = $1)", conv_d),
+        "stamping turn k1 in one conversation stamped the same key in another")
 
     # ⑤ fallback branch: NULL turn_key means we cannot locate the turn -> purge the session ledger
     conv_e = "w204-e"
@@ -3630,7 +3662,7 @@ async def test_w2_04_no_resurrection(client: httpx.AsyncClient) -> None:
     await _upsert_config("memory_enabled", "true")
     epoch_before = await _pool_fetchval("SELECT reset_generation FROM deletion_epoch")
 
-    response = await client.delete("/sync/reset", json={"confirm": "RESET_ALL_DATA"})
+    response = await _reset_all(client)
     require(response.status_code == 200, f"reset failed: {response.status_code} {response.text}")
     body = response.json()
     require("purged_events" in body and "purged_extraction_state" in body,
@@ -3724,7 +3756,7 @@ async def test_w2_04_background_snapshots(client: httpx.AsyncClient) -> None:
 
     # a reset also invalidates an in-flight snapshot
     stale = await database.snapshot_recent_conversation(limit=20)
-    await client.delete("/sync/reset", json={"confirm": "RESET_ALL_DATA"})
+    await _reset_all(client)
     async with pool.acquire() as conn:
         async with conn.transaction():
             status, _ = await database.save_if_sources_unchanged(conn, stale, _save_one)
@@ -3735,26 +3767,27 @@ async def test_w2_04_background_snapshots(client: httpx.AsyncClient) -> None:
     await _w204_reset_tables()
     await _truncate("calendar_pages")
     day = "2026-08-13"
+    day_obj = date.fromisoformat(day)
     conv_x, conv_y = "w204-cal-x", "w204-cal-y"
     for sid, body in ((conv_x, "cal-body-x"), (conv_y, "cal-body-y")):
         await _seed_conversation(sid)
         await _pool_execute(
             "INSERT INTO chat_messages (id, conversation_id, role, content, time, turn_key) "
-            "VALUES ($1, $2, 'user', $3, $4::date, $5)",
-            f"{sid}-m1", sid, body, day, f"{sid}-k",
+            "VALUES ($1, $2, 'user', $3, $4, $5)",
+            f"{sid}-m1", sid, body, day_obj, f"{sid}-k",
         )
         await _pool_execute(
             "INSERT INTO conversations (session_id, role, content, model, turn_key, scope_known, created_at) "
-            "VALUES ($1, 'user', $2, 'm', $3, TRUE, $4::date)",
-            sid, body, f"{sid}-k", day,
+            "VALUES ($1, 'user', $2, 'm', $3, TRUE, $4)",
+            sid, body, f"{sid}-k", day_obj,
         )
 
     async def _material_agreement(date_str):
         """chat_messages readers and the ledger must agree on 'is there material'."""
         rows = await database.get_chat_messages_for_date(date_str)
         ledger = await _pool_fetchval(
-            f"SELECT COUNT(*) FROM conversations WHERE created_at::date = $1::date "
-            f"AND {database.CONVERSATIONS_GLOBAL_SCOPE}", date_str)
+            f"SELECT COUNT(*) FROM conversations WHERE created_at::date = $1 "
+            f"AND {database.CONVERSATIONS_GLOBAL_SCOPE}", date.fromisoformat(date_str))
         return bool(rows), bool(ledger)
 
     chat_has, ledger_has = await _material_agreement(day)
@@ -3797,7 +3830,7 @@ async def test_w2_04_privacy_and_contracts(client: httpx.AsyncClient) -> None:
             secret_sid, "u", "a", "m", turn_key=secret_key, reset_generation=-1)
         r_conv = await client.delete(f"/sync/conversations/{secret_sid}")
         r_410 = await client.post("/sync/conversations", json={"id": secret_sid, "title": "x"})
-        r_reset = await client.delete("/sync/reset", json={"confirm": "RESET_ALL_DATA"})
+        r_reset = await _reset_all(client)
     logs = out.getvalue() + err.getvalue()
     require(r_write.get("path") == "tombstoned", f"stale-generation write should be refused: {r_write}")
     for label, text in (("message delete", r_msg.text), ("conversation delete", r_conv.text),
@@ -3825,8 +3858,9 @@ async def test_w2_04_privacy_and_contracts(client: httpx.AsyncClient) -> None:
     db_source = (ROOT / "database.py").read_text(encoding="utf-8")
     main_source = (ROOT / "main.py").read_text(encoding="utf-8")
 
-    # every ledger DELETE is scoped by session_id
-    for statement in re.findall(r"DELETE FROM conversations[^\"']*", db_source):
+    # every ledger DELETE is scoped by session_id（只在 Python 定界符 " 处收尾，
+    # SQL 里的单引号常量照收，否则带常量的语句只能被看到前半截）
+    for statement in re.findall(r"DELETE FROM conversations[^\"]*", db_source):
         flat = " ".join(statement.split())
         require("session_id" in flat, f"a ledger DELETE is not scoped by session_id: {flat}")
 

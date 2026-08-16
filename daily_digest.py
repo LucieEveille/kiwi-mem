@@ -1271,8 +1271,7 @@ async def _generate_day_page_impl(target_date: str = None, model_override: str =
         target_date: 日期字符串 "2026-04-01"，默认昨天
         model_override: 覆盖默认模型
     """
-    from database import get_pool, get_chat_messages_for_date, save_calendar_page
-    from config import get_config
+    import database
     from datetime import date as date_cls
 
     now_cst = datetime.now(TZ_CST)
@@ -1288,13 +1287,71 @@ async def _generate_day_page_impl(target_date: str = None, model_override: str =
 
     print(f"\n📅 开始生成日页面：{date_str}")
 
-    # 1. 读取当天聊天记录
-    messages = await get_chat_messages_for_date(date_str)
-    if not messages:
-        print(f"   📭 {date_str} 没有聊天记录，跳过日页面生成")
-        return {"date": date_str, "status": "skipped", "reason": "no messages"}
+    # W2-04：读原文的同一条 SELECT 一并带回来源版本；生成要几十秒，这中间用户完全可能
+    # 删掉当天某段对话。成品落库前在同一把锁下比对版本，变了就用剩余素材重来一次，
+    # 第二次还在变就不生成——宁可缺一张日页面，也不把删掉的话浓缩着写回库里。
+    for attempt in (1, 2):
+        snapshot = await database.snapshot_chat_messages_for_date(date_str)
+        messages = list(snapshot["rows"])
+        if not messages:
+            print(f"   📭 {date_str} 没有聊天记录，跳过日页面生成")
+            return {"date": date_str, "status": "skipped", "reason": "no messages"}
 
-    print(f"   💬 找到 {len(messages)} 条聊天消息")
+        print(f"   💬 找到 {len(messages)} 条聊天消息")
+
+        result, error, use_model = await _render_day_page(date_str, messages, model_override)
+        if error:
+            return error
+
+        # 7. 存入 calendar_pages
+        sections = result.get("sections", [])
+        diary = result.get("diary", "")
+        all_keywords = result.get("all_keywords", [])
+        summary = result.get("summary", "")
+        digest = result.get("digest", "")
+
+        status, page_id = await database.save_calendar_page_if_sources_unchanged(
+            snapshot,
+            date_str=date_str,
+            page_type="day",
+            sections=sections,
+            diary=diary,
+            keywords=all_keywords,
+            model_used=use_model,
+            summary=summary,
+            digest=digest,
+        )
+        if status != "saved":
+            print(f"   ♻️ {date_str} 的聊天素材在生成期间变了，丢弃这版重来（第 {attempt} 次）")
+            continue
+
+        section_count = len(sections)
+        keyword_count = len(all_keywords)
+        print(f"   ✅ 日页面已保存：{section_count} 个时段，{keyword_count} 个关键词")
+        if summary:
+            print(f"   📋 内容概要：{summary[:80]}...")
+        if diary:
+            print(f"   📝 AI 的话：{diary[:80]}...")
+
+        return {
+            "date": date_str,
+            "status": "success",
+            "page_id": page_id,
+            "sections": section_count,
+            "keywords": keyword_count,
+        }
+
+    return {"date": date_str, "status": "skipped",
+            "reason": "sources_changed_during_generation"}
+
+
+async def _render_day_page(date_str: str, messages: list, model_override: str = None):
+    """把当天原文渲染成日页面成品，返回 `(result, error, use_model)`。
+
+    锁外完成：格式化、读碎片、拼 prompt、调模型、解析。出错时 `error` 是可直接返回的回执。
+    """
+    from database import get_pool
+    from config import get_config
 
     # 2. 格式化聊天记录（截断过长的内容）
     conversation_lines = []
@@ -1389,7 +1446,8 @@ async def _generate_day_page_impl(target_date: str = None, model_override: str =
 
             if response.status_code != 200:
                 print(f"   ⚠️ 日页面生成请求失败: {response.status_code}")
-                return {"date": date_str, "status": "error", "error": f"HTTP {response.status_code}"}
+                return None, {"date": date_str, "status": "error",
+                              "error": f"HTTP {response.status_code}"}, use_model
 
             data = parse_background_response(response.json(), use_api_format)
             choices = data.get("choices") or [{}]
@@ -1403,50 +1461,20 @@ async def _generate_day_page_impl(target_date: str = None, model_override: str =
                     f"finish_reason=length completion_tokens={usage.get('completion_tokens')} "
                     f"text_chars={len(text)} max_tokens=6000"
                 )
-                return {"date": date_str, "status": "error", "error": "invalid format"}
+                return None, {"date": date_str, "status": "error",
+                              "error": "invalid format"}, use_model
 
             result = _parse_calendar_model_json(text, "day")
             if result is None:
                 print(f"   ⚠️ 日页面模型返回格式错误：{text[:200]}")
-                return {"date": date_str, "status": "error", "error": "invalid format"}
+                return None, {"date": date_str, "status": "error",
+                              "error": "invalid format"}, use_model
 
     except Exception as e:
         print(f"   ⚠️ 日页面生成出错: {e}")
-        return {"date": date_str, "status": "error", "error": str(e)}
+        return None, {"date": date_str, "status": "error", "error": str(e)}, use_model
 
-    # 7. 存入 calendar_pages
-    sections = result.get("sections", [])
-    diary = result.get("diary", "")
-    all_keywords = result.get("all_keywords", [])
-    summary = result.get("summary", "")
-    digest = result.get("digest", "")
-
-    page_id = await save_calendar_page(
-        date_str=date_str,
-        page_type="day",
-        sections=sections,
-        diary=diary,
-        keywords=all_keywords,
-        model_used=use_model,
-        summary=summary,
-        digest=digest,
-    )
-
-    section_count = len(sections)
-    keyword_count = len(all_keywords)
-    print(f"   ✅ 日页面已保存：{section_count} 个时段，{keyword_count} 个关键词")
-    if summary:
-        print(f"   📋 内容概要：{summary[:80]}...")
-    if diary:
-        print(f"   📝 AI 的话：{diary[:80]}...")
-
-    return {
-        "date": date_str,
-        "status": "success",
-        "page_id": page_id,
-        "sections": section_count,
-        "keywords": keyword_count,
-    }
+    return result, None, use_model
 
 
 # ============================================================
