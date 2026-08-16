@@ -1087,16 +1087,18 @@ async def _lock_sessions_exclusive(conn, session_ids) -> None:
 
 
 async def _sweep_unlinked_legacy_rows_tx(conn, session_id: str) -> int:
-    """清掉这个会话里既无 turn_key 又无 source_message_id 的账本行，返回行数。
+    """清掉这个会话里所有没有稳定关联（source_message_id 为空）的账本行，返回行数。
 
-    这些是闸门关时代留下的：没有任何字段能说清哪一行对应哪句话，所以只要这个会话
-    发生了一次删除，就无法证明被删的那句话不在其中。隐私优先——整批清掉，账本可由
-    W2-05 从 chat_messages 回填；有键或有关联的行一行不动。
+    露露裁决（v3.2）：能不能说清"这一行来自哪句话"，只看 `source_message_id` 一个字段。
+    turn_key 只说得清"哪一轮"——闸门关时代的行连轮都没有，W2-03 时代的行有轮无 ID，
+    两种都无法证明被删的那句话不在其中。所以这个会话只要发生一次删除，就把所有无关联
+    的行一并清掉：账本是派生物，W2-05 可以从 chat_messages 回填，而"多删"永远不会让
+    删掉的话复活。带关联的行一行不动——它们能自证来自哪条消息。
     """
     swept = await conn.execute(
         """
         DELETE FROM conversations
-        WHERE session_id = $1 AND turn_key IS NULL AND source_message_id IS NULL
+        WHERE session_id = $1 AND source_message_id IS NULL
         """,
         session_id,
     )
@@ -4098,7 +4100,8 @@ async def sync_upsert_single_message(conv_id: str, msg_id: str, msg: dict):
     return ("ok", 200, None)
 
 
-async def sync_delete_message(conv_id: str, msg_id: str):
+async def sync_delete_message(conv_id: str, msg_id: str, *,
+                              declared_role: str = None, declared_turn_key: str = None):
     """永久删除一条消息在所有原始副本里的痕迹。
 
     删这条消息本身 → 盖永久消息章（旧设备不得把这个 ID PUT 回来）→ 镜像清账本 →
@@ -4111,10 +4114,9 @@ async def sync_delete_message(conv_id: str, msg_id: str):
         就把整段账本清一次，编辑截断连删几个 divider 会把刚镜像好的轮次一刀清光。
       · turn_key 非空：只删账本里同一轮同一角色的行；该轮的 chat_messages 清空后
         才盖轮次章（在此之前该轮仍然活着，可以用**新** message ID 重生成）。
-        再加一道**无键 legacy 清扫**：闸门关时代写下的行既没有 turn_key 也没有
-        source_message_id，谁也说不清哪条对应哪句话；只要这个会话里还留着这种行，
-        带键删除就把它们整批清掉（隐私优先，W2-05 可从 chat_messages 回填），
-        其余带键的轮一行不动。
+        再加一道**无关联清扫**：没有 source_message_id 的行说不清自己来自哪句话——
+        闸门关时代的行连轮都没有，W2-03 时代的行有轮无 ID——只要这个会话发生了删除，
+        它们就一并清掉（隐私优先，W2-05 可从 chat_messages 回填）；带关联的行一行不动。
       · turn_key 为空的 user/assistant（定位不到轮次）：**隐私优先降级**，清掉该会话
         全部账本行，但**不盖会话章**——对话还活着，之后的新轮照常落账。宁可账本少一段
         可由 W2-05 从 chat_messages 回填重建的历史，也不让用户以为删掉的正文
@@ -4125,9 +4127,19 @@ async def sync_delete_message(conv_id: str, msg_id: str):
 
     服务器上查不到这条消息时**照样盖章、照样清副本**：本地 PUT 还在网络里排队、
     DELETE 先到，是完全正常的时序。只盖章不清副本的话，摘要、自动 divider 与后台
-    刚落下的账本行都会带着这句话活下来。账本行按两条线索找：先按稳定关联
-    `source_message_id` 精确删（新客户端），再把 msg_id 当候选 turn_key 删一次并盖
-    轮次章（只发 turn_key 的客户端），两条都落空才退回无键 legacy 清扫。
+    刚落下的账本行都会带着这句话活下来。账本行按三条线索找，**三条全跑、行数累加**，
+    谁也不当谁的兜底（露露裁决 v3.2——先命中一条就收手，等于放过另外两类行）：
+      ① 按稳定关联 `source_message_id` 精确删（新客户端）；
+      ② 把候选轮次键当成一轮清掉并盖轮次章（只发 turn_key 的客户端）；
+      ③ 无条件清掉本会话所有没有 source_message_id 的行。
+
+    ②这条兜底建立在 W2-03 合同"turnKey 就是该轮 user 消息的 id"之上，所以调用方可以用
+    `declared_role` / `declared_turn_key` 把话说清楚：
+      · `declared_role == "assistant"`：跳过②——assistant 的 ID 本不该是任何轮次键；
+      · `declared_turn_key`：②直接用它，不必拿 msg_id 猜；
+      · 两者都不声明：②按 msg_id 猜着跑（今天的 Chat 与一切老客户端）。
+    申报边界：第三方若让某条 assistant 消息的 ID 恰好等于某个 turnKey 又不声明 role，
+    ②会多删那一轮的账本行并封轮。方向是"多删不复活"——聊天正文、记忆、日历不受影响。
 
     最后，源会话发生任何删除都要顺手清掉别的会话里从它搬过去的换窗卡（露露裁决：
     删了旧对话，新对话就不该再从那里衔接）——所以取锁时把目标会话一起排序取上。
@@ -4151,32 +4163,34 @@ async def sync_delete_message(conv_id: str, msg_id: str):
             )
             if row is None:
                 # 这条消息服务端还没见过（PUT 还在路上），但后台可能已经用它的 ID 落过账。
-                # 先按稳定关联精确删；历史行没有这个关联，只能按无键 legacy 整批清。
+                # 三条线索全跑、行数累加：① 稳定关联精确删。
                 linked = await conn.execute(
                     "DELETE FROM conversations WHERE session_id = $1 AND source_message_id = $2",
                     conv_id, msg_id,
                 )
                 ledger_deleted = _rowcount(linked)
-                # 只发 turn_key、不发消息 ID 的客户端（今天的 Chat，以及任何按 W2-03
-                # 合同办事的第三方）落下的行没有上面那条关联，所以再把 msg_id 当作
-                # **候选轮次键**清一次。安全性：Chat 合同规定 turnKey 就是该轮 user
-                # 消息的 id，所以 msg_id 只可能等于「它自己作为 user 那一轮」的键；而这
-                # 条消息服务端并不存在 = 那一轮的 user 载体不存在 = 这一轮本就该死。
-                # assistant 的 id 不会是任何 turn_key，这两句对它命中零行、章也无害。
-                by_key = await conn.execute(
-                    "DELETE FROM conversations WHERE session_id = $1 AND turn_key = $2",
-                    conv_id, msg_id,
-                )
-                ledger_deleted += _rowcount(by_key)
-                if _rowcount(by_key):
-                    # 清了就要盖章，否则同一个 turn_key 的下一次落账照样进来。
-                    await conn.execute(
-                        "INSERT INTO turn_tombstones (session_id, turn_key) VALUES ($1, $2) "
-                        "ON CONFLICT DO NOTHING",
-                        conv_id, msg_id,
+                # ② 候选轮次键：只发 turn_key、不发消息 ID 的客户端（今天的 Chat，以及
+                # 任何按 W2-03 合同办事的第三方）落下的行没有①那条关联。合同规定 turnKey
+                # 就是该轮 user 消息的 id，所以候选键要么由调用方直接声明，要么只能是
+                # msg_id 自己——而这条消息服务端并不存在 = 那一轮的 user 载体不存在 =
+                # 这一轮本就该死。调用方声明 role=assistant 时这条兜底整段跳过。
+                if declared_role != "assistant":
+                    belt_key = declared_turn_key or msg_id
+                    by_key = await conn.execute(
+                        "DELETE FROM conversations WHERE session_id = $1 AND turn_key = $2",
+                        conv_id, belt_key,
                     )
-                if ledger_deleted == 0:
-                    ledger_deleted = await _sweep_unlinked_legacy_rows_tx(conn, conv_id)
+                    ledger_deleted += _rowcount(by_key)
+                    if _rowcount(by_key):
+                        # 清了就要盖章，否则同一个 turn_key 的下一次落账照样进来。
+                        await conn.execute(
+                            "INSERT INTO turn_tombstones (session_id, turn_key) VALUES ($1, $2) "
+                            "ON CONFLICT DO NOTHING",
+                            conv_id, belt_key,
+                        )
+                # ③ 无条件清掉本会话所有无关联的行——①②命中与否都要跑：命中①只证明
+                # 那一条行有主，证明不了剩下那些无主的行里没有被删的这句话。
+                ledger_deleted += await _sweep_unlinked_legacy_rows_tx(conn, conv_id)
                 ledger_mode = "not_present"
                 role, turn_key = None, None
                 deleted = False

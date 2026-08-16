@@ -342,7 +342,8 @@ cd kiwi-mem && bash scripts/update.sh --install-cron
 >
 > `N` 就是清掉的数量（没有则为 0，日志也不会打）。受影响的只有旧版换窗卡本身，聊天正文、
 > 记忆、日历一律不动。这一步不可逆，介意的话升级前先跑一次 `scripts/update.sh` 的自动备份
-> （默认就会备份）。
+> （默认就会备份）。**Zeabur 等托管平台的用户不经过 `scripts/update.sh`，升级前请先用平台
+> 自带的功能手动备份数据库。**
 
 #### 如果你用的是 Zeabur 等托管平台
 

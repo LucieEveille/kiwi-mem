@@ -1987,20 +1987,44 @@ async def chat_completions(request: Request):
     # W2-04 v3：Chat 在发起生成前就把这一轮两条消息的 ID 定好并一起发过来。
     # 账本行记下自己来源的那条消息，删除才能精确落到账本上——不必拿 message_id 猜
     # turn_key，也不必用整轮章去代替单条消息的身份。缺失时按 None 处理（老客户端）。
-    def _msg_id(*keys):
+    # W2-04 v3.2：两条 ID 要么一起缺（老客户端，按老路走），要么一起给且都合法。
+    # 只给一半 = 客户端自以为在用新合同、实际只有半条链路，那半条账本行永远失联；
+    # 显式非法同理。一律 400 code=invalid_message_identity，与 turn_key 的两层拒绝
+    # 哲学一致。四个键在这里就被摘干净，绝不随请求体透传给上游供应商。
+    def _take_msg_id(*keys):
+        present, raw = False, None
         for key in keys:
-            value = body.pop(key, None)
-            if isinstance(value, str) and value.strip() and len(value) <= 200:
-                return value.strip()
-        return None
+            if key in body:
+                value = body.pop(key)
+                if not present:
+                    present, raw = True, value
+        return present, raw
+
+    user_id_present, user_id_raw = _take_msg_id("user_message_id", "userMsgId")
+    assistant_id_present, assistant_id_raw = _take_msg_id("assistant_message_id", "assistantMsgId")
+
+    def _clean_msg_id(value):
+        if not isinstance(value, str):
+            return None
+        value = value.strip()
+        return value if 1 <= len(value) <= 200 else None
+
+    user_message_id = _clean_msg_id(user_id_raw)
+    assistant_message_id = _clean_msg_id(assistant_id_raw)
+    if (user_id_present or assistant_id_present) and (
+            user_message_id is None or assistant_message_id is None):
+        return JSONResponse(status_code=400, content={
+            "error": "userMsgId / assistantMsgId 必须成对出现，且都是 1-200 字符的非空字符串",
+            "code": "invalid_message_identity",
+        })
 
     ledger_ctx = {
         "client_gave_conv_id": client_gave_conv_id,
         "project_id_present": project_id_present,
         "payload_project_id": raw_project_id,
         "turn_key": turn_key,
-        "user_message_id": _msg_id("user_message_id", "userMsgId"),
-        "assistant_message_id": _msg_id("assistant_message_id", "assistantMsgId"),
+        "user_message_id": user_message_id,
+        "assistant_message_id": assistant_message_id,
         "reset_generation": await get_reset_generation(),
     }
 
@@ -5632,10 +5656,20 @@ async def api_sync_upsert_message(conv_id: str, msg_id: str, request: Request):
 
 
 @app.delete("/sync/conversations/{conv_id}/messages/{msg_id}")
-async def api_sync_delete_message(conv_id: str, msg_id: str):
-    """永久删除一条消息在所有原始副本里的痕迹，并盖上消息章。"""
+async def api_sync_delete_message(conv_id: str, msg_id: str, request: Request):
+    """永久删除一条消息在所有原始副本里的痕迹，并盖上消息章。
+
+    W2-04 v3.2：客户端可以用 `?role=&turn_key=` 把这条消息的身份说清楚。声明
+    `role=assistant` 就关掉"把 msg_id 当候选轮次键"的兜底（assistant 的 ID 本不该是
+    任何轮次键）；声明 turn_key 则让兜底直接用它，不必猜。两个都不给时按老客户端
+    处理，兜底照跑——见 sync_delete_message 的申报边界。
+    """
     try:
-        return await sync_delete_message(conv_id, msg_id)
+        declared_role = (request.query_params.get("role") or "").strip().lower() or None
+        declared_turn_key = (request.query_params.get("turn_key")
+                             or request.query_params.get("turnKey") or "").strip() or None
+        return await sync_delete_message(conv_id, msg_id, declared_role=declared_role,
+                                         declared_turn_key=declared_turn_key)
     except Exception:
         print("event=message_delete_failed kind=message increment=1")
         return JSONResponse(status_code=500, content={"error": "删除失败"})
