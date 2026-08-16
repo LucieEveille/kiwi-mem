@@ -3480,18 +3480,24 @@ async def test_w2_04_message_delete_and_ledger(client: httpx.AsyncClient) -> Non
     with patch.object(database, "_tombstone_status_tx", _paused_status):
         writer = asyncio.create_task(
             database.append_turn_events_atomic(race_sid, "u", "a", "m", turn_key="rk"))
-        await asyncio.wait_for(reached_write.wait(), timeout=15)
-        deleter = asyncio.create_task(database.sync_delete_conversation(race_sid))
-        await asyncio.sleep(0.6)
-        require(not deleter.done(),
-                "the delete did not wait for the in-flight write: the session lock is missing")
-        blocked = await _pool_fetchval(
-            "SELECT COUNT(*) FROM pg_stat_activity WHERE wait_event_type = 'Lock'")
-        require(blocked >= 1,
-                "expected the deleting connection to be parked on an advisory lock")
-        release_write.set()
-        await asyncio.wait_for(writer, timeout=20)
-        await asyncio.wait_for(deleter, timeout=20)
+        deleter = None
+        try:
+            await asyncio.wait_for(reached_write.wait(), timeout=15)
+            deleter = asyncio.create_task(database.sync_delete_conversation(race_sid))
+            await asyncio.sleep(0.6)
+            require(not deleter.done(),
+                    "the delete did not wait for the in-flight write: the session lock is missing")
+            blocked = await _pool_fetchval(
+                "SELECT COUNT(*) FROM pg_stat_activity WHERE wait_event_type = 'Lock'")
+            require(blocked >= 1,
+                    "expected the deleting connection to be parked on an advisory lock")
+        finally:
+            # 无论断言过没过，都要放行被暂停的写入：它正握着一条连接和一个未结事务，
+            # 不放行的话失败会变成挂起，报不出红点（收工时连接池也关不掉）。
+            release_write.set()
+            await asyncio.wait_for(writer, timeout=20)
+            if deleter is not None:
+                await asyncio.wait_for(deleter, timeout=20)
     require(await _pool_fetchval(
         "SELECT COUNT(*) FROM conversations WHERE session_id = $1", race_sid) == 0,
         "the interleaved race left ledger rows behind: delete must win the final state")
@@ -3937,21 +3943,24 @@ async def test_w2_04_concurrency_and_compression(client: httpx.AsyncClient) -> N
     with patch.object(database, "_tombstone_status_tx", _hold_a):
         writer_a = asyncio.create_task(
             database.append_turn_events_atomic(sid_a, "u", "a", "m", turn_key="pk"))
-        await asyncio.wait_for(reached_a.wait(), timeout=15)
+        result_b, over_locked = None, False
         try:
-            # B must finish while A still holds its own session lock.  If ordinary writes
-            # took the GLOBAL exclusive lock, or shared one session key, this would hang.
-            result_b = await asyncio.wait_for(
-                database.append_turn_events_atomic(sid_b, "u", "a", "m", turn_key="pk"),
-                timeout=8,
-            )
-        except asyncio.TimeoutError:
+            await asyncio.wait_for(reached_a.wait(), timeout=15)
+            try:
+                # B must finish while A still holds its own session lock.  If ordinary writes
+                # took the GLOBAL exclusive lock, or shared one session key, this would hang.
+                result_b = await asyncio.wait_for(
+                    database.append_turn_events_atomic(sid_b, "u", "a", "m", turn_key="pk"),
+                    timeout=8,
+                )
+            except asyncio.TimeoutError:
+                over_locked = True
+        finally:
+            # 同 T-9：先放行 A，再断言。A 还握着连接和未结事务时抛断言会变成挂起。
             release_a.set()
-            await writer_a
-            require(False, "session B blocked behind session A: ordinary writes are over-locking")
+            await asyncio.wait_for(writer_a, timeout=15)
+        require(not over_locked, "session B blocked behind session A: ordinary writes are over-locking")
         require(result_b.get("ok") is True, f"session B failed while A was held: {result_b}")
-        release_a.set()
-        await asyncio.wait_for(writer_a, timeout=15)
     require(await _pool_fetchval(
         "SELECT COUNT(*) FROM conversations WHERE session_id = $1", sid_b) == 2,
         "session B's turn did not land")
