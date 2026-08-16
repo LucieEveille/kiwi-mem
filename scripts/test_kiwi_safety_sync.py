@@ -5169,6 +5169,15 @@ async def test_w2_04_handoff_copies(client: httpx.AsyncClient) -> None:
     require(taken, "no session lock was taken at all")
     require(taken == sorted(taken),
             f"session locks must be taken in ascending id order, got {taken}")
+    # The behavioural half above only catches a missing sort when the set happens to
+    # iterate the wrong way, and set order follows PYTHONHASHSEED — so on its own it is a
+    # coin flip.  Pin the canonical order in the helper's source as well: that is the whole
+    # reason the helper exists.
+    lock_helper = re.search(
+        r"async def _lock_sessions_exclusive\(.*?(?=\nasync def |\ndef )",
+        (ROOT / "database.py").read_text(encoding="utf-8"), re.S)
+    require(lock_helper and "sorted(" in lock_helper.group(0),
+            "_lock_sessions_exclusive must impose a canonical order, not iterate a set")
     require(lo in taken and hi in taken,
             f"both the source and its handoff target must be locked, got {taken}")
 
