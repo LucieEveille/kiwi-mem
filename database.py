@@ -632,6 +632,15 @@ async def init_tables():
         await conn.execute(
             "INSERT INTO deletion_epoch (id) VALUES (1) ON CONFLICT (id) DO NOTHING"
         )
+        # W2-04 v3：账本行与它来源的那条 Chat 消息之间的稳定关联。
+        # 有了它，「这条 message 已被删」就能精确落到账本上，不必再拿 message_id 去猜
+        # turn_key，也不必用整轮章去代替单条消息的身份。历史行为空，由无键 legacy 清扫兜底。
+        await conn.execute(
+            "ALTER TABLE conversations ADD COLUMN IF NOT EXISTS source_message_id TEXT")
+        await conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_conversations_source_message "
+            "ON conversations (session_id, source_message_id)")
+        await _cleanup_sourceless_handoff_dividers(conn)
 
         # v5.3：时间有效期窗口（MemPalace 启发）
         for col_name, col_def in [
@@ -1067,6 +1076,116 @@ async def _lock_sessions_shared(conn, session_ids) -> None:
         )
 
 
+async def _lock_sessions_exclusive(conn, session_ids) -> None:
+    """多会话排他锁：去重后按 session ID 升序逐个取。
+
+    跨会话清理（换窗副本）会同时动源会话和若干目标会话，而两个会话完全可能互为来源。
+    只要所有路径都按同一个顺序取锁，S→T / T→S 的环就不可能形成。
+    """
+    for session_id in sorted({s for s in session_ids if s}):
+        await _lock_session(conn, session_id)
+
+
+async def _sweep_unlinked_legacy_rows_tx(conn, session_id: str) -> int:
+    """清掉这个会话里既无 turn_key 又无 source_message_id 的账本行，返回行数。
+
+    这些是闸门关时代留下的：没有任何字段能说清哪一行对应哪句话，所以只要这个会话
+    发生了一次删除，就无法证明被删的那句话不在其中。隐私优先——整批清掉，账本可由
+    W2-05 从 chat_messages 回填；有键或有关联的行一行不动。
+    """
+    swept = await conn.execute(
+        """
+        DELETE FROM conversations
+        WHERE session_id = $1 AND turn_key IS NULL AND source_message_id IS NULL
+        """,
+        session_id,
+    )
+    return _rowcount(swept)
+
+
+async def _handoff_target_sessions_tx(conn, source_id: str) -> list:
+    """哪些会话里还留着从 source_id 搬过来的换窗卡（取锁前先问一次）。"""
+    rows = await conn.fetch(
+        "SELECT DISTINCT conversation_id FROM chat_messages "
+        "WHERE role = 'divider' AND handoff_info->>'sourceId' = $1",
+        source_id,
+    )
+    return [r["conversation_id"] for r in rows]
+
+
+async def _purge_handoff_copies_tx(conn, source_id: str) -> int:
+    """源会话发生任何删除时，清掉别的会话里从它搬过去的换窗卡。
+
+    露露裁决：删了旧对话，新对话就不该再从那里衔接。换窗卡是聊天上下文的副本，
+    源正文被删就跟着走。逐 ID 盖章（章挂在**目标**会话上，旧设备也别想 PUT 回来），
+    删除，再把每个受影响目标会话的来源版本 +1——目标会话正在跑的整理/提取据此重算。
+
+    调用方必须已经按 `_lock_sessions_exclusive` 取好 {源, 目标...} 的锁。
+    """
+    rows = await conn.fetch(
+        "SELECT id, conversation_id FROM chat_messages "
+        "WHERE role = 'divider' AND handoff_info->>'sourceId' = $1",
+        source_id,
+    )
+    if not rows:
+        return 0
+    await conn.executemany(
+        "INSERT INTO message_tombstones (session_id, message_id) VALUES ($1, $2) "
+        "ON CONFLICT DO NOTHING",
+        [(r["conversation_id"], r["id"]) for r in rows],
+    )
+    await conn.execute(
+        "DELETE FROM chat_messages WHERE id = ANY($1::text[])", [r["id"] for r in rows])
+    for target in sorted({r["conversation_id"] for r in rows}):
+        await _bump_source_rev_tx(conn, target)
+    return len(rows)
+
+
+async def _handoff_source_alive_tx(conn, source_id: str, source_rev) -> bool:
+    """这张换窗卡的来源现在还在、版本还对得上吗？
+
+    来源已删（会话章）、目录里根本没有、或版本已经往前走过，都说明这张卡浓缩的是
+    删除前的正文——它是"终检通过之后源才被删、Chat 更晚才 PUT"那条迟到路径的产物。
+    """
+    if not source_id or not isinstance(source_rev, int) or isinstance(source_rev, bool):
+        return False
+    if await conn.fetchval(
+        "SELECT EXISTS(SELECT 1 FROM session_tombstones WHERE session_id = $1)", source_id
+    ):
+        return False
+    if not await conn.fetchval(
+        "SELECT EXISTS(SELECT 1 FROM chat_conversations WHERE id = $1)", source_id
+    ):
+        return False
+    return await _source_rev_tx(conn, source_id) == source_rev
+
+
+async def _cleanup_sourceless_handoff_dividers(conn) -> int:
+    """一次性清掉历史遗留的、追不到来源的换窗卡（幂等迁移）。
+
+    露露已裁定换窗卡是聊天副本，那么"因为旧版本没记 sourceId 所以永远查不出它浓缩的
+    是不是已删对话"就不能当成永久边界留着。清一次，之后新写入强制带 sourceId + sourceRev。
+    """
+    rows = await conn.fetch(
+        "SELECT id, conversation_id FROM chat_messages "
+        "WHERE role = 'divider' AND handoff_info IS NOT NULL "
+        "  AND NULLIF(BTRIM(COALESCE(handoff_info->>'sourceId', '')), '') IS NULL"
+    )
+    if not rows:
+        return 0
+    await conn.executemany(
+        "INSERT INTO message_tombstones (session_id, message_id) VALUES ($1, $2) "
+        "ON CONFLICT DO NOTHING",
+        [(r["conversation_id"], r["id"]) for r in rows],
+    )
+    await conn.execute(
+        "DELETE FROM chat_messages WHERE id = ANY($1::text[])", [r["id"] for r in rows])
+    for target in sorted({r["conversation_id"] for r in rows}):
+        await _bump_source_rev_tx(conn, target)
+    print(f"event=handoff_legacy_cleanup purged={len(rows)} increment=1")
+    return len(rows)
+
+
 async def _tombstone_status_tx(conn, session_id: str, *, turn_key: str = None,
                                reset_generation: int = None):
     """事务内判定这个会话/轮次此刻还能不能写；返回 None 表示可以。
@@ -1396,13 +1515,15 @@ def normalize_usage_for_storage(usage):
 
 _LEDGER_INSERT_SQL = (
     "INSERT INTO conversations "
-    "(session_id, role, content, model, project_id, scope_known, usage, turn_id, turn_key) "
-    "VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)"
+    "(session_id, role, content, model, project_id, scope_known, usage, turn_id, turn_key, "
+    " source_message_id) "
+    "VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)"
 )
 
 
 async def _regen_turn_tx(conn, session_id, assistant_content, model,
-                         scope_known, project_id, usage, turn_key):
+                         scope_known, project_id, usage, turn_key,
+                         assistant_message_id=None):
     """事务内的重生成：先定目标轮，再互斥选材，最后按 id 精确删并追加新回复。
 
     绝不先删后猜。turn_id 非空与 legacy NULL 两条候选分支互斥、禁止 OR 混选——
@@ -1435,6 +1556,7 @@ async def _regen_turn_tx(conn, session_id, assistant_content, model,
         await conn.execute(
             _LEDGER_INSERT_SQL, session_id, "assistant", assistant_content, model,
             project_id, scope_known, _to_json(normalize_usage_for_storage(usage)), None, turn_key,
+            assistant_message_id,
         )
         print("event=turn_orphan increment=1")
         return {"ok": True, "path": "regen", "turn_id": None}
@@ -1482,6 +1604,7 @@ async def _regen_turn_tx(conn, session_id, assistant_content, model,
         _LEDGER_INSERT_SQL, session_id, "assistant", assistant_content, model,
         latest_user["project_id"], latest_user["scope_known"],
         _to_json(normalize_usage_for_storage(usage)), latest_turn, latest_user["turn_key"],
+        assistant_message_id,
     )
     return {"ok": True, "path": "regen", "turn_id": latest_turn}
 
@@ -1498,6 +1621,8 @@ async def append_turn_events_atomic(
     usage=None,
     turn_key: str = None,
     is_regenerate: bool = False,
+    user_message_id: str = None,
+    assistant_message_id: str = None,
     reset_generation: int = None,
 ) -> dict:
     """把一轮交互作为单个事务追加进事件账本。
@@ -1505,6 +1630,11 @@ async def append_turn_events_atomic(
     正常轮：INSERT user（带 scope 与 turn_key）→ 用其自身 id 锚定 turn_id →
     INSERT assistant（同 scope、同 turn_id/turn_key，外加归一化 usage）。
     任一步失败整体回滚，绝不留下半轮。
+
+    **消息身份屏障（W2-04 v3）**：两条行各自记下自己来源的 Chat message ID，落账前
+    分别拿它去查消息章。用户"发完就删"时 DELETE 完全可能先到、PUT 还在路上，后台这时
+    才来落账——按角色逐条挡，被删的那条不落，另一条照常落。删掉旧 assistant 只封死那个
+    ID，换个新 assistant ID 在同一轮重生成仍然放行，所以绝不能拿整轮章代替消息身份。
 
     失败不抛给调用方：暗写失败不得打断聊天，只记一条无标识的安全计数事件。
     """
@@ -1534,25 +1664,52 @@ async def append_turn_events_atomic(
                 if scope_event:
                     print(f"event={scope_event} increment=1")
 
+                user_blocked = bool(user_message_id) and await _message_tombstoned_tx(
+                    conn, session_id, user_message_id)
+                assistant_blocked = bool(assistant_message_id) and await _message_tombstoned_tx(
+                    conn, session_id, assistant_message_id)
+                if user_blocked and assistant_blocked:
+                    print("event=ledger_write_skipped reason=message increment=1")
+                    return {"ok": False, "path": "tombstoned", "reason": "message"}
+
                 if is_regenerate:
+                    if assistant_blocked:
+                        print("event=ledger_write_skipped reason=message increment=1")
+                        return {"ok": False, "path": "tombstoned", "reason": "message"}
                     return await _regen_turn_tx(
                         conn, session_id, assistant_content, model,
-                        scope_known, project_id, usage, turn_key,
+                        scope_known, project_id, usage, turn_key, assistant_message_id,
                     )
 
-                user_id = await conn.fetchval(
-                    "INSERT INTO conversations "
-                    "(session_id, role, content, model, project_id, scope_known, turn_key) "
-                    "VALUES ($1, 'user', $2, $3, $4, $5, $6) RETURNING id",
-                    session_id, user_content, model, project_id, scope_known, turn_key,
-                )
-                await conn.execute(
-                    "UPDATE conversations SET turn_id = id WHERE id = $1", user_id
-                )
-                await conn.execute(
-                    _LEDGER_INSERT_SQL, session_id, "assistant", assistant_content, model,
-                    project_id, scope_known, _to_json(normalize_usage_for_storage(usage)), user_id, turn_key,
-                )
+                if user_blocked:
+                    # 用户那条已被删：这一轮的 assistant 仍然要落，挂回该轮已有的 turn_id
+                    # （查不到就留 NULL，与闸门关时代的行为一致）。
+                    user_id = await conn.fetchval(
+                        "SELECT turn_id FROM conversations WHERE session_id = $1 "
+                        "AND turn_key = $2 AND role = 'user' ORDER BY id DESC LIMIT 1",
+                        session_id, turn_key,
+                    ) if turn_key else None
+                    print("event=ledger_write_skipped reason=message increment=1")
+                else:
+                    user_id = await conn.fetchval(
+                        "INSERT INTO conversations "
+                        "(session_id, role, content, model, project_id, scope_known, turn_key, "
+                        " source_message_id) "
+                        "VALUES ($1, 'user', $2, $3, $4, $5, $6, $7) RETURNING id",
+                        session_id, user_content, model, project_id, scope_known, turn_key,
+                        user_message_id,
+                    )
+                    await conn.execute(
+                        "UPDATE conversations SET turn_id = id WHERE id = $1", user_id
+                    )
+                if not assistant_blocked:
+                    await conn.execute(
+                        _LEDGER_INSERT_SQL, session_id, "assistant", assistant_content, model,
+                        project_id, scope_known, _to_json(normalize_usage_for_storage(usage)),
+                        user_id, turn_key, assistant_message_id,
+                    )
+                else:
+                    print("event=ledger_write_skipped reason=message increment=1")
                 return {"ok": True, "path": path, "turn_id": user_id,
                         "scope_known": scope_known, "project_id": project_id}
     except Exception as e:
@@ -1566,6 +1723,8 @@ async def append_legacy_turn_if_not_deleted(session_id: str, user_content: str,
                                             assistant_content: str, model: str = "", *,
                                             is_regenerate: bool = False,
                                             turn_key: str = None,
+                                            user_message_id: str = None,
+                                            assistant_message_id: str = None,
                                             reset_generation: int = None) -> dict:
     """闸门关时的旧路径落账：两条 legacy 行进同一个受锁事务。
 
@@ -1584,19 +1743,33 @@ async def append_legacy_turn_if_not_deleted(session_id: str, user_content: str,
             if blocked:
                 print(f"event=ledger_write_skipped reason={blocked} increment=1")
                 return {"ok": False, "path": "tombstoned", "reason": blocked}
+            # 消息身份屏障对两扇门一视同仁：闸门关不改变「这条消息已被删」的事实。
+            user_blocked = bool(user_message_id) and await _message_tombstoned_tx(
+                conn, session_id, user_message_id)
+            assistant_blocked = bool(assistant_message_id) and await _message_tombstoned_tx(
+                conn, session_id, assistant_message_id)
+            if user_blocked and assistant_blocked:
+                print("event=ledger_write_skipped reason=message increment=1")
+                return {"ok": False, "path": "tombstoned", "reason": "message"}
+
             if is_regenerate:
                 await _delete_latest_assistant_message_tx(conn, session_id)
-            else:
+            elif not user_blocked:
                 await conn.execute(
-                    "INSERT INTO conversations (session_id, role, content, model) "
-                    "VALUES ($1, 'user', $2, $3)",
-                    session_id, user_content, model,
+                    "INSERT INTO conversations (session_id, role, content, model, "
+                    " source_message_id) VALUES ($1, 'user', $2, $3, $4)",
+                    session_id, user_content, model, user_message_id,
                 )
-            await conn.execute(
-                "INSERT INTO conversations (session_id, role, content, model) "
-                "VALUES ($1, 'assistant', $2, $3)",
-                session_id, assistant_content, model,
-            )
+            else:
+                print("event=ledger_write_skipped reason=message increment=1")
+            if not assistant_blocked:
+                await conn.execute(
+                    "INSERT INTO conversations (session_id, role, content, model, "
+                    " source_message_id) VALUES ($1, 'assistant', $2, $3, $4)",
+                    session_id, assistant_content, model, assistant_message_id,
+                )
+            else:
+                print("event=ledger_write_skipped reason=message increment=1")
     return {"ok": True, "path": "legacy"}
 
 
@@ -1702,6 +1875,18 @@ async def get_handoff_source(exclude_conversation_id: str = None, project_id: st
         return dict(conv) if conv else None
 
 
+async def handoff_source_unchanged(source_conversation_id: str, source_rev) -> bool:
+    """换窗终检：压缩做完、真要注入之前，再问一次源还在不在、版本动没动。
+
+    快照读到的是"开始压缩那一刻"的样子。压缩是一次外呼，几十秒里用户完全来得及把源
+    对话删掉；不再验一次就会把一段已删正文的浓缩稿注进新对话。
+    """
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        async with conn.transaction(isolation="repeatable_read", readonly=True):
+            return await _handoff_source_alive_tx(conn, source_conversation_id, source_rev)
+
+
 async def _handoff_messages_tx(conn, conv_id: str):
     """在调用方的快照里读换窗要用的消息；不自取连接、不外呼。"""
     return await conn.fetch("""
@@ -1741,6 +1926,7 @@ async def get_handoff_data(source_conversation_id: str, tail_count: int = 6):
                 LIMIT 1
             """, source_conversation_id)
             rows = await _handoff_messages_tx(conn, source_conversation_id)
+            source_rev = await _source_rev_tx(conn, source_conversation_id)
 
     messages = [dict(r) for r in rows]
     last_div_idx = -1
@@ -1764,6 +1950,10 @@ async def get_handoff_data(source_conversation_id: str, tail_count: int = 6):
 
     comp_summary = comp["summary"] if comp else None
     return {
+        # 调用方要拿这两个字段在**外呼压缩结束、注入 prompt 之前**再验一次：
+        # 压缩要几十秒，源对话完全可能在这中间被删掉。
+        "source_session_id": source_conversation_id,
+        "source_rev": source_rev,
         "comp_summary": (comp_summary.strip() if isinstance(comp_summary, str) and comp_summary.strip() else None),
         "divider_summary": divider_summary,
         "has_divider": last_div_idx >= 0,
@@ -3526,9 +3716,12 @@ async def sync_delete_conversation(conv_id: str):
     async with pool.acquire() as conn:
         async with conn.transaction():
             await _lock_global_shared(conn)
-            await _lock_session(conn, conv_id)
+            # 换窗副本散在别的会话里；持 S 锁前先问候选目标，再按 ID 排序一起取锁。
+            targets = await _handoff_target_sessions_tx(conn, conv_id)
+            await _lock_sessions_exclusive(conn, [conv_id, *targets])
             await _stamp_session_tx(conn, conv_id)
             await _bump_source_rev_tx(conn, conv_id)
+            handoff_purged = await _purge_handoff_copies_tx(conn, conv_id)
             result = await conn.execute(
                 "DELETE FROM chat_conversations WHERE id = $1", conv_id
             )
@@ -3551,6 +3744,7 @@ async def sync_delete_conversation(conv_id: str):
             "events": _rowcount(events),
             "summaries": _rowcount(summaries),
             "extraction_state": _rowcount(state),
+            "handoff_dividers": handoff_purged,
         },
     }
 
@@ -3637,7 +3831,7 @@ async def sync_upsert_messages(conv_id: str, messages: list):
     async with pool.acquire() as conn:
         async with conn.transaction():
             await _lock_global_shared(conn)
-            await _lock_session(conn, conv_id)
+            await _lock_sessions_exclusive(conn, [conv_id, *_handoff_sources_in(messages)])
             if await _tombstone_status_tx(conn, conv_id) == "session":
                 raise SessionDeletedError(conv_id)
             kept, skipped = await _filter_stamped_messages_tx(conn, conv_id, messages)
@@ -3658,6 +3852,16 @@ def _message_turn_key(msg: dict):
         if isinstance(value, str) and value.strip():
             return value
     return None
+
+
+def _handoff_sources_in(messages) -> list:
+    """这一批里所有换窗卡声明的来源会话，用于和目标会话一起排序取锁。"""
+    sources = []
+    for message in messages or ():
+        handoff = _handoff_divider_source(message)
+        if handoff and isinstance(handoff[0], str) and handoff[0]:
+            sources.append(handoff[0])
+    return sources
 
 
 async def _filter_stamped_messages_tx(conn, conv_id: str, messages: list):
@@ -3700,6 +3904,12 @@ async def _filter_stamped_messages_tx(conn, conv_id: str, messages: list):
                     or expected != current_rev):
                 skipped["sources_changed"].append(mid)
                 continue
+        handoff = _handoff_divider_source(message)
+        if handoff is not None:
+            source_id, source_rev = handoff
+            if not await _handoff_source_alive_tx(conn, source_id, source_rev):
+                skipped["sources_changed"].append(mid)
+                continue
         kept.append(message)
     return kept, skipped
 
@@ -3710,15 +3920,35 @@ async def _restore_conversation_tx(conn, conv: dict, messages: list) -> None:
     理念：恢复备份是用户明确的「把它带回来」；对话 POST、legacy PUT、/sync/import
     都属于普通同步，普通同步永远不能复活已删除的内容。
 
-    撤三类章、bump 来源版本、写元数据、替换消息全部在**同一个事务**里完成：
+    撤章、bump 来源版本、写元数据、替换消息全部在**同一个事务**里完成：
     任一步失败就一起回滚，绝不会出现「章已经撤了但数据没回来」这种半状态。
+
+    **撤章只撤这份备份说得出口的那些**（三态，与 messages 的三态一一对应）：
+      · 会话章始终撤——这段对话确实被带回来了；
+      · `messages is None`（缺键，只恢复元数据）：这份备份对消息一个字没说，
+        消息章与轮次章**一律不动**。否则"只想改个标题"就把用户删过的消息全放开了；
+      · `messages == []`（权威空快照）：清空消息，但它同样没有点名任何一条消息，
+        所以消息章与轮次章**保留**；
+      · 非空：只撤**文件里明确出现**的 message ID 的章，以及这些消息声明的 turnKey
+        的轮次章。备份里没提到的旧章继续有效。
     """
     session_id = str(conv.get("id", ""))
     await _lock_global_shared(conn)
     await _lock_session(conn, session_id)
     await conn.execute("DELETE FROM session_tombstones WHERE session_id = $1", session_id)
-    await conn.execute("DELETE FROM turn_tombstones WHERE session_id = $1", session_id)
-    await conn.execute("DELETE FROM message_tombstones WHERE session_id = $1", session_id)
+    if messages:
+        named_ids = [str(m.get("id")) for m in messages if m.get("id")]
+        named_turns = [k for k in (_message_turn_key(m) for m in messages) if k]
+        if named_ids:
+            await conn.execute(
+                "DELETE FROM message_tombstones WHERE session_id = $1 AND message_id = ANY($2::text[])",
+                session_id, named_ids,
+            )
+        if named_turns:
+            await conn.execute(
+                "DELETE FROM turn_tombstones WHERE session_id = $1 AND turn_key = ANY($2::text[])",
+                session_id, named_turns,
+            )
     await _bump_source_rev_tx(conn, session_id)
     await _upsert_conversation_tx(conn, conv, restore=True)
     # W2-02 三态：缺键 = 只恢复元数据，保留既有消息；显式 [] = 权威空快照，必须清空。
@@ -3734,6 +3964,26 @@ async def restore_conversation_from_backup(conv: dict, messages: list) -> None:
     async with pool.acquire() as conn:
         async with conn.transaction():
             await _restore_conversation_tx(conn, conv, messages)
+
+
+def _handoff_divider_source(msg: dict):
+    """这是一张换窗卡吗？是的话返回 `(sourceId, sourceRev)`，否则 None。
+
+    换窗卡不受**目标**会话的压缩版本约束（它浓缩的不是本会话的正文），但必须受
+    **来源**会话的存活与版本约束——否则"终检通过之后源才被删、Chat 更晚才 PUT"
+    这条迟到路径就能把已删对话的浓缩稿放进另一段对话里。
+    """
+    if (msg.get("role") or "") != "divider":
+        return None
+    info = msg.get("handoffInfo") or msg.get("handoff_info")
+    if isinstance(info, str):
+        try:
+            info = json.loads(info)
+        except (ValueError, TypeError):
+            info = None
+    if not isinstance(info, dict):
+        return None
+    return (info.get("sourceId"), info.get("sourceRev"))
 
 
 def _is_auto_compression_divider(msg: dict) -> bool:
@@ -3762,7 +4012,10 @@ async def sync_upsert_single_message(conv_id: str, msg_id: str, msg: dict):
         async with conn.transaction():
             # W2-04：先取锁，再依次查会话章与消息章，最后才是既有的归属防线。
             await _lock_global_shared(conn)
-            await _lock_session(conn, conv_id)
+            # 换窗卡要连它的来源会话一起锁上：来源与目标去重排序，全站同向，绝不成环。
+            _handoff = _handoff_divider_source(msg)
+            await _lock_sessions_exclusive(
+                conn, [conv_id, _handoff[0] if _handoff else None])
             if await _tombstone_status_tx(conn, conv_id) == "session":
                 return ("对话已删除", 410, "deleted")
             if await _message_tombstoned_tx(conn, conv_id, msg_id):
@@ -3778,12 +4031,15 @@ async def sync_upsert_single_message(conv_id: str, msg_id: str, msg: dict):
             if _is_auto_compression_divider(msg):
                 # 自动压缩 divider 是原文的浓缩副本，必须带来源版本；
                 # 版本过期说明它是基于删除前的素材算出来的，不能种回来。
+                # bool 不算版本号：True == 1，放过去就等于接受了一个伪造的 rev。
                 expected = msg.get("summarySourceRev", msg.get("summary_source_rev"))
-                current = await conn.fetchval(
-                    "SELECT rev FROM session_source_rev WHERE session_id = $1", conv_id
-                )
-                current = 0 if current is None else current
-                if not isinstance(expected, int) or expected != current:
+                current = await _source_rev_tx(conn, conv_id)
+                if (not isinstance(expected, int) or isinstance(expected, bool)
+                        or expected != current):
+                    return ("对话素材已变化", 409, "sources_changed")
+            if _handoff is not None:
+                # 换窗卡看的是**来源**会话的存活与版本。
+                if not await _handoff_source_alive_tx(conn, _handoff[0], _handoff[1]):
                     return ("对话素材已变化", 409, "sources_changed")
             parent = await conn.fetchrow(
                 "SELECT id FROM chat_conversations WHERE id = $1 FOR UPDATE", conv_id
@@ -3855,6 +4111,10 @@ async def sync_delete_message(conv_id: str, msg_id: str):
         就把整段账本清一次，编辑截断连删几个 divider 会把刚镜像好的轮次一刀清光。
       · turn_key 非空：只删账本里同一轮同一角色的行；该轮的 chat_messages 清空后
         才盖轮次章（在此之前该轮仍然活着，可以用**新** message ID 重生成）。
+        再加一道**无键 legacy 清扫**：闸门关时代写下的行既没有 turn_key 也没有
+        source_message_id，谁也说不清哪条对应哪句话；只要这个会话里还留着这种行，
+        带键删除就把它们整批清掉（隐私优先，W2-05 可从 chat_messages 回填），
+        其余带键的轮一行不动。
       · turn_key 为空的 user/assistant（定位不到轮次）：**隐私优先降级**，清掉该会话
         全部账本行，但**不盖会话章**——对话还活着，之后的新轮照常落账。宁可账本少一段
         可由 W2-05 从 chat_messages 回填重建的历史，也不让用户以为删掉的正文
@@ -3863,49 +4123,57 @@ async def sync_delete_message(conv_id: str, msg_id: str):
     压缩摘要与自动压缩 divider 是系统对原文的浓缩副本，和用户自行管理的记忆、
     日历不在同一层，所以随消息一起清；handoff divider 不是压缩副本，保留。
 
-    服务器上查不到这条消息时**照样盖章**：本地 PUT 还在网络里排队、DELETE 先到，
-    是完全正常的时序；不盖章的话随后那个 PUT 就把它原样种回来了。
+    服务器上查不到这条消息时**照样盖章、照样清副本**：本地 PUT 还在网络里排队、
+    DELETE 先到，是完全正常的时序。只盖章不清副本的话，摘要、自动 divider 与后台
+    刚落下的账本行都会带着这句话活下来。
+
+    最后，源会话发生任何删除都要顺手清掉别的会话里从它搬过去的换窗卡（露露裁决：
+    删了旧对话，新对话就不该再从那里衔接）——所以取锁时把目标会话一起排序取上。
     """
     pool = await get_pool()
     async with pool.acquire() as conn:
         async with conn.transaction():
             await _lock_global_shared(conn)
-            await _lock_session(conn, conv_id)
+            # 换窗副本可能散在别的会话里：持 S 锁之前先问一次候选目标，
+            # 再把 {源, 目标...} 去重排序一起取——两个会话互为来源时也不会成环。
+            targets = await _handoff_target_sessions_tx(conn, conv_id)
+            await _lock_sessions_exclusive(conn, [conv_id, *targets])
             row = await conn.fetchrow(
                 "SELECT role, turn_key FROM chat_messages WHERE id = $1 AND conversation_id = $2",
                 msg_id, conv_id,
             )
-            if row is None:
-                await conn.execute(
-                    "INSERT INTO message_tombstones (session_id, message_id) VALUES ($1, $2) "
-                    "ON CONFLICT DO NOTHING",
-                    conv_id, msg_id,
-                )
-                current = await _bump_source_rev_tx(conn, conv_id)
-                print("event=message_delete kind=message mode=not_present increment=1")
-                return {
-                    "deleted": False,
-                    "ledger_events_deleted": 0,
-                    "ledger_mode": "not_present",
-                    "purged": {"compression_summaries": 0, "compression_dividers": 0},
-                    "source_rev": current,
-                }
-
             await conn.execute(
                 "INSERT INTO message_tombstones (session_id, message_id) VALUES ($1, $2) "
                 "ON CONFLICT DO NOTHING",
                 conv_id, msg_id,
             )
-            await conn.execute(
-                "DELETE FROM chat_messages WHERE id = $1 AND conversation_id = $2",
-                msg_id, conv_id,
-            )
+            if row is None:
+                # 这条消息服务端还没见过（PUT 还在路上），但后台可能已经用它的 ID 落过账。
+                # 先按稳定关联精确删；历史行没有这个关联，只能按无键 legacy 整批清。
+                linked = await conn.execute(
+                    "DELETE FROM conversations WHERE session_id = $1 AND source_message_id = $2",
+                    conv_id, msg_id,
+                )
+                ledger_deleted = _rowcount(linked)
+                if ledger_deleted == 0:
+                    ledger_deleted = await _sweep_unlinked_legacy_rows_tx(conn, conv_id)
+                ledger_mode = "not_present"
+                role, turn_key = None, None
+                deleted = False
+            else:
+                await conn.execute(
+                    "DELETE FROM chat_messages WHERE id = $1 AND conversation_id = $2",
+                    msg_id, conv_id,
+                )
+                role, turn_key = row["role"], row["turn_key"]
+                ledger_mode, ledger_deleted = None, 0
+                deleted = True
 
-            role, turn_key = row["role"], row["turn_key"]
-            if role not in ("user", "assistant"):
+            if ledger_mode is not None:
+                pass
+            elif role not in ("user", "assistant"):
                 # 账本只存 user/assistant，divider 之流没有可镜像的原始副本。
                 ledger_mode = "not_applicable"
-                ledger_deleted = 0
             elif turn_key:
                 ledger_mode = "turn"
                 mirrored = await conn.execute(
@@ -3934,6 +4202,10 @@ async def sync_delete_message(conv_id: str, msg_id: str):
                         "ON CONFLICT DO NOTHING",
                         conv_id, turn_key,
                     )
+                swept_legacy = await _sweep_unlinked_legacy_rows_tx(conn, conv_id)
+                if swept_legacy:
+                    ledger_deleted += swept_legacy
+                    ledger_mode = "turn+legacy_sweep"
             else:
                 ledger_mode = "session_fallback"
                 swept = await conn.execute(
@@ -3970,18 +4242,21 @@ async def sync_delete_message(conv_id: str, msg_id: str):
                     conv_id, doomed_dividers,
                 )
             dividers = f"DELETE {len(doomed_dividers)}"
+            handoff_purged = await _purge_handoff_copies_tx(conn, conv_id)
             source_rev = await _bump_source_rev_tx(conn, conv_id)
             await conn.execute(
                 "UPDATE chat_conversations SET updated_at = NOW() WHERE id = $1", conv_id
             )
     print(f"event=message_delete kind=message mode={ledger_mode} increment=1")
     return {
-        "deleted": True,
+        # 这条消息服务端本来就没有时仍然是 False——章盖了、副本清了，但没删掉任何 Chat 行。
+        "deleted": deleted,
         "ledger_events_deleted": ledger_deleted,
         "ledger_mode": ledger_mode,
         "purged": {
             "compression_summaries": _rowcount(summaries),
             "compression_dividers": _rowcount(dividers),
+            "handoff_dividers": handoff_purged,
         },
         "source_rev": source_rev,
     }
@@ -4269,6 +4544,10 @@ async def sync_import_all(conversations: list, projects: list):
             skipped_messages = {"message_deleted": [], "turn_deleted": [], "sources_changed": []}
             async with pool.acquire() as conn:
                 async with conn.transaction():
+                    # G 永远先于 S；目标与这批换窗卡的来源会话一起去重排序取锁。
+                    await _lock_global_shared(conn)
+                    await _lock_sessions_exclusive(
+                        conn, [cid, *_handoff_sources_in(messages)])
                     await _upsert_conversation_tx(conn, conv_meta)
                     # messages 缺失 → 只更新 metadata，保留既有消息；
                     # 显式 [] → 清空；非空数组 → 完整替换并删除差集。

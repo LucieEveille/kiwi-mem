@@ -1066,7 +1066,14 @@ async def build_system_prompt_with_memories(user_message: str, user_msg_count: i
                         summary_parts.append(f"[结尾原文]\n{tail_text}")
                     full_summary = "\n\n".join(summary_parts).strip()
 
-                    if full_summary:
+                    # 终检：上面的压缩是一次外呼，几十秒里用户完全来得及把源对话删掉。
+                    # 快照那一刻源还在，不代表现在还在——注入前必须再问一次。
+                    from database import handoff_source_unchanged
+                    still_there = await handoff_source_unchanged(
+                        data["source_session_id"], data["source_rev"])
+                    if full_summary and not still_there:
+                        print("event=handoff_skipped reason=source_changed increment=1")
+                    elif full_summary:
                         title_hint = source.get("title", "") or ""
                         usage_rule = "仅供了解上下文背景。用户延续话题时自然参考，开启新话题时安静忽略，不要主动提起上一窗口。"
                         _append_runtime_context_section(
@@ -1076,6 +1083,9 @@ async def build_system_prompt_with_memories(user_message: str, user_msg_count: i
                         prompt_meta["handoff"] = {
                             "version": 2,
                             "sourceId": source["id"],
+                            # Chat 把这张卡落成 handoff divider 时要原样带回来：
+                            # 服务端据此判断这份浓缩稿的来源是不是还活着、版本对不对得上。
+                            "sourceRev": data["source_rev"],
                             "sourceTitle": title_hint,
                             "summary": full_summary,
                             "status": "full" if handoff_summary else "tail_only",
@@ -1338,7 +1348,9 @@ async def _extract_and_save_batch(*, session_id, limit,
     return "abandoned", [], 0, 0
 
 
-async def process_memories_background(session_id: str, user_msg: str, assistant_msg: str, model: str, emotion_level: str = "normal", project_id: str = None, is_regenerate: bool = False, *, extract_enabled: bool = True, usage: dict = None, turn_key: str = None, client_gave_conv_id: bool = False, project_id_present: bool = False, payload_project_id=None, reset_generation: int = None):
+async def process_memories_background(session_id: str, user_msg: str, assistant_msg: str, model: str, emotion_level: str = "normal", project_id: str = None, is_regenerate: bool = False, *, extract_enabled: bool = True, usage: dict = None, turn_key: str = None, client_gave_conv_id: bool = False, project_id_present: bool = False, payload_project_id=None, user_message_id: str = None,
+                                     assistant_message_id: str = None,
+                                     reset_generation: int = None):
     """
     后台异步：存储对话 + 按间隔提取记忆（不阻塞主流程）
     
@@ -1378,12 +1390,16 @@ async def process_memories_background(session_id: str, user_msg: str, assistant_
                 project_id_present=project_id_present,
                 payload_project_id=payload_project_id,
                 usage=usage, turn_key=turn_key, is_regenerate=is_regenerate,
+                user_message_id=user_message_id,
+                assistant_message_id=assistant_message_id,
                 reset_generation=reset_generation,
             )
         else:
             ledger_result = await append_legacy_turn_if_not_deleted(
                 session_id, user_msg, assistant_msg, model,
                 is_regenerate=is_regenerate, turn_key=turn_key,
+                user_message_id=user_message_id,
+                assistant_message_id=assistant_message_id,
                 reset_generation=reset_generation,
             )
 
@@ -1968,11 +1984,23 @@ async def chat_completions(request: Request):
     # reset 世代在**请求入口**取一次快照：暗写是后台任务，从这里到落账中间可能夹进一次
     # 全局重置。带着旧世代去落账会被拒（reason=reset），于是"重置前发出、重置后才落表"
     # 的在途请求不会把刚清空的库又写回一条。
+    # W2-04 v3：Chat 在发起生成前就把这一轮两条消息的 ID 定好并一起发过来。
+    # 账本行记下自己来源的那条消息，删除才能精确落到账本上——不必拿 message_id 猜
+    # turn_key，也不必用整轮章去代替单条消息的身份。缺失时按 None 处理（老客户端）。
+    def _msg_id(*keys):
+        for key in keys:
+            value = body.pop(key, None)
+            if isinstance(value, str) and value.strip() and len(value) <= 200:
+                return value.strip()
+        return None
+
     ledger_ctx = {
         "client_gave_conv_id": client_gave_conv_id,
         "project_id_present": project_id_present,
         "payload_project_id": raw_project_id,
         "turn_key": turn_key,
+        "user_message_id": _msg_id("user_message_id", "userMsgId"),
+        "assistant_message_id": _msg_id("assistant_message_id", "assistantMsgId"),
         "reset_generation": await get_reset_generation(),
     }
 

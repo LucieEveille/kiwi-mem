@@ -3170,7 +3170,8 @@ async def test_w2_04_schema_and_conversation_delete(client: httpx.AsyncClient) -
     response = await client.delete(f"/sync/conversations/{conv_a}")
     require(response.status_code == 200, f"conversation delete failed: {response.status_code}")
     require(response.json() == {"deleted": True,
-                                "purged": {"events": 4, "summaries": 1, "extraction_state": 1}},
+                                "purged": {"events": 4, "summaries": 1, "extraction_state": 1,
+                                           "handoff_dividers": 0}},
             f"delete response shape drifted (nesting?): {response.text}")
     counts = await _original_copy_counts(conv_a)
     require(all(v == 0 for v in counts.values()),
@@ -3331,7 +3332,8 @@ async def test_w2_04_message_delete_and_ledger(client: httpx.AsyncClient) -> Non
     body = response.json()
     require(body["deleted"] is True and body["ledger_mode"] == "turn",
             f"a keyed message delete must mirror through the turn branch: {body}")
-    require(body["purged"] == {"compression_summaries": 2, "compression_dividers": 2},
+    require(body["purged"] == {"compression_summaries": 2, "compression_dividers": 2,
+                               "handoff_dividers": 0},
             f"compression copies were not purged exactly: {body}")
     require(body["source_rev"] == 1, f"message delete must bump and report the rev: {body}")
     k1_roles = [r["role"] for r in await _pool_fetch(
