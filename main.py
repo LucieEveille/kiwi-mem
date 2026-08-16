@@ -49,7 +49,7 @@ from database import (
     sync_delete_project, sync_import_all,
     # W2-04 会话删除与隐私语义
     append_legacy_turn_if_not_deleted, reset_all_chat_data, save_compression_summary,
-    restore_conversation_from_backup, get_reset_generation, get_source_rev, is_session_deleted,
+    restore_conversation_from_backup, get_reset_generation,
     snapshot_recent_conversation, save_if_sources_unchanged, _insert_memory_tx,
     SessionDeletedError,
     # v4.2 提醒系统
@@ -1015,6 +1015,9 @@ async def build_system_prompt_with_memories(user_message: str, user_msg_count: i
                     tail_count = await get_config_int("handoff_tail_count", fallback=6)
                     data = await get_handoff_data(source["id"], tail_count=tail_count)
 
+                # 选源与读数据之间那段时间里源可能刚被删掉：读到 None 就是「没有可换窗的源」，
+                # 这一轮不注入，绝不拿一份已删对话的摘要顶上。
+                if source and data is not None:
                     existing_summary = None
                     msgs_to_compress = []
 
@@ -1200,33 +1203,23 @@ def _filter_meta_memories(new_memories: list) -> list:
     return kept
 
 
-async def _snapshot_extraction_material(session_id: str, user_msg: str, assistant_msg: str, *,
-                                        limit: int, reset_generation: int = None):
+async def _snapshot_extraction_material(session_id: str, *, limit: int):
     """读提取素材，连同来源版本一起快照，返回 `(snapshot, messages)`。
 
-    账本查得到就用账本——正文、每个来源会话的版本与重置世代出自同一条 SELECT 的同一快照。
-    查不到才降级到内存里的这一轮，而降级素材同样要带明确版本：世代取请求入口的快照，
-    版本取该会话当前值。否则它就成了"无版本素材"，删除拦不住它变成记忆。
-    素材所属会话已经盖章时直接放弃——那段对话是用户明确要求抹掉的。
+    正文、每个来源会话的版本与重置世代出自同一条 SELECT 的同一快照。
+
+    账本一行都读不到时**直接放弃提取**，不再退回内存里的这一轮：内存正文没有任何
+    可以和版本原子绑定的持久化来源，无论怎么补查版本，删除都能挤进"读正文"和
+    "读版本"之间，造出旧正文配新版本、保存前比对照样放行的组合。账本读不到只在
+    落账失败或被拒时才发生，本就是罕见兜底——宁可这一轮不提取。
     """
     snapshot = await snapshot_recent_conversation(limit=limit)
     messages = [{"role": row["role"], "content": row["content"]} for row in snapshot["rows"]]
-    if messages:
-        print(f"📨 提取范围：最近 {len(messages)} 条消息（约 {len(messages)//2} 轮对话）")
-        return snapshot, messages
-
-    if session_id and await is_session_deleted(session_id):
+    if not messages:
+        print("event=extraction_skipped reason=no_persisted_material increment=1")
         return None, []
-    degraded = {
-        "rows": (),
-        "sources": {session_id: await get_source_rev(session_id)} if session_id else {},
-        "generation": snapshot["generation"] if reset_generation is None else reset_generation,
-    }
-    print("📨 提取范围：当前 1 轮对话（降级）")
-    return degraded, [
-        {"role": "user", "content": user_msg},
-        {"role": "assistant", "content": assistant_msg},
-    ]
+    print(f"📨 提取范围：最近 {len(messages)} 条消息（约 {len(messages)//2} 轮对话）")
+    return snapshot, messages
 
 
 async def _prepare_memory_batch(candidates: list, *, project_id=None, emotion_level="normal",
@@ -1305,17 +1298,16 @@ async def _commit_memory_batch(conn, plans: list, *, session_id: str, project_id
     return saved_items, contradictions
 
 
-async def _extract_and_save_batch(*, session_id, user_msg, assistant_msg, limit,
+async def _extract_and_save_batch(*, session_id, limit,
                                   existing_contents, cat_names, emotion_level, project_id,
-                                  model_override, prompt_override, reset_generation=None):
+                                  model_override, prompt_override):
     """快照素材 → 锁外提取算好 → 同锁比对版本 → 整批落库。最多重算一次。
 
     素材在提取途中被删（`changed`）就丢掉结果、用剩余素材重来一遍；第二遍还在变说明
     用户正在连续删，这时候放弃比硬存更对——返回 `("abandoned", ...)`。
     """
     for attempt in (1, 2):
-        snapshot, messages = await _snapshot_extraction_material(
-            session_id, user_msg, assistant_msg, limit=limit, reset_generation=reset_generation)
+        snapshot, messages = await _snapshot_extraction_material(session_id, limit=limit)
         if not messages:
             return "abandoned", [], 0, 0
 
@@ -1391,7 +1383,8 @@ async def process_memories_background(session_id: str, user_msg: str, assistant_
         else:
             ledger_result = await append_legacy_turn_if_not_deleted(
                 session_id, user_msg, assistant_msg, model,
-                is_regenerate=is_regenerate, reset_generation=reset_generation,
+                is_regenerate=is_regenerate, turn_key=turn_key,
+                reset_generation=reset_generation,
             )
 
         # W2-04：这一轮的素材已经被删掉了（会话章 / 轮次章 / 重置世代）。
@@ -1464,13 +1457,11 @@ async def process_memories_background(session_id: str, user_msg: str, assistant_
         # ===== v3.7 改进：攒 N 轮完整对话一起提取 =====
         # 从数据库捞最近 N*2 条消息（N轮 = N条user + N条assistant）
         action, saved_items, skipped_count, contradiction_count = await _extract_and_save_batch(
-            session_id=session_id, user_msg=user_msg, assistant_msg=assistant_msg,
-            limit=extract_interval * 2,
+            session_id=session_id, limit=extract_interval * 2,
             existing_contents=existing_contents, cat_names=cat_names,
             emotion_level=emotion_level, project_id=project_id,
             model_override=db_memory_model if db_memory_model else None,
             prompt_override=db_memory_prompt if db_memory_prompt else None,
-            reset_generation=reset_generation,
         )
         if action == "abandoned":
             print("💭 提取素材在生成期间被删改，本轮放弃保存")
@@ -5546,11 +5537,15 @@ async def api_sync_upsert_conversation(conv_id: str, request: Request):
         except SessionDeletedError:
             return _deleted_conversation_response()
         result = {"status": "ok"}
-        # 全量替换里被消息章挡下的那些 ID 要点名回报：调用方据此把它们从本地也清掉，
-        # 否则每次同步都会再试一遍，看起来像"删不掉"。
+        # 全量替换里被章挡下的 ID 要点名回报：调用方据此把它们从本地也清掉，
+        # 否则每次同步都会再试一遍，看起来像"删不掉"。两类分开报——
+        # 章是永久的（本地删掉即可），版本过期的压缩副本重算一次还能再写进来。
         skipped = replaced.get("skipped_deleted_messages") or []
         if skipped:
             result["skipped_deleted_messages"] = skipped
+        stale = replaced.get("skipped_stale_summaries") or []
+        if stale:
+            result["skipped_stale_summaries"] = stale
         return result
     except Exception as e:
         return JSONResponse(status_code=500, content={"error": str(e)})
@@ -5916,7 +5911,8 @@ async def api_sync_import_backup(file: UploadFile = File(...)):
             if "conversations.json" in names:
                 convs = json.loads(zf.read("conversations.json"))
                 for conv in convs:
-                    messages = conv.pop("messages", [])
+                    # 缺键取 None（只恢复元数据），不能取 []——那是「权威空快照」的意思。
+                    messages = conv.pop("messages", None)
                     try:
                         await restore_conversation_from_backup(conv, messages)
                     except Exception as e:
@@ -5924,7 +5920,7 @@ async def api_sync_import_backup(file: UploadFile = File(...)):
                         print(f"event=backup_restore_failed "
                               f"exception_type={type(e).__name__} increment=1")
                         continue
-                    result["messages"] += len(messages)
+                    result["messages"] += len(messages or [])
                     result["conversations"] += 1
 
             # 导入记忆
@@ -5985,7 +5981,7 @@ async def api_sync_reset(request: Request):
         return {"status": "ok", "message": "所有聊天数据已重置", **result}
     except Exception:
         print("event=session_delete_failed kind=reset increment=1")
-        return JSONResponse(status_code=500, content={"error": "删除失败"})
+        return JSONResponse(status_code=500, content={"error": "重置失败"})
 
 
 # ============================================================

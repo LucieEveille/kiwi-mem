@@ -2026,13 +2026,8 @@ async def test_w2_02(client: httpx.AsyncClient) -> None:
         require("WHERE" in flat, f"unconditional chat_messages delete: {flat}")
         require("ORDER BY" not in flat and "LIMIT" not in flat,
                 f"chat_messages delete infers rows by ordering: {flat}")
-        if "role" in flat.lower():
-            # W2-04 起的唯一例外：清自动压缩 divider。它必须带齐三条结构判据
-            # （role=divider、有 summary、非 handoff），因此只可能命中压缩副本，
-            # 退化不成"猜最后一条 assistant"——那正是本条守卫要挡的东西。
-            require("role = 'divider'" in flat and "summary IS NOT NULL" in flat
-                    and "handoff_info IS NULL" in flat,
-                    f"chat_messages delete branches on role: {flat}")
+        require("role" not in flat.lower(),
+                f"chat_messages delete branches on role: {flat}")
     passed("T-W2-02-17 chat_messages deletes stay deterministic, never role/order inferred")
 
     # ---- per-column landing against an independent expectation table -------
@@ -4617,9 +4612,8 @@ async def test_w2_04_real_entrypoints(client: httpx.AsyncClient) -> None:
     out = io.StringIO()
     with redirect_stdout(out), redirect_stderr(io.StringIO()):
         result = await app_module._extract_and_save_batch(
-            session_id="w204-nomaterial", user_msg="in-memory user", assistant_msg="in-memory ai",
-            limit=20, existing_contents=[], cat_names=[], emotion_level="normal",
-            project_id=None, model_override=None, prompt_override=None, reset_generation=None,
+            session_id="w204-nomaterial", limit=20, existing_contents=[], cat_names=[],
+            emotion_level="normal", project_id=None, model_override=None, prompt_override=None,
         )
     require(result[0] == "abandoned",
             f"an extraction with no persisted material must be abandoned, got {result[0]}")
@@ -4723,9 +4717,9 @@ async def test_w2_04_real_entrypoints(client: httpx.AsyncClient) -> None:
          patch.object(database, "get_embedding", _none_embedding):
         with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
             result = await app_module._extract_and_save_batch(
-                session_id=src_two, user_msg="u", assistant_msg="a", limit=20,
-                existing_contents=[], cat_names=[], emotion_level="normal", project_id=None,
-                model_override=None, prompt_override=None, reset_generation=None)
+                session_id=src_two, limit=20, existing_contents=[], cat_names=[],
+                emotion_level="normal", project_id=None, model_override=None,
+                prompt_override=None)
     require(len(calls) == 2, f"a changed source must trigger exactly one recompute: {len(calls)}")
     require(result[0] == "extract", f"the recompute must succeed on the remaining material: {result[0]}")
     require(await _pool_fetchval(
@@ -4750,9 +4744,9 @@ async def test_w2_04_real_entrypoints(client: httpx.AsyncClient) -> None:
          patch.object(database, "get_embedding", _none_embedding):
         with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
             result = await app_module._extract_and_save_batch(
-                session_id=src_two, user_msg="u", assistant_msg="a", limit=20,
-                existing_contents=[], cat_names=[], emotion_level="normal", project_id=None,
-                model_override=None, prompt_override=None, reset_generation=None)
+                session_id=src_two, limit=20, existing_contents=[], cat_names=[],
+                emotion_level="normal", project_id=None, model_override=None,
+                prompt_override=None)
     require(result[0] == "abandoned", f"sources that keep changing must be abandoned: {result[0]}")
     require(await _pool_fetchval("SELECT COUNT(*) FROM memories") == 0,
             "an abandoned extraction still wrote memories")
