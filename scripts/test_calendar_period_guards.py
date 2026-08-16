@@ -421,9 +421,16 @@ async def check_material_and_injection_isolation():
         audited = await database.get_invalid_calendar_period_pages()
     check(not any(x["type"] in {"week", "month", "fortnight"} for x in injected),
           "invalid historical summaries must not inject or claim coverage")
-    bodies = {x.get("digest") for x in injected}
-    check({"GOOD_DAY_MONTH", "GOOD_DAY_WEEK", "GOOD_DAY_PREMATURE"} <= bodies,
+    # 判据是"这些日子还在不在注入里"，不是 digest 字面：v6.1 三级注入对 4~7 天前的日页面
+    # **故意**清空 digest、让注入端回落 summary，而 canonical_week_start 每逢周一（CST）
+    # 正好是 7 天前——按字面判会让这条守卫每周一误红一次。
+    injected_days = {x["date"] for x in injected if x["type"] == "day"}
+    check({invalid_month_date, invalid_week_date, canonical_week_start} <= injected_days,
           "day pages under invalid summaries must remain eligible")
+    today = datetime.now(database.TZ_CST).date()
+    concise = {x["date"] for x in injected if x["type"] == "day" and not x.get("digest")}
+    check(all((today - d).days <= 7 for d in concise),
+          "a day outside the concise window must keep its digest")
     audited_ids = {x["id"] for x in audited}
     check({1, 2, 5, 6} <= audited_ids, "read-only audit must diagnose every invalid historical identity")
 

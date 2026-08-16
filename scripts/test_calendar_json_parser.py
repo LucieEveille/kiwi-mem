@@ -98,7 +98,9 @@ async def _model_endpoint(*args, **kwargs):
 
 
 async def _messages(*args, **kwargs):
-    return [{"role": "user", "content": "hello"}]
+    # 读者的合同变了：正文与来源版本出自同一条 SELECT，替身必须同样带回来。
+    return [{"role": "user", "content": "hello", "conversation_id": "c1",
+             "source_rev": 0, "reset_generation": 0}]
 
 
 async def _pool(*args, **kwargs):
@@ -120,17 +122,18 @@ async def _calendar_range(start, end, page_type):
 async def _run_day(text, save_hook=None, finish_reason="stop"):
     saves = []
 
-    async def fake_save(*args, **kwargs):
+    async def fake_save(snapshot, **kwargs):
+        # 日页面成品现在经"同锁比对来源版本"通道落库，替身返回同样的两元组。
         saves.append(kwargs)
         if save_hook:
             save_hook(kwargs)
-        return 101
+        return "saved", 101
 
     with (
         patch.object(database, "get_chat_messages_for_date", _messages),
         patch.object(database, "get_pool", _pool),
         patch.object(database, "resolve_model_endpoint", _model_endpoint),
-        patch.object(database, "save_calendar_page", fake_save),
+        patch.object(database, "save_calendar_page_if_sources_unchanged", fake_save),
         patch.object(config, "get_config", _empty_config),
         patch.object(
             daily_digest.httpx,
@@ -154,7 +157,7 @@ async def _run_week(text):
     with (
         patch.object(database, "get_calendar_range", _calendar_range),
         patch.object(database, "resolve_model_endpoint", _model_endpoint),
-        patch.object(database, "save_calendar_page", fake_save),
+        patch.object(database, "save_calendar_page_if_sources_unchanged", fake_save),
         patch.object(config, "get_config", _empty_config),
         patch.object(daily_digest.httpx, "AsyncClient", _fake_async_client(text)),
     ):

@@ -15,6 +15,7 @@ Run with:
 from __future__ import annotations
 
 import asyncio
+import ast
 import inspect
 import io
 import json
@@ -59,9 +60,33 @@ memory_extractor: Any = None
 PASSED: list[str] = []
 
 
-def require(condition: Any, message: str) -> None:
-    if not condition:
-        raise AssertionError(message)
+# 变异刀专用的静默通道。红点被更早的同通道守卫抢走时，刀本用它临时让开那一条，
+# 好证明目标守卫自己也能咬住——**不改测试文件**，只靠环境变量。
+# 只有显式带 tag 的断言可以被让开；任何一次静默都会在收尾处大声记账，
+# 静默过的运行永远不会打印那行「全绿」总数，不可能被误当成干净结果。
+_MUTED_TAGS = {tag.strip() for tag in os.environ.get("KIWI_KNIFE_MUTE", "").split(",") if tag.strip()}
+_MUTES_USED: list[str] = []
+
+
+def require(condition: Any, message: str, *, tag: str = None) -> None:
+    if condition:
+        return
+    if tag and tag in _MUTED_TAGS:
+        _MUTES_USED.append(tag)
+        print(f"  MUTED {tag} (KIWI_KNIFE_MUTE) — this run is NOT a clean pass")
+        return
+    raise AssertionError(message)
+
+
+def begin(name: str) -> None:
+    """Announce the guard that is about to run.
+
+    The knife book decides RED by the last BEGIN printed before the failing assertion, so
+    this line is what tells "the mutation was caught by its own guard" apart from "something
+    else fell over first".  It is printed before the guard's fixtures, not after them: a
+    fixture that dies still belongs to the guard that asked for it.
+    """
+    print(f"BEGIN {name}")
 
 
 def passed(name: str) -> None:
@@ -152,6 +177,10 @@ async def _truncate(*tables: str) -> None:
         "mem_scenes",
         "conversations",
         "memory_extraction_state",
+        "session_tombstones",
+        "turn_tombstones",
+        "message_tombstones",
+        "session_source_rev",
     }
     require(bool(tables) and set(tables) <= allowed, "unsafe TRUNCATE table")
     await _pool_execute(f"TRUNCATE TABLE {', '.join(tables)} RESTART IDENTITY CASCADE")
@@ -250,10 +279,12 @@ async def _seed_scene(dream_id: int, *, status: str = "active", title: str = "sc
 
 
 async def test_s1(client: httpx.AsyncClient) -> None:
+    begin("T-S1-1")
     print("\nS1 /sync/settings whitelist")
     require(tuple(config.SYNC_SETTING_KEYS) == SYNC_KEYS, "SYNC_SETTING_KEYS/order drifted")
     require(all(key in config.CONFIG_SCHEMA for key in SYNC_KEYS), "sync key outside schema")
     passed("T-S1-1 exact ordered nine-key contract")
+    begin("T-S1-2")
 
     await _truncate("gateway_config", "chat_conversations", "chat_projects", "compression_summaries")
     dangerous_before = {
@@ -287,16 +318,19 @@ async def test_s1(client: httpx.AsyncClient) -> None:
     require(body["rejected"] == list(dangerous_before), f"wrong rejected set: {body}")
     require(seen_set_config == ["user_nickname"], f"dangerous key reached set_config: {seen_set_config}")
     passed("T-S1-2 mixed PUT rejects before set_config")
+    begin("T-S1-3")
 
     require(await _config_row("user_nickname") == "安全昵称", "allowed setting did not persist")
     for key, value in dangerous_before.items():
         require(await _config_row(key) == value, f"dangerous DB value changed: {key}")
     passed("T-S1-3 real PostgreSQL values remain protected")
+    begin("T-S1-4")
 
     response = await client.get("/sync/settings")
     require(response.status_code == 200, response.text)
     require(tuple(response.json().keys()) == SYNC_KEYS, "GET settings keys/order drifted")
     passed("T-S1-4 GET exact key set and order")
+    begin("T-S1-5")
 
     response = await client.get("/sync/export")
     require(response.status_code == 200, response.text)
@@ -306,6 +340,7 @@ async def test_s1(client: httpx.AsyncClient) -> None:
     require(tuple(settings_json.keys()) == SYNC_KEYS, "settings.json contract drifted")
     require(config_json["search_api_key"] == dangerous_before["search_api_key"], "full backup lost config")
     passed("T-S1-5 export keeps nine-key settings and full config backup")
+    begin("T-S1-6")
 
     for key in SYNC_KEYS:
         await _upsert_config(key, f"sync-{key}")
@@ -318,6 +353,7 @@ async def test_s1(client: httpx.AsyncClient) -> None:
     for key, value in dangerous_before.items():
         require(await _config_row(key) == value, f"reset removed management config: {key}")
     passed("T-S1-6 reset removes sync settings only")
+    begin("T-S1-7")
 
     consumers = (
         app_module.api_sync_get_settings,
@@ -330,6 +366,7 @@ async def test_s1(client: httpx.AsyncClient) -> None:
         require("SYNC_SETTING_KEYS" in source, f"{consumer.__name__} bypasses shared constant")
         require("sync_keys =" not in source, f"{consumer.__name__} has a local key copy")
     passed("T-S1-7 all four consumers use the single constant")
+    begin("T-S1-8")
 
     readme_zh = (ROOT / "README.md").read_text(encoding="utf-8")
     readme_en = (ROOT / "README_EN.md").read_text(encoding="utf-8")
@@ -342,6 +379,7 @@ async def test_s1(client: httpx.AsyncClient) -> None:
 
 
 async def test_s2() -> None:
+    begin("T-S2-1")
     print("\nS2 log redaction")
     await _truncate("memories", "gateway_config")
     content_secret = "内容密钥-ASCII-SECRET-9988-🧪-尾巴"
@@ -363,7 +401,9 @@ async def test_s2() -> None:
     for forbidden in (content_secret, title_secret, content_secret[:10], title_secret[:10]):
         require(forbidden not in log, f"memory log leaked content: {forbidden}")
     passed("T-S2-1 memory title/content sentinels absent")
+    begin("T-S2-2")
     passed("T-S2-2 vector metadata remains useful")
+    begin("T-S2-3")
 
     async def no_embedding(_text: str) -> None:
         return None
@@ -427,6 +467,7 @@ async def test_s2() -> None:
     require(extraction_secret not in output.getvalue(), "raw extraction response leaked")
     require(str(len(json.dumps(extracted, ensure_ascii=False))) in output.getvalue(), "length metadata missing")
     passed("T-S2-3 extractor HTTP mocked and raw response redacted")
+    begin("T-S2-4")
 
     key_secret = "sk-VERY-LONG-SECRET-1234567890"
     prompt_secret = "PROMPT-PRIVATE-SENTINEL-" + ("x" * 100)
@@ -438,6 +479,7 @@ async def test_s2() -> None:
     require(key_secret not in safe_log and prompt_secret not in safe_log, "set_config leaked a secret")
     require(str(len(prompt_secret)) in safe_log, "prompt redaction lost allowed length")
     passed("T-S2-4 existing set_config redaction remains active")
+    begin("T-S2-5")
 
     db_source = inspect.getsource(database.save_memory)
     extractor_source = inspect.getsource(memory_extractor.extract_memories)
@@ -446,6 +488,7 @@ async def test_s2() -> None:
 
 
 async def test_s3() -> None:
+    begin("T-S3-1")
     print("\nS3 CST calendar anchor")
     await _truncate("calendar_pages")
 
@@ -474,6 +517,7 @@ async def test_s3() -> None:
     require(date(2026, 7, 16) in returned_dates, "CST previous day was omitted")
     require(date(2026, 7, 15) not in returned_dates, "UTC-yesterday anchor leaked an extra day")
     passed("T-S3-1 UTC 16:30 maps to CST next natural day")
+    begin("T-S3-2")
 
     await _pool_execute(
         """
@@ -494,6 +538,7 @@ async def test_s3() -> None:
     require("date_cls.today()" not in source, "local container date anchor remains")
     require("date as date_cls" in source, "hierarchical date constructor import missing")
     passed("T-S3-2 source guard plus year/quarter/month regression")
+    begin("T-S3-3")
 
     needle_date = ".".join(("date", "today")) + "("
     needle_datetime = ".".join(("datetime", "today")) + "("
@@ -509,6 +554,7 @@ async def test_s3() -> None:
 
 
 async def test_s4(client: httpx.AsyncClient) -> None:
+    begin("T-S4-1")
     print("\nS4 guarded memory deletion")
     await _truncate("memories")
     await _upsert_config("memory_enabled", "true")
@@ -527,6 +573,7 @@ async def test_s4(client: httpx.AsyncClient) -> None:
     response = await client.delete("/debug/memories/99999999")
     require(response.status_code == 404, response.text)
     passed("T-S4-1 single-delete behavior matrix")
+    begin("T-S4-2")
 
     unlocked = await _seed_memory("batch-unlocked")
     locked = await _seed_memory("batch-locked", locked=True)
@@ -541,6 +588,7 @@ async def test_s4(client: httpx.AsyncClient) -> None:
     require(body["rejected"] == [locked] and body["not_found"] == [missing], body)
     require(await _pool_fetchval("SELECT COUNT(*) FROM memories WHERE id=$1", locked) == 1, "locked batch row deleted")
     passed("T-S4-2 mixed batch, dedupe, rejected and not_found")
+    begin("T-S4-3")
 
     force_variants = [False, "true", "false", 1, 0, None]
     for variant in force_variants:
@@ -556,6 +604,7 @@ async def test_s4(client: httpx.AsyncClient) -> None:
     )
     require(response.json()["deleted"] == 1 and response.json()["rejected"] == [], response.text)
     passed("T-S4-3 JSON force requires identity true")
+    begin("T-S4-4")
 
     await _truncate("memories")
     await _seed_memory("clear-a")
@@ -583,6 +632,7 @@ async def test_s4(client: httpx.AsyncClient) -> None:
     )
     require(response.status_code == 400 and await _pool_fetchval("SELECT COUNT(*) FROM memories") == 2, "malformed JSON passed")
     passed("T-S4-4 clear double-gate negative matrix")
+    begin("T-S4-5")
 
     response = await client.request(
         "DELETE",
@@ -598,6 +648,7 @@ async def test_s4(client: httpx.AsyncClient) -> None:
     )
     require(response.status_code == 200 and response.json()["deleted_count"] == 0, response.text)
     passed("T-S4-5 guarded clear returns actual row count including empty DB")
+    begin("T-S4-6")
 
     admin_source = (ROOT / "admin-panel/js/pages/memories.js").read_text(encoding="utf-8")
     require("/debug/memories/${id}" in admin_source, "admin single-delete URL missing")
@@ -607,6 +658,7 @@ async def test_s4(client: httpx.AsyncClient) -> None:
 
 
 async def test_s5(client: httpx.AsyncClient) -> None:
+    begin("T-S5-1")
     print("\nS5 DELETE 0 truthfulness")
     truth_table = {
         "DELETE 0": False,
@@ -624,16 +676,18 @@ async def test_s5(client: httpx.AsyncClient) -> None:
     for status, expected in truth_table.items():
         require(database._rowcount_nonzero(status) is expected, f"rowcount mismatch: {status!r}")
     passed("T-S5-1 strict command-tag truth table")
+    begin("T-S5-2")
 
     await _truncate("chat_conversations", "compression_summaries")
+    # W2-04 起对话删除还回报清掉的原始副本计数；"deleted" 仍然只说目录行有没有被删掉。
     response = await client.delete("/sync/conversations/missing-conv")
-    require(response.status_code == 200 and response.json() == {"deleted": False}, response.text)
+    require(response.status_code == 200 and response.json()["deleted"] is False, response.text)
     await _pool_execute("INSERT INTO chat_conversations (id, title) VALUES ('conv-live', 'live')")
     await _pool_execute(
         "INSERT INTO compression_summaries (conversation_id, summary) VALUES ('conv-live', 'summary')"
     )
     response = await client.delete("/sync/conversations/conv-live")
-    require(response.json() == {"deleted": True}, response.text)
+    require(response.json()["deleted"] is True, response.text)
     require(await _pool_fetchval("SELECT COUNT(*) FROM compression_summaries WHERE conversation_id='conv-live'") == 0, "summary cleanup regressed")
 
     await _truncate("chat_projects", "project_file_chunks")
@@ -664,7 +718,9 @@ async def test_s5(client: httpx.AsyncClient) -> None:
     require(response.json() == {"status": "ok"}, response.text)
     require(await _pool_fetchval("SELECT COUNT(*) FROM comments WHERE target_id=$1", page_id) == 0, "calendar comments cleanup regressed")
     passed("T-S5-2 three real route paths report missing/existing truthfully")
+    begin("T-S5-4")
     passed("T-S5-4 summary, file-chunk and comment cleanup preserved")
+    begin("T-S5-3")
 
     sources = (
         inspect.getsource(database.sync_delete_conversation),
@@ -678,6 +734,7 @@ async def test_s5(client: httpx.AsyncClient) -> None:
 
 
 async def test_s6(client: httpx.AsyncClient) -> None:
+    begin("T-S6-1")
     print("\nS6 Dream soft-delete/source chain")
     column = await _pool_fetchrow(
         """
@@ -696,6 +753,7 @@ async def test_s6(client: httpx.AsyncClient) -> None:
         "omitting dream_logs.deleted did not use FALSE",
     )
     passed("T-S6-1 init_tables is idempotent and deleted column is safe")
+    begin("T-S6-2")
 
     await _truncate("dream_logs", "mem_scenes")
     dream_id = await _seed_dream(status="completed", narrative="keep-narrative", processed=11)
@@ -715,6 +773,7 @@ async def test_s6(client: httpx.AsyncClient) -> None:
         if key != "status":
             require(scene[key] == old_value, f"soft-delete rewrote mem_scenes.{key}")
     passed("T-S6-2 log and scene survive with soft-delete state")
+    begin("T-S6-3")
 
     missing_dream = 987654
     orphan_id = await _seed_scene(missing_dream, title="orphan-scene")
@@ -724,6 +783,7 @@ async def test_s6(client: httpx.AsyncClient) -> None:
     after = dict(await _pool_fetchrow("SELECT * FROM mem_scenes WHERE id=$1", orphan_id))
     require(before == after, "missing dream mutated its orphan scene")
     passed("T-S6-3 missing Dream leaves same-ID orphan scene untouched")
+    begin("T-S6-4")
 
     repeat_dream_before = dict(await _pool_fetchrow("SELECT * FROM dream_logs WHERE id=$1", dream_id))
     repeat_scene_before = dict(await _pool_fetchrow("SELECT * FROM mem_scenes WHERE id=$1", scene_id))
@@ -734,6 +794,7 @@ async def test_s6(client: httpx.AsyncClient) -> None:
     require(repeat_dream_after == repeat_dream_before, "repeat delete changed Dream row")
     require(repeat_scene_after == repeat_scene_before, "repeat delete changed scene row")
     passed("T-S6-4 repeat delete is idempotent and truthful")
+    begin("T-S6-5")
 
     rollback_dream = await _seed_dream(narrative="rollback-dream")
     rollback_scene = await _seed_scene(rollback_dream, title="rollback-scene")
@@ -766,6 +827,7 @@ async def test_s6(client: httpx.AsyncClient) -> None:
         await _pool_execute("DROP TRIGGER IF EXISTS kiwi_safety_fail_scene_update ON mem_scenes")
         await _pool_execute("DROP FUNCTION IF EXISTS kiwi_safety_fail_scene_update()")
     passed("T-S6-5 scene failure rolls back the whole transaction")
+    begin("T-S6-6")
 
     await _truncate("dream_logs", "mem_scenes")
     now = StdDateTime.now(database.TZ_CST)
@@ -806,6 +868,7 @@ async def test_s6(client: httpx.AsyncClient) -> None:
     require(deleted_completed not in history_ids and deleted_stale not in history_ids, "deleted Dream appears in history")
     require(active_running in history_ids and active_completed in history_ids, "active Dream disappeared")
     passed("T-S6-6 status, timeout maintenance and history exclude deleted rows")
+    begin("T-S6-7")
 
     active_scene = await _seed_scene(active_running, title="active-visible")
     deleted_scene = await _seed_scene(active_running, status="deleted", title="deleted-hidden")
@@ -814,6 +877,7 @@ async def test_s6(client: httpx.AsyncClient) -> None:
     require(active_scene in active_ids and deleted_scene not in active_ids, "active scene query leaks deleted scene")
     require(active_scene in search_ids and deleted_scene not in search_ids, "scene search leaks deleted scene")
     passed("T-S6-7 soft-deleted scenes are absent from active/search paths")
+    begin("T-S6-8")
 
     late_dream = await _seed_dream(status="running", narrative="before-late", processed=3)
     await _seed_scene(late_dream, title="late-scene")
@@ -909,6 +973,7 @@ async def test_s6(client: httpx.AsyncClient) -> None:
 
 
 async def test_w1_06() -> None:
+    begin("T-W1-06-1")
     print("\nW1-06 calendar page/comment delete atomicity")
     await _truncate("calendar_pages", "comments")
 
@@ -971,6 +1036,7 @@ async def test_w1_06() -> None:
         await _pool_execute("DROP TRIGGER IF EXISTS w1_06_fail_calendar_delete_trigger ON calendar_pages")
         await _pool_execute("DROP FUNCTION IF EXISTS w1_06_fail_calendar_delete()")
     passed("T-W1-06-1 injected second-step failure preserves page and comments")
+    begin("T-W1-06-2")
 
     keep_page_id = await _pool_fetchval(
         "INSERT INTO calendar_pages (date, type) VALUES ('2026-07-19', 'day') RETURNING id"
@@ -1003,6 +1069,7 @@ async def test_w1_06() -> None:
         "target comments/replies survived successful delete",
     )
     passed("T-W1-06-2 successful delete removes page and its comment tree")
+    begin("T-W1-06-3")
 
     require(
         await _pool_fetchval("SELECT COUNT(*) FROM comments WHERE id=$1", keep_comment_id) == 1,
@@ -1013,6 +1080,7 @@ async def test_w1_06() -> None:
         "another target type with the same numeric id was deleted",
     )
     passed("T-W1-06-3 unrelated comments remain untouched")
+    begin("T-W1-06-4")
 
     require(
         not await database.delete_calendar_page("2026-07-18", "day"),
@@ -1022,6 +1090,7 @@ async def test_w1_06() -> None:
 
 
 async def test_w1_08() -> None:
+    begin("T-W1-08-1")
     print("\nW1-08 calendar period identity and legacy isolation")
     import importlib
 
@@ -1052,6 +1121,7 @@ async def test_w1_08() -> None:
         "rejected calendar identities left rows behind",
     )
     passed("T-W1-08-1 DB writes reject unknown, misanchored, and incomplete periods")
+    begin("T-W1-08-2")
 
     await database.save_calendar_page(today.isoformat(), "day", [])
     await database.save_calendar_page(previous_week_start.isoformat(), "week", [])
@@ -1063,6 +1133,7 @@ async def test_w1_08() -> None:
         "valid day/completed summaries did not remain writable",
     )
     passed("T-W1-08-2 valid day and completed canonical periods remain writable")
+    begin("T-W1-08-3")
 
     await _truncate("calendar_pages", "comments")
     bad_week_date = previous_week_start - timedelta(days=13)  # Tuesday, safely older than seven days.
@@ -1113,19 +1184,31 @@ async def test_w1_08() -> None:
         f"legacy audit missed invalid identities: {audited_ids}",
     )
     passed("T-W1-08-3 read-only audit diagnoses legacy invalid pages without mutation")
+    begin("T-W1-08-4")
 
     injected = await database.get_calendar_for_injection(lookback_days=400)
     require(
         not any(row["type"] in {"week", "month", "fortnight"} for row in injected),
         "invalid legacy summaries entered injection or claimed coverage",
     )
-    injected_digests = {row.get("digest") for row in injected}
-    expected_day_digests = {f"GOOD_DAY_{i}" for i in range(1, len(source_dates) + 1)}
+    # What this guard is about is coverage: an invalid period summary must not swallow the
+    # days underneath it.  Judge that on the days that came out, not on digest strings —
+    # the v6.1 three-tier injection deliberately blanks `digest` for days 4-7 back so the
+    # injection side falls back to `summary`, and on any Monday (CST) previous_week_start
+    # IS exactly seven days back, which used to turn this guard red once a week.
+    injected_days = {row["date"] for row in injected if row["type"] == "day"}
     require(
-        expected_day_digests <= injected_digests,
-        f"invalid summaries hid their source days: {injected_digests}",
+        set(source_dates) <= injected_days,
+        f"invalid summaries hid their source days: {sorted(injected_days)}",
+    )
+    concise = {row["date"] for row in injected
+               if row["type"] == "day" and not row.get("digest")}
+    require(
+        all((today - day).days <= 7 for day in concise),
+        f"a day outside the concise window lost its digest: {sorted(concise)}",
     )
     passed("T-W1-08-4 invalid legacy summaries cannot inject or claim day coverage")
+    begin("T-W1-08-5")
 
     for source_date in source_dates:
         require(
@@ -1135,6 +1218,7 @@ async def test_w1_08() -> None:
             "legacy isolation moved or deleted a source day",
         )
     passed("T-W1-08-5 legacy isolation preserves original rows for explicit rebuild")
+    begin("T-W1-08-6")
 
     await database.save_calendar_page(
         previous_week_start.isoformat(), "week", [], digest="REBUILT_WEEK"
@@ -1156,6 +1240,7 @@ async def test_w1_08() -> None:
 
 
 async def test_w1_01() -> None:
+    begin("T-W1-01-1")
     print("\nW1-01 project isolation and Dream permanent-memory protection")
     import importlib
 
@@ -1292,13 +1377,17 @@ async def test_w1_01() -> None:
 
     require(not issues, " | ".join(issues))
     passed("T-W1-01-1 Dream candidates are global and non-permanent")
+    begin("T-W1-01-2")
     passed("T-W1-01-2 expired-fragment cleanup preserves projects and locks")
+    begin("T-W1-01-3")
     passed("T-W1-01-3 dream_merge retention counts only global rows")
+    begin("T-W1-01-4")
     passed("T-W1-01-4 hard-delete paths preserve projects and locks")
 
 
 async def test_w2_01(client: httpx.AsyncClient) -> None:
     """W2-01 G1 granular-sync, ownership, gate, and observability guards."""
+    begin("T-W2-01-1")
     expected_routes = {
         ("/sync/conversations", "POST"),
         ("/sync/conversations/{conv_id}", "PATCH"),
@@ -1338,6 +1427,7 @@ async def test_w2_01(client: httpx.AsyncClient) -> None:
     require(project_row["name"] == "Project A" and project_row["icon"] == "A", "project replay overwrote data")
     require(project_row["created_at"].year >= 2026, "project POST trusted client createdAt")
     passed("T-W2-01-1 project POST is create-only and server-timed")
+    begin("T-W2-01-2")
 
     response = await client.patch(f"/sync/projects/{proj_a}", json={"icon": "PATCHED"})
     require(response.status_code == 200, "project PATCH failed")
@@ -1348,6 +1438,7 @@ async def test_w2_01(client: httpx.AsyncClient) -> None:
     project_row = await _pool_fetchrow("SELECT name, icon FROM chat_projects WHERE id = $1", proj_a)
     require(project_row["name"] == "Project A" and project_row["icon"] == "PATCHED", "project PATCH was not partial")
     passed("T-W2-01-2 project PATCH is partial and never creates")
+    begin("T-W2-01-3")
 
     await client.post("/sync/projects", json={"id": proj_b, "name": "Project B"})
     response = await client.post(
@@ -1370,6 +1461,7 @@ async def test_w2_01(client: httpx.AsyncClient) -> None:
     require(conv_row["created_at"].year >= 2026, "conversation POST trusted client createdAt")
     require(await _pool_fetchval("SELECT COUNT(*) FROM chat_messages WHERE conversation_id = $1", conv_a) == 0, "POST inserted messages")
     passed("T-W2-01-3 conversation POST is metadata-only, create-only, and server-timed")
+    begin("T-W2-01-4")
 
     response = await client.patch(f"/sync/conversations/{conv_a}", json={"pinned": True})
     require(response.status_code == 200, "conversation PATCH failed")
@@ -1380,6 +1472,7 @@ async def test_w2_01(client: httpx.AsyncClient) -> None:
     conv_row = await _pool_fetchrow("SELECT title, pinned FROM chat_conversations WHERE id = $1", conv_a)
     require(conv_row["title"] == "Conversation A" and conv_row["pinned"] is True, "conversation PATCH was not partial")
     passed("T-W2-01-4 conversation PATCH is partial and never creates")
+    begin("T-W2-01-5")
 
     msg_id = f"{prefix}message"
     message_url = f"/sync/conversations/{conv_a}/messages/{msg_id}"
@@ -1398,6 +1491,7 @@ async def test_w2_01(client: httpx.AsyncClient) -> None:
     require(message_row["sort_order"] == 7 and after_touch > before_touch, "sort order/timestamp replay contract failed")
     require(await _pool_fetchval("SELECT COUNT(*) FROM chat_messages WHERE id = $1", msg_id) == 1, "message replay created duplicates")
     passed("T-W2-01-5 same message ID replay is idempotent and URL-authoritative")
+    begin("T-W2-01-6")
 
     await client.post("/sync/conversations", json={"id": conv_b, "title": "Conversation B", "projectId": proj_b})
     original = dict(await _pool_fetchrow("SELECT * FROM chat_messages WHERE id = $1", msg_id))
@@ -1408,6 +1502,7 @@ async def test_w2_01(client: httpx.AsyncClient) -> None:
     require(response.status_code == 409, "cross-project/cross-conversation message forgery must return 409")
     require(dict(await _pool_fetchrow("SELECT * FROM chat_messages WHERE id = $1", msg_id)) == original, "409 changed original message")
     passed("T-W2-01-6 cross-conversation and cross-project message forgery is rejected")
+    begin("T-W2-01-7")
 
     concurrent_id = f"{prefix}concurrent"
     responses = await asyncio.gather(
@@ -1418,14 +1513,17 @@ async def test_w2_01(client: httpx.AsyncClient) -> None:
     winner = conv_a if responses[0].status_code == 200 else conv_b
     require(await _pool_fetchval("SELECT conversation_id FROM chat_messages WHERE id = $1", concurrent_id) == winner, "concurrent winner ownership changed")
     passed("T-W2-01-7 concurrent same-ID cross-owner writes have exactly one winner")
+    begin("T-W2-01-8")
 
+    # W2-04 起单消息删除还回报镜像清账本的结果；"deleted" 仍然只说这条消息有没有被删掉。
     response = await client.delete(f"/sync/conversations/{conv_b}/messages/{msg_id}")
-    require(response.status_code == 200 and response.json() == {"deleted": False}, "wrong-owner delete was not rejected")
+    require(response.status_code == 200 and response.json()["deleted"] is False, "wrong-owner delete was not rejected")
     response = await client.delete(message_url)
-    require(response.status_code == 200 and response.json() == {"deleted": True}, "correct-owner delete failed")
+    require(response.status_code == 200 and response.json()["deleted"] is True, "correct-owner delete failed")
     response = await client.delete(message_url)
-    require(response.status_code == 200 and response.json() == {"deleted": False}, "repeat delete was not idempotent")
+    require(response.status_code == 200 and response.json()["deleted"] is False, "repeat delete was not idempotent")
     passed("T-W2-01-8 single-message delete is owner-scoped and idempotent")
+    begin("T-W2-01-9")
 
     atomic_conv, atomic_msg = f"{prefix}atomic-conv", f"{prefix}atomic-msg"
     await client.post("/sync/conversations", json={"id": atomic_conv, "title": "atomic"})
@@ -1455,6 +1553,7 @@ async def test_w2_01(client: httpx.AsyncClient) -> None:
         await _pool_execute("DROP TRIGGER IF EXISTS w201_fail_parent_touch_trg ON chat_conversations")
         await _pool_execute("DROP FUNCTION IF EXISTS w201_fail_parent_touch()")
     passed("T-W2-01-9 message write and parent timestamp are one transaction")
+    begin("T-W2-01-10")
 
     legacy_conv, legacy_proj = f"{prefix}legacy-conv", f"{prefix}legacy-proj"
     sentinel = "W2_01_PAYLOAD_MUST_STAY_PRIVATE"
@@ -1475,6 +1574,7 @@ async def test_w2_01(client: httpx.AsyncClient) -> None:
         require(response_conv_open.status_code == 200 and response_proj_open.status_code == 200, "default-open legacy PUT failed")
         require(await _pool_fetchval("SELECT content FROM chat_messages WHERE id = $1", f"{prefix}legacy-msg") == sentinel, "old conversation payload broke")
         passed("T-W2-01-10 default-open legacy PUTs preserve old-client payloads")
+        begin("T-W2-01-11")
 
         await _upsert_config(gate_key, "false")
         blocked_capture = io.StringIO()
@@ -1487,6 +1587,7 @@ async def test_w2_01(client: httpx.AsyncClient) -> None:
         fresh_response = await client.post("/sync/projects", json={"id": f"{prefix}gate-fresh", "name": "fresh"})
         require(fresh_response.status_code == 200, "new granular endpoint was incorrectly gated")
         passed("T-W2-01-11 closed gate affects only two legacy PUTs; import stays W2-02")
+        begin("T-W2-01-12")
 
         events = capture.getvalue() + blocked_capture.getvalue()
         expected_events = {
@@ -1547,6 +1648,7 @@ async def _drop_fail_trigger(table: str, name: str) -> None:
 
 async def test_w2_02(client: httpx.AsyncClient) -> None:
     """W2-02 G1.1 message identity fields, atomic import, and receipt guards."""
+    begin("T-W2-02-1")
     prefix = "w202-"
 
     # ---- schema: additive, nullable, no default, no index -------------------
@@ -1577,6 +1679,7 @@ async def test_w2_02(client: httpx.AsyncClient) -> None:
     )
     require(indexed == 0, "W2-02 columns must not be indexed in this ticket")
     passed("T-W2-02-1 dream_event/turn_key are nullable, default-free, unindexed")
+    begin("T-W2-02-2")
 
     # init_tables() already ran twice in run_suite; re-running here proves the new
     # migration block is still idempotent after the columns exist.
@@ -1590,6 +1693,7 @@ async def test_w2_02(client: httpx.AsyncClient) -> None:
     )
     require(recheck == 2, "repeat init_tables() disturbed the W2-02 columns")
     passed("T-W2-02-2 repeat init_tables() is idempotent for the new columns")
+    begin("T-W2-02-3")
 
     # ---- legacy database upgrade path --------------------------------------
     await _truncate("chat_messages", "chat_conversations", "chat_projects")
@@ -1612,6 +1716,7 @@ async def test_w2_02(client: httpx.AsyncClient) -> None:
     require(upgraded["dream_event"] is None and upgraded["turn_key"] is None,
             "existing rows must backfill to NULL, never to a synthesized value")
     passed("T-W2-02-3 old databases upgrade in place with NULL backfill")
+    begin("T-W2-02-4")
 
     # ---- field assembly: both channels, both key styles ---------------------
     await _truncate("chat_messages", "chat_conversations", "chat_projects")
@@ -1643,6 +1748,7 @@ async def test_w2_02(client: httpx.AsyncClient) -> None:
     require(json.loads(snake_row["dream_event"])["stage"] == "snake" and snake_row["turn_key"] == "tk-snake",
             "import dropped snake_case dream_event/turn_key")
     passed("T-W2-02-4 import writes the new fields in both key styles")
+    begin("T-W2-02-5")
 
     gran_conv, gran_msg = f"{prefix}gran-c", f"{prefix}gran-m"
     await client.post("/sync/conversations", json={"id": gran_conv, "title": "granular"})
@@ -1657,6 +1763,7 @@ async def test_w2_02(client: httpx.AsyncClient) -> None:
     require(json.loads(gran_row["dream_event"])["stage"] == "camel" and gran_row["turn_key"] == "tk-camel",
             "granular upsert dropped the new fields")
     passed("T-W2-02-5 granular upsert writes the new fields")
+    begin("T-W2-02-6")
 
     # Same payload through both channels must land byte-identical on every content column.
     both_conv, both_msg = f"{prefix}both-c", f"{prefix}both-m"
@@ -1689,6 +1796,7 @@ async def test_w2_02(client: httpx.AsyncClient) -> None:
     divergent = [c for c in _MESSAGE_CONTENT_COLUMNS if import_cols[c] != granular_cols[c]]
     require(not divergent, f"import and granular channels diverged on: {divergent}")
     passed("T-W2-02-6 both write channels assemble all 22 content columns identically")
+    begin("T-W2-02-7")
 
     # ---- old-client compatibility: missing fields fall back to NULL ---------
     await client.put(
@@ -1718,6 +1826,7 @@ async def test_w2_02(client: httpx.AsyncClient) -> None:
     require(old_row["dream_event"] is None and old_row["turn_key"] is None,
             "old import payload must write NULL for the new fields")
     passed("T-W2-02-7 payloads lacking the new fields write NULL on both channels")
+    begin("T-W2-02-8")
 
     # ---- import atomicity: no shell conversations ---------------------------
     await _truncate("chat_messages", "chat_conversations", "chat_projects")
@@ -1752,6 +1861,7 @@ async def test_w2_02(client: httpx.AsyncClient) -> None:
         )
         require(ok_conv in body["imported_conversation_ids"], "healthy conversation missing from success IDs")
         passed("T-W2-02-8 message failure rolls back its conversation and spares siblings")
+        begin("T-W2-02-9")
     finally:
         await _drop_fail_trigger("chat_messages", "w202_fail_msg")
 
@@ -1780,6 +1890,7 @@ async def test_w2_02(client: httpx.AsyncClient) -> None:
         require(body_row is not None and body_row["content"] == "original-body",
                 "original messages were lost to a failed update")
         passed("T-W2-02-9 failed update leaves metadata and messages on the same old version")
+        begin("T-W2-02-10")
     finally:
         await _drop_fail_trigger("chat_messages", "w202_fail_upd")
 
@@ -1806,6 +1917,7 @@ async def test_w2_02(client: httpx.AsyncClient) -> None:
                 f"project failure code must be write_failed: {[d.get('code') for d in body['error_details']]}")
         require(body["imported_project_ids"] == [good_proj], "project success IDs include a failed entity")
         passed("T-W2-02-10 project write failure is isolated to that project")
+        begin("T-W2-02-11")
     finally:
         await _drop_fail_trigger("chat_projects", "w202_fail_proj")
 
@@ -1835,6 +1947,7 @@ async def test_w2_02(client: httpx.AsyncClient) -> None:
         require([d["code"] for d in body["error_details"]] == ["write_failed"],
                 f"metadata failure code must be write_failed: {[d.get('code') for d in body['error_details']]}")
         passed("T-W2-02-11 metadata write failure is isolated and leaves no messages")
+        begin("T-W2-02-12")
     finally:
         await _drop_fail_trigger("chat_conversations", "w202_fail_meta")
 
@@ -1871,6 +1984,7 @@ async def test_w2_02(client: httpx.AsyncClient) -> None:
             f"rejected_details wrong: {body.get('rejected_details')}")
     require(body["messages"] == 2, "message success count did not match committed rows")
     passed("T-W2-02-12 receipt keeps legacy keys and reconciles against committed rows")
+    begin("T-W2-02-13")
 
     # ---- input precheck: top-level 400, per-entity rejected -----------------
     for bad_body in ([1, 2, 3], {"conversations": "nope"}, {"projects": {"a": 1}}):
@@ -1878,6 +1992,7 @@ async def test_w2_02(client: httpx.AsyncClient) -> None:
         require(response.status_code == 400,
                 f"malformed top-level import body was not 400: {bad_body!r} -> {response.status_code}")
     passed("T-W2-02-13 malformed top-level import bodies return 400")
+    begin("T-W2-02-14")
 
     await _truncate("chat_messages", "chat_conversations", "chat_projects")
     dup_conv, dup_proj = f"{prefix}dup-c", f"{prefix}dup-p"
@@ -1931,6 +2046,7 @@ async def test_w2_02(client: httpx.AsyncClient) -> None:
     require(body["counts"]["conversations"]["failed"] == 0 and body["counts"]["projects"]["failed"] == 0,
             "rejects must not be counted as failures")
     passed("T-W2-02-14 duplicate entity IDs reject every copy and never reach the database")
+    begin("T-W2-02-15")
 
     # ---- message semantics: absent / empty / shorter array ------------------
     await _truncate("chat_messages", "chat_conversations", "chat_projects")
@@ -1976,6 +2092,7 @@ async def test_w2_02(client: httpx.AsyncClient) -> None:
     require(await _pool_fetchval("SELECT COUNT(*) FROM chat_messages WHERE conversation_id = $1", sem_conv) == 0,
             "explicit empty array must clear the conversation")
     passed("T-W2-02-15 absent / empty / shorter message arrays have distinct semantics")
+    begin("T-W2-02-16")
 
     # ---- error safety: no sentinel leaks anywhere ---------------------------
     await _truncate("chat_messages", "chat_conversations", "chat_projects")
@@ -2002,6 +2119,7 @@ async def test_w2_02(client: httpx.AsyncClient) -> None:
         require(body["error_details"][0]["id"] == leak_conv,
                 "error_details must still name the entity for reconciliation")
         passed("T-W2-02-16 database error text never reaches responses or logs")
+        begin("T-W2-02-17")
     finally:
         await _drop_fail_trigger("chat_messages", "w202_leak")
 
@@ -2010,7 +2128,9 @@ async def test_w2_02(client: httpx.AsyncClient) -> None:
     # conversations event-ledger helper delete_latest_assistant_message() is a
     # known W2-07 debt and is deliberately out of this guard's reach.
     source = (ROOT / "database.py").read_text(encoding="utf-8")
-    deletes = re.findall(r"DELETE FROM chat_messages[^\"']*", source)
+    # 只在 Python 字符串定界符（"）处收尾，SQL 里的单引号常量照收——否则带常量的语句
+    # 只能被看到前半截，ORDER BY / LIMIT 躲在常量后面就查不出来了。
+    deletes = re.findall(r"DELETE FROM chat_messages[^\"]*", source)
     require(deletes, "expected at least one chat_messages delete statement to audit")
     for statement in deletes:
         flat = " ".join(statement.split())
@@ -2020,6 +2140,7 @@ async def test_w2_02(client: httpx.AsyncClient) -> None:
         require("role" not in flat.lower(),
                 f"chat_messages delete branches on role: {flat}")
     passed("T-W2-02-17 chat_messages deletes stay deterministic, never role/order inferred")
+    begin("T-W2-02-18")
 
     # ---- per-column landing against an independent expectation table -------
     # Channel-vs-channel comparison (T-W2-02-6) cannot catch a shift that both
@@ -2076,6 +2197,7 @@ async def test_w2_02(client: httpx.AsyncClient) -> None:
     require(row["sort_order"] == 41,
             f"sort_order must survive an update that omits sortOrder, got {row['sort_order']!r}")
     passed("T-W2-02-18 every content column lands on its own independently expected value")
+    begin("T-W2-02-19")
 
     # ---- duplicate explicit message IDs are input errors, not write failures ----
     await _truncate("chat_messages", "chat_conversations", "chat_projects")
@@ -2110,6 +2232,7 @@ async def test_w2_02(client: httpx.AsyncClient) -> None:
             "id-less messages must not be treated as duplicates")
     require(body["counts"]["conversations"]["success"] == 1, "healthy sibling conversation did not commit")
     passed("T-W2-02-19 duplicate explicit message IDs reject the conversation before any write")
+    begin("T-W2-02-20")
 
     # ---- whole-request crash path leaks nothing --------------------------------
     crash_sentinel = f"W2_02_CRASH_{uuid.uuid4().hex}"
@@ -2128,6 +2251,7 @@ async def test_w2_02(client: httpx.AsyncClient) -> None:
     require(crash_sentinel not in out_capture.getvalue(), "top-level exception text leaked into stdout")
     require(crash_sentinel not in err_capture.getvalue(), "top-level exception text leaked into stderr")
     passed("T-W2-02-20 whole-request crash returns a fixed safe message and leaks nothing")
+    begin("T-W2-02-21")
 
     # ---- cleaned ids must equal the actual primary keys ------------------------
     await _truncate("chat_messages", "chat_conversations", "chat_projects")
@@ -2148,6 +2272,7 @@ async def test_w2_02(client: httpx.AsyncClient) -> None:
         require(not await _pool_fetchval(f"SELECT EXISTS(SELECT 1 FROM {table} WHERE id = $1)", f"  {cleaned}  "),
                 f"{table}: the raw padded id reached the database as a separate primary key")
     passed("T-W2-02-21 receipt ids and database primary keys agree after whitespace cleanup")
+    begin("T-W2-02-22")
 
     # ---- observability events carry codes, never entity IDs -------------------
     # Scope: ordinary logs only.  The HTTP receipt deliberately keeps entity IDs so
@@ -2255,6 +2380,7 @@ async def _set_identity_gate(enabled: bool) -> None:
 
 async def test_w2_03_schema_and_atomic() -> None:
     """T-W2-03-1..10: schema, migration, atomic turn writes, regenerate."""
+    begin("T-W2-03-1")
     # ---- 1. five columns + extraction state table --------------------------
     rows = {
         r["column_name"]: r
@@ -2284,6 +2410,7 @@ async def test_w2_03_schema_and_atomic() -> None:
     require({"session_id", "last_extracted_message_id", "claimed_until", "updated_at", "claim_token"}
             <= state_cols, f"memory_extraction_state columns missing: {sorted(state_cols)}")
     passed("T-W2-03-1 ledger gains five columns and memory_extraction_state exists")
+    begin("T-W2-03-2")
 
     # ---- 2/3. idempotent migration, untouched legacy rows -------------------
     await _truncate("conversations")
@@ -2300,6 +2427,7 @@ async def test_w2_03_schema_and_atomic() -> None:
     )
     require(recheck == 5, "repeat init_tables() disturbed the W2-03 columns")
     passed("T-W2-03-2 repeat init_tables() is idempotent for the ledger columns")
+    begin("T-W2-03-3")
 
     legacy = await _pool_fetchrow(
         "SELECT content, project_id, scope_known, usage, turn_id, turn_key "
@@ -2310,6 +2438,7 @@ async def test_w2_03_schema_and_atomic() -> None:
     for col in ("project_id", "usage", "turn_id", "turn_key"):
         require(legacy[col] is None, f"legacy row must keep {col} NULL, got {legacy[col]!r}")
     passed("T-W2-03-3 legacy ledger rows stay blank and unclaimed")
+    begin("T-W2-03-4")
 
     # ---- 4. atomic normal turn ---------------------------------------------
     await _truncate("conversations", "chat_conversations", "chat_projects")
@@ -2336,6 +2465,7 @@ async def test_w2_03_schema_and_atomic() -> None:
     require(json.loads(asst_row["usage"]) == {"prompt": 10, "completion": 4, "cached": 3},
             f"usage was not normalized: {asst_row['usage']!r}")
     passed("T-W2-03-4 an atomic turn writes both rows with shared identity and normalized usage")
+    begin("T-W2-03-5")
 
     # ---- 5. transaction rollback + safe failure event -----------------------
     await _truncate("conversations")
@@ -2374,6 +2504,7 @@ async def test_w2_03_schema_and_atomic() -> None:
         require(all(fail_sid not in e for e in events),
                 "ledger_write_failed leaked the session id")
         passed("T-W2-03-5 a failed turn rolls back entirely and emits a safe coded event")
+        begin("T-W2-03-6")
     finally:
         await _pool_execute("DROP TRIGGER IF EXISTS w203_fail_assistant_trg ON conversations")
         await _pool_execute("DROP FUNCTION IF EXISTS w203_fail_assistant()")
@@ -2392,6 +2523,7 @@ async def test_w2_03_schema_and_atomic() -> None:
         rows = await _ledger_rows(open_sid)
         require(len(rows) == 2, f"gate-open path must write exactly 2 rows, got {len(rows)} (double write?)")
         passed("T-W2-03-6 the open gate writes one atomic pair, never a doubled turn")
+        begin("T-W2-03-7")
 
         source = (ROOT / "database.py").read_text(encoding="utf-8")
         legacy_sql = re.search(r"async def save_message\(.*?\n\n", source, re.S)
@@ -2401,6 +2533,7 @@ async def test_w2_03_schema_and_atomic() -> None:
             require(forbidden not in body,
                     f"save_message must stay byte-compatible; it now mentions {forbidden}")
         passed("T-W2-03-7 the closed-gate path keeps save_message free of the new columns")
+        begin("T-W2-03-8")
     finally:
         if gate_had_row:
             await _upsert_config(gate_key, gate_previous)
@@ -2458,6 +2591,7 @@ async def test_w2_03_schema_and_atomic() -> None:
             "replacement assistant re-judged scope instead of inheriting the original turn's")
     require(after[1]["turn_key"] == "mk", "replacement assistant lost the original turn_key")
     passed("T-W2-03-8 keyless regenerate replaces within the turn and inherits its whole identity")
+    begin("T-W2-03-9")
 
     # historical key -> abandon, unknown key -> abandon; the old assistant survives both
     await _truncate("conversations")
@@ -2478,6 +2612,7 @@ async def test_w2_03_schema_and_atomic() -> None:
         require(any(ln.startswith("event=regen_target_invalid ") for ln in capture.getvalue().splitlines()),
                 f"{label} key abandon did not emit regen_target_invalid: {capture.getvalue()!r}")
     passed("T-W2-03-9 regenerate abandons on historical or unknown turn_key and keeps the old reply")
+    begin("T-W2-03-10")
 
     # Mixed era (gate on -> off -> on): the dangerous shape is a gate-off row written
     # AFTER a proper turn.  Ordering by time alone would then pick the NULL row, so the
@@ -2505,6 +2640,7 @@ async def test_w2_03_schema_and_atomic() -> None:
 
 async def test_w2_03_scope_and_order() -> None:
     """T-W2-03-12, 16(pure), 17, 18, 19: scope authority, usage shape, observability, read order."""
+    begin("T-W2-03-12")
     # ---- 12. authority table, row by row -----------------------------------
     await _truncate("conversations", "chat_conversations", "chat_projects")
     await _pool_execute("INSERT INTO chat_projects (id, name) VALUES ('w203-p-live', 'live')")
@@ -2558,6 +2694,7 @@ async def test_w2_03_scope_and_order() -> None:
     require((known, pid) == (False, None), f"row 7: blank payload stays unknown, got {(known, pid)}")
     require("scope_unverified" in codes, f"row 7 blank must emit scope_unverified, got {codes}")
     passed("T-W2-03-12 the scope authority table holds row by row against a real database")
+    begin("T-W2-03-17")
 
     # ---- 16 (pure half). usage normalization shapes ------------------------
     normalize = app_module._normalize_usage_for_storage
@@ -2615,6 +2752,7 @@ async def test_w2_03_scope_and_order() -> None:
     require(events, f"scope_mismatch event missing: {logs!r}")
     require(all("increment=" in e for e in events), f"scope event lost increment: {events}")
     passed("T-W2-03-17 scope observability keeps counters and drops session/project IDs")
+    begin("T-W2-03-18")
 
     # ---- 18. turn_key must never be joined across tables --------------------
     db_source = (ROOT / "database.py").read_text(encoding="utf-8")
@@ -2626,6 +2764,7 @@ async def test_w2_03_scope_and_order() -> None:
     require(db_source.count("同名不同义") >= 2,
             "both turn_key columns must carry the same-name-different-meaning warning")
     passed("T-W2-03-18 the two turn_key columns stay unjoined and both warn in place")
+    begin("T-W2-03-19")
 
     # ---- 19. deterministic read order on tied timestamps --------------------
     await _truncate("conversations")
@@ -2647,12 +2786,21 @@ async def test_w2_03_scope_and_order() -> None:
     # scan happens to return insertion (= id) order, so a missing tiebreak can pass by
     # luck.  Pin the tiebreak in the SQL of every ledger reader as well.
     reader_source = (ROOT / "database.py").read_text(encoding="utf-8")
+    # 表别名可有可无（W2-04 起 get_recent_conversation 要 JOIN 版本表，列必须带前缀），
+    # 但两级排序键一个都不能少。
+    order_by = re.compile(r"ORDER BY (?:\w+\.)?created_at DESC, (?:\w+\.)?id DESC")
     for reader in ("get_recent_messages", "get_recent_conversation",
-                   "delete_latest_assistant_message"):
+                   "_delete_latest_assistant_message_tx"):
         body = re.search(rf"async def {reader}\(.*?(?=\nasync def )", reader_source, re.S)
         require(body, f"{reader} not found for the read-order guard")
-        require("ORDER BY created_at DESC, id DESC" in body.group(0),
+        require(order_by.search(body.group(0)),
                 f"{reader} orders by time without an id tiebreak; tied rows sort arbitrarily")
+    # 公开入口只准委托给那条受审的 SQL，不许自己另写一份。
+    wrapper = re.search(r"async def delete_latest_assistant_message\(.*?(?=\nasync def )",
+                        reader_source, re.S)
+    require(wrapper and "_delete_latest_assistant_message_tx(" in wrapper.group(0)
+            and "DELETE" not in wrapper.group(0),
+            "delete_latest_assistant_message grew a second, unguarded delete path")
     await database.delete_latest_assistant_message(tie_sid)
     left = [r["content"] for r in await _ledger_rows(tie_sid)]
     require(left == ["u-first", "a-second"],
@@ -2662,6 +2810,7 @@ async def test_w2_03_scope_and_order() -> None:
 
 async def test_w2_03_entry_and_panel(client: httpx.AsyncClient) -> None:
     """T-W2-03-11, 23, 24, 25: request-entry validation, project turns, panel wiring, CORS."""
+    begin("T-W2-03-11")
     # ---- 11. turn_key entry validation -------------------------------------
     # Rejections happen while parsing the body, before any upstream call, so no
     # model boundary is exercised here.
@@ -2674,6 +2823,7 @@ async def test_w2_03_entry_and_panel(client: httpx.AsyncClient) -> None:
         require(response.status_code == 400,
                 f"explicit invalid turn_key ({label}) must be 400, got {response.status_code}")
     passed("T-W2-03-11 explicitly invalid turn_key is rejected at the request entry")
+    begin("T-W2-03-23")
 
     # ---- 23. project turns keep their scope and still skip extraction -------
     # This must go through process_memories_background with memory ON and a trigger
@@ -2714,6 +2864,7 @@ async def test_w2_03_entry_and_panel(client: httpx.AsyncClient) -> None:
         else:
             await _pool_execute("DELETE FROM gateway_config WHERE key = $1", mem_key)
     passed("T-W2-03-23 project turns record their scope and never reach global extraction")
+    begin("T-W2-03-24")
 
     # ---- 24. both gates are registered on both sides and settable ----------
     schema_js = (ROOT / "admin-panel" / "js" / "config-schema.js").read_text(encoding="utf-8")
@@ -2741,6 +2892,7 @@ async def test_w2_03_entry_and_panel(client: httpx.AsyncClient) -> None:
         else:
             await _pool_execute("DELETE FROM gateway_config WHERE key = $1", gate_key)
     passed("T-W2-03-24 both gates are dual-registered and settable through the admin endpoint")
+    begin("T-W2-03-25")
 
     # ---- 25. CORS actually exposes the session header ----------------------
     # Use an origin the deployment actually allows: CORS headers are only emitted
@@ -2753,11 +2905,13 @@ async def test_w2_03_entry_and_panel(client: httpx.AsyncClient) -> None:
     passed("T-W2-03-25 a real cross-origin response exposes X-Kiwi-Session-Id")
 
 
-def _fake_upstream(*, sse_events=None, json_body=None, status_code=200):
+def _fake_upstream(*, sse_events=None, json_body=None, status_code=200, captured=None):
     """Fake httpx.AsyncClient serving one canned upstream reply (streaming or not).
 
     Only the surface main.py actually uses is implemented: async context manager,
-    .post() for the buffered path and .stream() for the streaming path.
+    .post() for the buffered path and .stream() for the streaming path.  Pass `captured`
+    to collect every request body the gateway sends: "this key never leaves the gateway"
+    can only be judged on what actually went out on the wire.
     """
     class _Resp:
         def __init__(self):
@@ -2796,9 +2950,13 @@ def _fake_upstream(*, sse_events=None, json_body=None, status_code=200):
             return None
 
         def stream(self, *args, **kwargs):
+            if captured is not None:
+                captured.append(kwargs.get("json"))
             return _StreamCtx()
 
         async def post(self, *args, **kwargs):
+            if captured is not None:
+                captured.append(kwargs.get("json"))
             return _Resp()
 
     return _Client
@@ -2813,7 +2971,7 @@ _USAGE_TAIL = _sse({"choices": [], "usage": {"prompt_tokens": 11, "completion_to
                                              "prompt_tokens_details": {"cached_tokens": 2}}})
 
 
-async def _chat(client, body, *, sse_events=None, json_body=None, status_code=200):
+async def _chat(client, body, *, sse_events=None, json_body=None, status_code=200, captured=None):
     """POST /v1/chat/completions against a canned upstream; returns the response."""
     async def fake_provider(_model, provider_model_id=None):
         return {
@@ -2826,7 +2984,8 @@ async def _chat(client, body, *, sse_events=None, json_body=None, status_code=20
 
     with (
         patch.object(app_module.httpx, "AsyncClient",
-                     _fake_upstream(sse_events=sse_events, json_body=json_body, status_code=status_code)),
+                     _fake_upstream(sse_events=sse_events, json_body=json_body,
+                                    status_code=status_code, captured=captured)),
         patch.object(app_module, "resolve_provider_for_model", fake_provider),
     ):
         return await client.post("/v1/chat/completions", json=body)
@@ -2834,6 +2993,7 @@ async def _chat(client, body, *, sse_events=None, json_body=None, status_code=20
 
 async def test_w2_03_chat_paths(client: httpx.AsyncClient) -> None:
     """T-W2-03-13, 14, 15, 16b, 20, 21, 22: identity v2, ev_session, usage, layering."""
+    begin("T-W2-03-20")
     mem_key = "memory_enabled"
     mem_had = await _pool_fetchval("SELECT EXISTS(SELECT 1 FROM gateway_config WHERE key = $1)", mem_key)
     mem_prev = await _config_row(mem_key)
@@ -2860,6 +3020,7 @@ async def test_w2_03_chat_paths(client: httpx.AsyncClient) -> None:
         require(await _pool_fetchval("SELECT COUNT(*) FROM memories") == 0,
                 "memory-off chat must not extract any memory")
         passed("T-W2-03-20 with memory off the ledger still records the turn and nothing is extracted")
+        begin("T-W2-03-21")
 
         # ---- 21. internal requests write nothing ----------------------------
         await _truncate("conversations")
@@ -2873,6 +3034,7 @@ async def test_w2_03_chat_paths(client: httpx.AsyncClient) -> None:
         require(not await _ledger_rows("w203-internal"),
                 "an internal request (skip_system_prompt) must not touch the ledger")
         passed("T-W2-03-21 internal requests write neither events nor memories")
+        begin("T-W2-03-13")
 
         # ---- 13/22. session identity v2 -------------------------------------
         await _truncate("conversations")
@@ -2898,6 +3060,7 @@ async def test_w2_03_chat_paths(client: httpx.AsyncClient) -> None:
         require("x-kiwi-session-id" not in response.headers,
                 "a client-supplied conversation_id must never be echoed back")
         passed("T-W2-03-13 identity v2 gives distinct full-uuid sessions and never echoes client IDs")
+        begin("T-W2-03-22")
 
         await _set_identity_gate(False)
         # Let the previous block's background writes land before truncating, or
@@ -2917,6 +3080,7 @@ async def test_w2_03_chat_paths(client: httpx.AsyncClient) -> None:
         require(not next(iter(legacy_sessions)).startswith("auto-r-"),
                 "gate-off must not use the v2 prefix")
         passed("T-W2-03-22 with identity v2 off the legacy md5 session is restored byte for byte")
+        begin("T-W2-03-14")
 
         # ---- 14/15. ev_session contract on streams --------------------------
         await _set_identity_gate(True)
@@ -2936,6 +3100,7 @@ async def test_w2_03_chat_paths(client: httpx.AsyncClient) -> None:
         require(payload["ev_session"]["generated"] is True and payload["ev_session"]["id"],
                 f"ev_session payload malformed: {payload}")
         passed("T-W2-03-14 ev_session is emitted once, first, and the header travels with the stream")
+        begin("T-W2-03-15")
 
         response = await _chat(client, {
             "model": "mock-model", "stream": True,
@@ -2953,6 +3118,7 @@ async def test_w2_03_chat_paths(client: httpx.AsyncClient) -> None:
         require("x-kiwi-session-id" not in bad.headers,
                 "a request rejected before identity generation must not carry a session header")
         passed("T-W2-03-15 identity survives upstream failure but is absent on pre-identity 4xx")
+        begin("T-W2-03-16")
 
         # ---- 16b. usage aggregation across the stream -----------------------
         await _truncate("conversations")
@@ -3001,6 +3167,2530 @@ async def test_w2_03_chat_paths(client: httpx.AsyncClient) -> None:
                 await _pool_execute("DELETE FROM gateway_config WHERE key = $1", key)
 
 
+# ---------------------------------------------------------------------------
+# W2-04 | session deletion and privacy semantics
+# ---------------------------------------------------------------------------
+
+_W204_TOMBSTONE_TABLES = ("session_tombstones", "turn_tombstones", "message_tombstones")
+
+
+async def _none_embedding(*args, **kwargs):
+    """Extraction guards must not reach a real embedding endpoint."""
+    return None
+
+
+async def _reset_all(client: httpx.AsyncClient):
+    """httpx 的 delete() 不收 json=，全局重置只能走 request()。"""
+    return await client.request("DELETE", "/sync/reset", json={"confirm": "RESET_ALL_DATA"})
+
+
+async def _w204_reset_tables() -> None:
+    await _truncate(
+        "conversations", "chat_messages", "chat_conversations", "chat_projects",
+        "compression_summaries", "memory_extraction_state",
+        "session_tombstones", "turn_tombstones", "message_tombstones", "session_source_rev",
+    )
+
+
+async def _source_rev(session_id: str) -> int:
+    value = await _pool_fetchval(
+        "SELECT rev FROM session_source_rev WHERE session_id = $1", session_id
+    )
+    return 0 if value is None else value
+
+
+async def _has_session_tombstone(session_id: str) -> bool:
+    return bool(await _pool_fetchval(
+        "SELECT EXISTS(SELECT 1 FROM session_tombstones WHERE session_id = $1)", session_id
+    ))
+
+
+async def _seed_conversation(sid: str, *, messages=(), events=(), summaries=0,
+                             extraction_state=False, project_id=None) -> None:
+    """Seed one conversation across every original-copy table W2-04 must purge.
+
+    An `events` entry is (role, content, turn_key) or (role, content, turn_key, source id).
+    Three fields means "written before this version linked ledger rows to messages" — such a
+    row cannot say which sentence it came from, and the v3.2 ruling sweeps those on any
+    delete in the session.  Give the fourth field wherever a guard needs to watch one row
+    survive while its neighbour dies.
+    """
+    await _pool_execute(
+        "INSERT INTO chat_conversations (id, title, project_id) VALUES ($1, $2, $3) "
+        "ON CONFLICT (id) DO NOTHING",
+        sid, f"title-{sid}", project_id,
+    )
+    for mid, role, content, turn_key in messages:
+        await _pool_execute(
+            "INSERT INTO chat_messages (id, conversation_id, role, content, turn_key) "
+            "VALUES ($1, $2, $3, $4, $5)",
+            mid, sid, role, content, turn_key,
+        )
+    for event in events:
+        role, content, turn_key = event[0], event[1], event[2]
+        source_message_id = event[3] if len(event) > 3 else None
+        await _pool_execute(
+            "INSERT INTO conversations "
+            "(session_id, role, content, model, turn_key, scope_known, source_message_id) "
+            "VALUES ($1, $2, $3, 'm', $4, TRUE, $5)",
+            sid, role, content, turn_key, source_message_id,
+        )
+    for index in range(summaries):
+        await _pool_execute(
+            "INSERT INTO compression_summaries (conversation_id, summary, msg_count) "
+            "VALUES ($1, $2, $3)",
+            sid, f"summary-{sid}-{index}", 1,
+        )
+    if extraction_state:
+        await _pool_execute(
+            "INSERT INTO memory_extraction_state (session_id, last_extracted_message_id) "
+            "VALUES ($1, 0) ON CONFLICT (session_id) DO NOTHING",
+            sid,
+        )
+
+
+async def _original_copy_counts(sid: str) -> dict:
+    return {
+        "conversation": await _pool_fetchval(
+            "SELECT COUNT(*) FROM chat_conversations WHERE id = $1", sid),
+        "messages": await _pool_fetchval(
+            "SELECT COUNT(*) FROM chat_messages WHERE conversation_id = $1", sid),
+        "events": await _pool_fetchval(
+            "SELECT COUNT(*) FROM conversations WHERE session_id = $1", sid),
+        "summaries": await _pool_fetchval(
+            "SELECT COUNT(*) FROM compression_summaries WHERE conversation_id = $1", sid),
+        "extraction_state": await _pool_fetchval(
+            "SELECT COUNT(*) FROM memory_extraction_state WHERE session_id = $1", sid),
+    }
+
+
+async def test_w2_04_schema_and_conversation_delete(client: httpx.AsyncClient) -> None:
+    """T-W2-04-1..6: tombstone/rev/epoch schema and whole-conversation deletion."""
+    begin("T-W2-04-1")
+    # ---- 1. schema ---------------------------------------------------------
+    expected_columns = {
+        "session_tombstones": {"session_id", "deleted_at"},
+        "turn_tombstones": {"session_id", "turn_key", "deleted_at"},
+        "message_tombstones": {"session_id", "message_id", "deleted_at"},
+        "session_source_rev": {"session_id", "rev", "updated_at"},
+        "deletion_epoch": {"id", "reset_generation"},
+    }
+    for table, columns in expected_columns.items():
+        actual = {
+            r["column_name"]
+            for r in await _pool_fetch(
+                "SELECT column_name FROM information_schema.columns WHERE table_name = $1", table
+            )
+        }
+        require(actual, f"W2-04 table {table} is missing entirely")
+        require(columns <= actual, f"{table} columns missing: {sorted(columns - actual)}")
+
+    async def primary_key(table):
+        return {
+            r["column_name"]
+            for r in await _pool_fetch(
+                "SELECT a.attname AS column_name FROM pg_index i "
+                "JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = ANY(i.indkey) "
+                "WHERE i.indrelid = $1::regclass AND i.indisprimary", table
+            )
+        }
+
+    require(await primary_key("session_tombstones") == {"session_id"},
+            "session_tombstones must key on session_id alone")
+    require(await primary_key("turn_tombstones") == {"session_id", "turn_key"},
+            "turn_tombstones must key on (session_id, turn_key) so keys never collide across sessions")
+    require(await primary_key("message_tombstones") == {"session_id", "message_id"},
+            "message_tombstones must key on (session_id, message_id)")
+    require(await primary_key("session_source_rev") == {"session_id"},
+            "session_source_rev must key on session_id")
+    require(await _pool_fetchval("SELECT COUNT(*) FROM deletion_epoch") == 1,
+            "deletion_epoch must hold exactly one seeded row")
+    require(await _pool_fetchval("SELECT id FROM deletion_epoch") == 1,
+            "the deletion_epoch singleton must use id = 1")
+    epoch_before = await _pool_fetchval("SELECT reset_generation FROM deletion_epoch")
+    await database.init_tables()
+    await database.init_tables()
+    require(await _pool_fetchval("SELECT COUNT(*) FROM deletion_epoch") == 1,
+            "repeat init_tables() duplicated the deletion_epoch singleton")
+    require(await _pool_fetchval("SELECT reset_generation FROM deletion_epoch") == epoch_before,
+            "repeat init_tables() must not disturb the reset generation")
+    passed("T-W2-04-1 tombstone, source-rev and epoch tables exist and re-migrate idempotently")
+    begin("T-W2-04-2")
+
+    # ---- 2. deleting a conversation purges all five original copies --------
+    await _w204_reset_tables()
+    conv_a = "w204-a"
+    await _seed_conversation(
+        conv_a,
+        messages=[("w204-a-m1", "user", "u1", "k1"), ("w204-a-m2", "assistant", "a1", "k1")],
+        events=[("user", "u1", "k1"), ("assistant", "a1", "k1"),
+                ("user", "u2", "k2"), ("assistant", "a2", "k2")],
+        summaries=1, extraction_state=True,
+    )
+    response = await client.delete(f"/sync/conversations/{conv_a}")
+    require(response.status_code == 200, f"conversation delete failed: {response.status_code}")
+    require(response.json() == {"deleted": True,
+                                "purged": {"events": 4, "summaries": 1, "extraction_state": 1,
+                                           "handoff_dividers": 0}},
+            f"delete response shape drifted (nesting?): {response.text}")
+    counts = await _original_copy_counts(conv_a)
+    require(all(v == 0 for v in counts.values()),
+            f"original copies survived the delete: {counts}")
+    require(await _has_session_tombstone(conv_a), "deleting a conversation must leave a session tombstone")
+    require(await _source_rev(conv_a) == 1, "deleting a conversation must bump its source rev")
+    passed("T-W2-04-2 deleting a conversation purges all five original copies and stamps it")
+    begin("T-W2-04-3")
+
+    # ---- 3. neighbours are untouched ---------------------------------------
+    await _w204_reset_tables()
+    conv_b = "w204-b"
+    await _seed_conversation(
+        conv_b,
+        messages=[("w204-b-m1", "user", "u", "bk1")],
+        events=[("user", "u", "bk1")], summaries=1, extraction_state=True,
+    )
+    await _seed_conversation("w204-b-victim", messages=[("w204-b-v1", "user", "u", "vk")],
+                             events=[("user", "u", "vk")])
+    await client.delete("/sync/conversations/w204-b-victim")
+    counts = await _original_copy_counts(conv_b)
+    require(counts == {"conversation": 1, "messages": 1, "events": 1,
+                       "summaries": 1, "extraction_state": 1},
+            f"a neighbouring conversation was damaged: {counts}")
+    require(not await _has_session_tombstone(conv_b), "a neighbour must not be stamped")
+    require(await _source_rev(conv_b) == 0, "a neighbour's source rev must not move")
+    passed("T-W2-04-3 deleting one conversation leaves its neighbours completely alone")
+    begin("T-W2-04-4")
+
+    # ---- 4. the whole delete is one transaction ----------------------------
+    await _w204_reset_tables()
+    conv_r = "w204-rollback"
+    await _seed_conversation(
+        conv_r,
+        messages=[("w204-r-m1", "user", "u", "rk")],
+        events=[("user", "u", "rk")], summaries=1, extraction_state=True,
+    )
+    await _pool_execute(
+        """
+        CREATE OR REPLACE FUNCTION w204_fail_state_delete() RETURNS trigger AS $fn$
+        BEGIN
+            RAISE EXCEPTION 'W2_04_INJECTED_DELETE_FAILURE';
+        END; $fn$ LANGUAGE plpgsql
+        """
+    )
+    await _pool_execute("DROP TRIGGER IF EXISTS w204_fail_state_delete_trg ON memory_extraction_state")
+    await _pool_execute(
+        "CREATE TRIGGER w204_fail_state_delete_trg BEFORE DELETE ON memory_extraction_state "
+        "FOR EACH ROW EXECUTE FUNCTION w204_fail_state_delete()"
+    )
+    try:
+        capture, err_capture = io.StringIO(), io.StringIO()
+        with redirect_stdout(capture), redirect_stderr(err_capture):
+            response = await client.delete(f"/sync/conversations/{conv_r}")
+        require(response.status_code == 500, f"injected delete failure must be 500, got {response.status_code}")
+        require(response.json() == {"error": "删除失败"},
+                f"delete crash must use the fixed safe message: {response.text}")
+        logs = capture.getvalue() + err_capture.getvalue()
+        require("W2_04_INJECTED_DELETE_FAILURE" not in (response.text + logs),
+                "the injected exception body leaked out of the delete path")
+        counts = await _original_copy_counts(conv_r)
+        require(counts == {"conversation": 1, "messages": 1, "events": 1,
+                           "summaries": 1, "extraction_state": 1},
+                f"a failed delete left partial damage: {counts}")
+        require(not await _has_session_tombstone(conv_r),
+                "a rolled-back delete must not leave a tombstone behind")
+        require(await _source_rev(conv_r) == 0, "a rolled-back delete must not bump the source rev")
+        passed("T-W2-04-4 a failed delete rolls back stamp, rev and every table together")
+        begin("T-W2-04-5")
+    finally:
+        await _pool_execute("DROP TRIGGER IF EXISTS w204_fail_state_delete_trg ON memory_extraction_state")
+        await _pool_execute("DROP FUNCTION IF EXISTS w204_fail_state_delete()")
+
+    # ---- 5. derived products are explicitly preserved ----------------------
+    await _w204_reset_tables()
+    await _truncate("memories", "calendar_pages", "mem_scenes", "dream_logs")
+    conv_k = "w204-keep"
+    await _seed_conversation(conv_k, messages=[("w204-k-m1", "user", "u", "kk")],
+                             events=[("user", "u", "kk")])
+    await _pool_execute(
+        "INSERT INTO memories (content, importance, source_session) VALUES ($1, 5, $2)",
+        "w204-keep-fragment", conv_k,
+    )
+    await _pool_execute(
+        "INSERT INTO calendar_pages (date, type, diary) VALUES ('2026-08-15', 'day', 'w204-keep-page')"
+    )
+    await _pool_execute(
+        "INSERT INTO mem_scenes (title, narrative) VALUES ('w204-keep-scene', 'n')"
+    )
+    await _pool_execute("INSERT INTO dream_logs (status) VALUES ('completed')")
+    before = {t: await _pool_fetchval(f"SELECT COUNT(*) FROM {t}")
+              for t in ("memories", "calendar_pages", "mem_scenes", "dream_logs")}
+    await client.delete(f"/sync/conversations/{conv_k}")
+    after = {t: await _pool_fetchval(f"SELECT COUNT(*) FROM {t}")
+             for t in ("memories", "calendar_pages", "mem_scenes", "dream_logs")}
+    require(before == after, f"derived products must survive a conversation delete: {before} -> {after}")
+    require(await _pool_fetchval(
+        "SELECT content FROM memories WHERE source_session = $1", conv_k) == "w204-keep-fragment",
+        "a memory fragment lost its content when its source conversation was deleted")
+    passed("T-W2-04-5 memories, calendar pages, scenes and dreams all survive the delete")
+    begin("T-W2-04-6")
+
+    # ---- 6. privacy wins even when the directory row is already gone -------
+    await _w204_reset_tables()
+    conv_o = "w204-orphan"
+    await _pool_execute(
+        "INSERT INTO conversations (session_id, role, content, model, turn_key, scope_known) "
+        "VALUES ($1, 'user', 'orphan-body', 'm', 'ok1', TRUE)", conv_o,
+    )
+    await _pool_execute(
+        "INSERT INTO memory_extraction_state (session_id, last_extracted_message_id) VALUES ($1, 0)",
+        conv_o,
+    )
+    response = await client.delete(f"/sync/conversations/{conv_o}")
+    require(response.status_code == 200, "orphan delete failed")
+    body = response.json()
+    require(body["deleted"] is False,
+            f"a missing directory row must report deleted=false, got {body}")
+    require(body["purged"]["events"] == 1 and body["purged"]["extraction_state"] == 1,
+            f"orphan ledger rows must still be purged: {body}")
+    counts = await _original_copy_counts(conv_o)
+    require(counts["events"] == 0 and counts["extraction_state"] == 0,
+            f"orphan original copies survived: {counts}")
+    require(await _has_session_tombstone(conv_o),
+            "the stamp keys on session_id, not on the directory row existing")
+    passed("T-W2-04-6 a missing directory row never blocks purging the remaining copies")
+
+
+async def _seed_divider(sid: str, mid: str, *, summary: str, handoff: bool = False) -> None:
+    """Auto-compression dividers carry a summary and no handoff_info; handoff ones do."""
+    await _pool_execute(
+        "INSERT INTO chat_messages (id, conversation_id, role, content, summary, handoff_info) "
+        "VALUES ($1, $2, 'divider', '', $3, $4)",
+        mid, sid, summary, json.dumps({"from": "x"}) if handoff else None,
+    )
+
+
+async def test_w2_04_message_delete_and_ledger(client: httpx.AsyncClient) -> None:
+    """T-W2-04-7..9: message mirroring, tombstoned writes, interleaved race."""
+    begin("T-W2-04-7")
+    # ---- 7. message-level mirroring, stamps, compression purge, fallback ----
+    await _w204_reset_tables()
+    conv_c, conv_d = "w204-c", "w204-d"
+    await _seed_conversation(
+        conv_c,
+        messages=[("w204-c-u1", "user", "u1", "k1"), ("w204-c-a1", "assistant", "a1", "k1"),
+                  ("w204-c-u2", "user", "u2", "k2"), ("w204-c-a2", "assistant", "a2", "k2")],
+        # Linked rows: this guard watches one row die while its turn-mates live, and only a
+        # row that can name its own message is allowed to survive a delete in its session.
+        events=[("user", "u1", "k1", "w204-c-u1"), ("assistant", "a1", "k1", "w204-c-a1"),
+                ("user", "u2", "k2", "w204-c-u2"), ("assistant", "a2", "k2", "w204-c-a2")],
+        summaries=2,
+    )
+    await _seed_divider(conv_c, "w204-c-d1", summary="auto-1")
+    await _seed_divider(conv_c, "w204-c-d2", summary="auto-2")
+    await _seed_divider(conv_c, "w204-c-h1", summary="handoff-sum", handoff=True)
+    # A different conversation reusing the same turn_key must stay untouched.  (Message ids
+    # are globally unique by schema, so cross-session collision is only possible on turn_key.)
+    await _seed_conversation(conv_d, messages=[("w204-d-a1", "assistant", "d-a1", "k1")],
+                             events=[("assistant", "d-a1", "k1", "w204-d-a1")])
+
+    # ① delete the k1 assistant: mirror one ledger row, stamp the message, keep the turn alive
+    response = await client.delete(f"/sync/conversations/{conv_c}/messages/w204-c-a1")
+    require(response.status_code == 200, f"message delete failed: {response.status_code}")
+    body = response.json()
+    require(body["deleted"] is True and body["ledger_mode"] == "turn",
+            f"a keyed message delete must mirror through the turn branch: {body}")
+    require(body["purged"] == {"compression_summaries": 2, "compression_dividers": 2,
+                               "handoff_dividers": 0},
+            f"compression copies were not purged exactly: {body}",
+            tag="T-W2-04-7-purge-receipt")
+    require(body["source_rev"] == 1, f"message delete must bump and report the rev: {body}")
+    k1_roles = [r["role"] for r in await _pool_fetch(
+        "SELECT role FROM conversations WHERE session_id = $1 AND turn_key = 'k1'", conv_c)]
+    require(k1_roles == ["user"], f"the k1 ledger should keep only its user row, got {k1_roles}")
+    require(not await _pool_fetchval(
+        "SELECT EXISTS(SELECT 1 FROM turn_tombstones WHERE session_id = $1 AND turn_key = 'k1')", conv_c),
+        "deleting one assistant must not stamp the whole turn — it can still be regenerated")
+    require(await _pool_fetchval(
+        "SELECT EXISTS(SELECT 1 FROM message_tombstones WHERE session_id = $1 AND message_id = $2)",
+        conv_c, "w204-c-a1"), "a deleted message must be stamped so old devices cannot restore it")
+    require(await _pool_fetchval(
+        "SELECT COUNT(*) FROM compression_summaries WHERE conversation_id = $1", conv_c) == 0,
+        "internal compression summaries must be purged with the message")
+    require(await _pool_fetchval(
+        "SELECT COUNT(*) FROM chat_messages WHERE conversation_id = $1 AND role = 'divider' "
+        "AND summary IS NOT NULL AND handoff_info IS NULL", conv_c) == 0,
+        "auto-compression dividers must be purged with the message",
+        tag="T-W2-04-7-divider-count")
+    require(await _pool_fetchval(
+        "SELECT EXISTS(SELECT 1 FROM chat_messages WHERE id = 'w204-c-h1')"),
+        "handoff dividers are not compression copies and must survive")
+    # the stamped id can never be pushed back, but a new id in the same turn still works
+    response = await client.put(f"/sync/conversations/{conv_c}/messages/w204-c-a1",
+                                json={"role": "assistant", "content": "resurrect", "turnKey": "k1"})
+    require(response.status_code == 410 and response.json().get("code") == "message_deleted",
+            f"a stamped message id must be refused with 410/message_deleted: {response.status_code} {response.text}")
+    response = await client.put(f"/sync/conversations/{conv_c}/messages/w204-c-a1b",
+                                json={"role": "assistant", "content": "regenerated", "turnKey": "k1"})
+    require(response.status_code == 200,
+            f"regenerating the same turn under a fresh message id must succeed: {response.text}")
+
+    # ② empty the turn completely: the regenerated reply keeps it alive until it goes too
+    response = await client.delete(f"/sync/conversations/{conv_c}/messages/w204-c-u1")
+    require(response.status_code == 200, "second message delete failed")
+    require(not await _pool_fetchval(
+        "SELECT EXISTS(SELECT 1 FROM turn_tombstones WHERE session_id = $1 AND turn_key = 'k1')", conv_c),
+        "a turn that still holds the regenerated reply must not be stamped yet")
+    response = await client.delete(f"/sync/conversations/{conv_c}/messages/w204-c-a1b")
+    require(response.status_code == 200, "third message delete failed")
+    require(await _pool_fetchval(
+        "SELECT EXISTS(SELECT 1 FROM turn_tombstones WHERE session_id = $1 AND turn_key = 'k1')", conv_c),
+        "emptying a turn must stamp it so the old turn can never be re-landed")
+    require(await _pool_fetchval(
+        "SELECT COUNT(*) FROM conversations WHERE session_id = $1 AND turn_key = 'k1'", conv_c) == 0,
+        "an emptied turn must leave no ledger rows")
+    # ③ the other turn is untouched
+    require(await _pool_fetchval(
+        "SELECT COUNT(*) FROM conversations WHERE session_id = $1 AND turn_key = 'k2'", conv_c) == 2,
+        "deleting turn k1 damaged turn k2")
+    # ④ the same key/id in another conversation is untouched
+    require(await _pool_fetchval(
+        "SELECT COUNT(*) FROM conversations WHERE session_id = $1", conv_d) == 1,
+        "stamps and mirrors must be scoped per session")
+    require(await _pool_fetchval("SELECT EXISTS(SELECT 1 FROM chat_messages WHERE id = 'w204-d-a1' "
+                                 "AND conversation_id = $1)", conv_d),
+            "another conversation's same-turn_key message was deleted")
+    require(not await _pool_fetchval(
+        "SELECT EXISTS(SELECT 1 FROM turn_tombstones WHERE session_id = $1)", conv_d),
+        "stamping turn k1 in one conversation stamped the same key in another")
+
+    # ⑤ fallback branch: NULL turn_key means we cannot locate the turn -> purge the session ledger
+    conv_e = "w204-e"
+    await _seed_conversation(
+        conv_e,
+        messages=[("w204-e-m1", "user", "u1", None), ("w204-e-m2", "assistant", "a1", None),
+                  ("w204-e-m3", "user", "u2", None)],
+        events=[("user", "u1", None), ("assistant", "a1", None), ("user", "u2", None),
+                ("assistant", "a2", None), ("user", "u3", None), ("assistant", "a3", None)],
+        summaries=1,
+    )
+    await _seed_divider(conv_e, "w204-e-d1", summary="auto-e")
+    await _seed_divider(conv_e, "w204-e-h1", summary="handoff-e", handoff=True)
+    response = await client.delete(f"/sync/conversations/{conv_e}/messages/w204-e-m2")
+    require(response.status_code == 200, "fallback message delete failed")
+    body = response.json()
+    require(body["ledger_mode"] == "session_fallback",
+            f"a keyless message delete must report the fallback branch: {body}")
+    require(body["ledger_events_deleted"] == 6,
+            f"the fallback must purge the whole session ledger: {body}")
+    require(await _pool_fetchval(
+        "SELECT COUNT(*) FROM conversations WHERE session_id = $1", conv_e) == 0,
+        "privacy first: an unlocatable turn purges the session's ledger entirely")
+    surviving = sorted(r["id"] for r in await _pool_fetch(
+        "SELECT id FROM chat_messages WHERE conversation_id = $1 ORDER BY id", conv_e))
+    require(surviving == ["w204-e-h1", "w204-e-m1", "w204-e-m3"],
+            f"the fallback must keep the surviving originals and the handoff divider: {surviving}")
+    require(not await _has_session_tombstone(conv_e),
+            "the fallback must NOT stamp the session — the conversation is still alive")
+    require(await _source_rev(conv_e) == 1, "the fallback must still bump the source rev")
+    # the conversation keeps working afterwards
+    result = await database.append_turn_events_atomic(conv_e, "u-new", "a-new", "m", turn_key="ek-new")
+    require(result.get("ok") is True,
+            f"a conversation that took the fallback must keep accepting new turns: {result}")
+    passed("T-W2-04-7 message deletes mirror, stamp, purge compression copies, and degrade safely")
+    begin("T-W2-04-8")
+
+    # ---- 8. writes stop at every stamp and at an old generation -------------
+    await _w204_reset_tables()
+    stamped = "w204-stamped"
+    await _seed_conversation(stamped)
+    await client.delete(f"/sync/conversations/{stamped}")
+    result = await database.append_turn_events_atomic(stamped, "u", "a", "m", turn_key="sk")
+    require(result.get("path") == "tombstoned" and result.get("reason") == "session",
+            f"a stamped session must refuse new ledger writes: {result}")
+    require(await _pool_fetchval(
+        "SELECT COUNT(*) FROM conversations WHERE session_id = $1", stamped) == 0,
+        "a refused write must leave zero rows")
+
+    turn_sid = "w204-turnstamp"
+    await _seed_conversation(turn_sid,
+                             messages=[("w204-t-u1", "user", "u", "tk1")],
+                             events=[("user", "u", "tk1")])
+    await client.delete(f"/sync/conversations/{turn_sid}/messages/w204-t-u1")
+    result = await database.append_turn_events_atomic(
+        turn_sid, "u", "a-regen", "m", turn_key="tk1", is_regenerate=True)
+    require(result.get("path") == "tombstoned" and result.get("reason") == "turn",
+            f"a stamped turn must refuse regeneration: {result}")
+    result = await database.append_turn_events_atomic(turn_sid, "u", "a", "m", turn_key="tk2")
+    require(result.get("ok") is True, f"an unstamped turn must still land: {result}")
+
+    generation = await _pool_fetchval("SELECT reset_generation FROM deletion_epoch")
+    result = await database.append_turn_events_atomic(
+        "w204-gen", "u", "a", "m", turn_key="gk", reset_generation=generation - 1)
+    require(result.get("path") == "tombstoned" and result.get("reason") == "reset",
+            f"a write carrying a stale generation must be refused: {result}")
+    require(await _pool_fetchval(
+        "SELECT COUNT(*) FROM conversations WHERE session_id = 'w204-gen'") == 0,
+        "a stale-generation write must leave zero rows")
+
+    # The closed-gate legacy path is a second way into the same ledger, and privacy does not
+    # care which door a row came through: it must stop at exactly the same stamps.  Both of
+    # its rows also have to be one transaction — two independent writes let a delete land in
+    # between and leave half a turn behind.
+    legacy_sid = "w204-legacy-stamped"
+    await _seed_conversation(legacy_sid)
+    await client.delete(f"/sync/conversations/{legacy_sid}")
+    result = await database.append_legacy_turn_if_not_deleted(legacy_sid, "u", "a", "m")
+    require(result.get("path") == "tombstoned" and result.get("reason") == "session",
+            f"the closed-gate legacy path ignored the session stamp: {result}")
+    require(await _pool_fetchval(
+        "SELECT COUNT(*) FROM conversations WHERE session_id = $1", legacy_sid) == 0,
+        "a refused legacy write still left ledger rows")
+    generation = await _pool_fetchval("SELECT reset_generation FROM deletion_epoch")
+    result = await database.append_legacy_turn_if_not_deleted(
+        "w204-legacy-gen", "u", "a", "m", reset_generation=generation - 1)
+    require(result.get("path") == "tombstoned" and result.get("reason") == "reset",
+            f"the closed-gate legacy path ignored a stale generation: {result}")
+    live_sid = "w204-legacy-live"
+    await _seed_conversation(live_sid)
+    result = await database.append_legacy_turn_if_not_deleted(live_sid, "u", "a", "m")
+    require(result.get("ok") is True, f"an unstamped legacy write must land: {result}")
+    require(await _pool_fetchval(
+        "SELECT COUNT(*) FROM conversations WHERE session_id = $1", live_sid) == 2,
+        "the legacy path must write both rows")
+    legacy_source = re.search(
+        r"async def append_legacy_turn_if_not_deleted\(.*?(?=\nasync def |\ndef )",
+        (ROOT / "database.py").read_text(encoding="utf-8"), re.S)
+    require(legacy_source and legacy_source.group(0).count("conn.transaction()") == 1
+            and "save_message(" not in legacy_source.group(0),
+            "the legacy pair must land in one transaction, not two independent save_message calls")
+    main_source = (ROOT / "main.py").read_text(encoding="utf-8")
+    require("append_legacy_turn_if_not_deleted(" in main_source
+            and "await save_message(session_id," not in main_source,
+            "the closed-gate branch still calls save_message directly, bypassing the stamps")
+    passed("T-W2-04-8 session stamps, turn stamps and stale generations all stop the write")
+    begin("T-W2-04-9")
+
+    # ---- 9. interleaved delete vs in-flight write: one deterministic outcome
+    await _w204_reset_tables()
+    race_sid = "w204-race"
+    await _seed_conversation(race_sid)
+    reached_write = asyncio.Event()
+    release_write = asyncio.Event()
+    original_status = database._tombstone_status_tx
+
+    async def _paused_status(conn, session_id, *args, **kwargs):
+        # Runs inside the real production transaction, after the real stamp lookup,
+        # while the real session lock is still held.
+        outcome = await original_status(conn, session_id, *args, **kwargs)
+        if session_id == race_sid:
+            reached_write.set()
+            await release_write.wait()
+        return outcome
+
+    with patch.object(database, "_tombstone_status_tx", _paused_status):
+        writer = asyncio.create_task(
+            database.append_turn_events_atomic(race_sid, "u", "a", "m", turn_key="rk"))
+        deleter = None
+        try:
+            await asyncio.wait_for(reached_write.wait(), timeout=15)
+            deleter = asyncio.create_task(database.sync_delete_conversation(race_sid))
+            await asyncio.sleep(0.6)
+            require(not deleter.done(),
+                    "the delete did not wait for the in-flight write: the session lock is missing")
+            blocked = await _pool_fetchval(
+                "SELECT COUNT(*) FROM pg_stat_activity WHERE wait_event_type = 'Lock'")
+            require(blocked >= 1,
+                    "expected the deleting connection to be parked on an advisory lock")
+        finally:
+            # 无论断言过没过，都要放行被暂停的写入：它正握着一条连接和一个未结事务，
+            # 不放行的话失败会变成挂起，报不出红点（收工时连接池也关不掉）。
+            release_write.set()
+            await asyncio.wait_for(writer, timeout=20)
+            if deleter is not None:
+                await asyncio.wait_for(deleter, timeout=20)
+    require(await _pool_fetchval(
+        "SELECT COUNT(*) FROM conversations WHERE session_id = $1", race_sid) == 0,
+        "the interleaved race left ledger rows behind: delete must win the final state")
+    require(await _has_session_tombstone(race_sid),
+            "the interleaved race lost the session tombstone")
+    passed("T-W2-04-9 an interleaved delete and ledger write serialize to one clean final state")
+
+
+def _backup_zip(conversations: list, projects=()) -> bytes:
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("conversations.json", json.dumps(conversations, ensure_ascii=False))
+        zf.writestr("projects.json", json.dumps(list(projects), ensure_ascii=False))
+    return buf.getvalue()
+
+
+async def test_w2_04_no_resurrection(client: httpx.AsyncClient) -> None:
+    """T-W2-04-10..11: no ordinary sync may resurrect; only backup restore lifts a stamp."""
+    begin("T-W2-04-10")
+    # ---- 10. every ordinary write channel refuses a deleted conversation ----
+    await _w204_reset_tables()
+    dead = "w204-dead"
+    await _seed_conversation(dead, messages=[("w204-dead-m1", "user", "u", "dk")],
+                             events=[("user", "u", "dk")])
+    await client.delete(f"/sync/conversations/{dead}")
+
+    response = await client.post("/sync/conversations", json={"id": dead, "title": "back?"})
+    require(response.status_code == 410 and response.json().get("code") == "deleted",
+            f"conversation POST resurrected a deleted id: {response.status_code} {response.text}")
+    response = await client.put(f"/sync/conversations/{dead}", json={"title": "back?"})
+    require(response.status_code == 410 and response.json().get("code") == "deleted",
+            f"legacy PUT resurrected a deleted id: {response.status_code}")
+    response = await client.put(f"/sync/conversations/{dead}/messages/w204-dead-m9",
+                                json={"role": "user", "content": "back?"})
+    require(response.status_code == 410 and response.json().get("code") == "deleted",
+            f"single-message PUT resurrected a deleted conversation: {response.status_code}")
+    response = await client.put(f"/sync/conversations/{dead}",
+                                json={"title": "back?", "messages": [
+                                    {"id": "w204-dead-m8", "role": "user", "content": "x"}]})
+    require(response.status_code == 410, "legacy full replace resurrected a deleted conversation")
+    require(await _pool_fetchval(
+        "SELECT COUNT(*) FROM chat_conversations WHERE id = $1", dead) == 0,
+        "a refused write still created the conversation")
+
+    alive = "w204-alive"
+    response = await client.post("/sync/import", json={
+        "conversations": [
+            {"id": dead, "title": "back?", "messages": []},
+            {"id": alive, "title": "healthy", "messages": [
+                {"id": "w204-alive-m1", "role": "user", "content": "hi"}]},
+        ],
+        "projects": [],
+    })
+    require(response.status_code == 200, "import must stay 200 for per-entity rejects")
+    body = response.json()
+    dead_rejects = [d for d in body["rejected_details"]
+                    if d["id"] == dead and d["code"] == "deleted"]
+    require(dead_rejects, f"import must reject a deleted conversation with code=deleted: {body['rejected_details']}")
+    require(alive in body["imported_conversation_ids"],
+            "a deleted sibling must not block healthy entities in the same batch")
+
+    # a stamped message id inside a still-alive conversation
+    live = "w204-live"
+    await _seed_conversation(live, messages=[("w204-live-m1", "user", "u1", "lk1"),
+                                             ("w204-live-m2", "assistant", "a1", "lk1")],
+                             events=[("user", "u1", "lk1"), ("assistant", "a1", "lk1")])
+    await client.delete(f"/sync/conversations/{live}/messages/w204-live-m2")
+    response = await client.put(f"/sync/conversations/{live}/messages/w204-live-m2",
+                                json={"role": "assistant", "content": "back?", "turnKey": "lk1"})
+    require(response.status_code == 410 and response.json().get("code") == "message_deleted",
+            f"a stamped message id must be refused: {response.status_code} {response.text}")
+    require(await _pool_fetchval(
+        "SELECT EXISTS(SELECT 1 FROM chat_conversations WHERE id = $1)", live),
+        "a message-level 410 must never take down the whole conversation")
+    # full replace / import must filter that id but keep the rest
+    response = await client.put(f"/sync/conversations/{live}", json={
+        "title": "still here", "messages": [
+            {"id": "w204-live-m1", "role": "user", "content": "u1"},
+            {"id": "w204-live-m2", "role": "assistant", "content": "back?"},
+            {"id": "w204-live-m3", "role": "user", "content": "u2"},
+        ]})
+    require(response.status_code == 200,
+            f"a stamped message must not fail the whole replace: {response.status_code} {response.text}")
+    require(response.json().get("skipped_deleted_messages") == ["w204-live-m2"],
+            f"the replace must name the message ids it refused to restore: {response.text}",
+            tag="T-W2-04-10-replace-names")
+    ids = sorted(r["id"] for r in await _pool_fetch(
+        "SELECT id FROM chat_messages WHERE conversation_id = $1", live))
+    require(ids == ["w204-live-m1", "w204-live-m3"],
+            f"the stamped message came back through the replace channel: {ids}",
+            tag="T-W2-04-10-replace-state")
+
+    # ---- the one and only place a stamp is lifted: explicit backup restore --
+    backup = _backup_zip([
+        {"id": dead, "title": "restored", "messages": [
+            {"id": "w204-dead-m1", "role": "user", "content": "restored-body"}]},
+        {"id": live, "title": "restored-live", "messages": [
+            {"id": "w204-live-m2", "role": "assistant", "content": "restored-a1"}]},
+    ])
+    response = await client.post("/sync/import-backup",
+                                 files={"file": ("backup.zip", backup, "application/zip")})
+    require(response.status_code == 200, f"backup restore failed: {response.status_code} {response.text}")
+    require(not await _has_session_tombstone(dead),
+            "an explicit backup restore must lift the session stamp")
+    require(not await _pool_fetchval(
+        "SELECT EXISTS(SELECT 1 FROM message_tombstones WHERE session_id = $1)", live),
+        "an explicit backup restore must lift the message stamps of the restored conversation")
+    require(await _pool_fetchval(
+        "SELECT EXISTS(SELECT 1 FROM chat_messages WHERE id = 'w204-dead-m1')"),
+        "the restored conversation's messages are missing")
+    result = await database.append_turn_events_atomic(dead, "u", "a", "m", turn_key="dk-new")
+    require(result.get("ok") is True,
+            f"a restored conversation must accept new ledger writes again: {result}")
+
+    # restore must be atomic per conversation: a mid-way failure keeps the old stamp and data
+    atomic = "w204-restore-atomic"
+    await _seed_conversation(atomic, messages=[("w204-ra-m1", "user", "old-body", "rk")],
+                             events=[("user", "old-body", "rk")])
+    await client.delete(f"/sync/conversations/{atomic}")
+    await _pool_execute(
+        """
+        CREATE OR REPLACE FUNCTION w204_fail_restore_msg() RETURNS trigger AS $fn$
+        BEGIN
+            IF NEW.conversation_id = 'w204-restore-atomic'
+            THEN RAISE EXCEPTION 'W2_04_INJECTED_RESTORE_FAILURE'; END IF;
+            RETURN NEW;
+        END; $fn$ LANGUAGE plpgsql
+        """
+    )
+    await _pool_execute("DROP TRIGGER IF EXISTS w204_fail_restore_msg_trg ON chat_messages")
+    await _pool_execute(
+        "CREATE TRIGGER w204_fail_restore_msg_trg BEFORE INSERT ON chat_messages "
+        "FOR EACH ROW EXECUTE FUNCTION w204_fail_restore_msg()"
+    )
+    try:
+        capture = io.StringIO()
+        with redirect_stdout(capture), redirect_stderr(io.StringIO()):
+            await client.post("/sync/import-backup", files={"file": (
+                "backup.zip",
+                _backup_zip([{"id": atomic, "title": "half", "messages": [
+                    {"id": "w204-ra-m2", "role": "user", "content": "new-body"}]}]),
+                "application/zip")})
+        require(await _has_session_tombstone(atomic),
+                "a failed restore must leave the stamp in place: unstamping is not a separate commit")
+        require(await _pool_fetchval(
+            "SELECT COUNT(*) FROM chat_conversations WHERE id = $1", atomic) == 0,
+            "a failed restore must not leave half-restored metadata behind")
+        passed("T-W2-04-10 no ordinary channel resurrects; only an explicit backup restore does, atomically")
+        begin("T-W2-04-11")
+    finally:
+        await _pool_execute("DROP TRIGGER IF EXISTS w204_fail_restore_msg_trg ON chat_messages")
+        await _pool_execute("DROP FUNCTION IF EXISTS w204_fail_restore_msg()")
+
+    # ---- 11. reset stamps the union of all four original-copy tables --------
+    await _w204_reset_tables()
+    await _truncate("memories", "calendar_pages")
+    await _seed_conversation("w204-f", messages=[("w204-f-m1", "user", "u", "fk")])
+    await _pool_execute(
+        "INSERT INTO conversations (session_id, role, content, model, scope_known) "
+        "VALUES ('w204-g', 'user', 'g-body', 'm', TRUE)")
+    await _pool_execute(
+        "INSERT INTO memory_extraction_state (session_id, last_extracted_message_id) "
+        "VALUES ('w204-h', 0)")
+    await _pool_execute(
+        "INSERT INTO compression_summaries (conversation_id, summary, msg_count) "
+        "VALUES ('w204-i', 'orphan-summary', 1)")
+    for index in range(3):
+        await _pool_execute(
+            "INSERT INTO memories (content, importance) VALUES ($1, 5)", f"w204-keep-mem-{index}")
+    await _pool_execute(
+        "INSERT INTO calendar_pages (date, type, diary) VALUES ('2026-08-14', 'day', 'keep-page')")
+    await _upsert_config("memory_enabled", "true")
+    epoch_before = await _pool_fetchval("SELECT reset_generation FROM deletion_epoch")
+
+    response = await _reset_all(client)
+    require(response.status_code == 200, f"reset failed: {response.status_code} {response.text}")
+    body = response.json()
+    require("purged_events" in body and "purged_extraction_state" in body,
+            f"reset must report what it purged: {body}")
+    for table, column, value in (("chat_conversations", "id", "w204-f"),
+                                 ("conversations", "session_id", "w204-g"),
+                                 ("memory_extraction_state", "session_id", "w204-h"),
+                                 ("compression_summaries", "conversation_id", "w204-i")):
+        require(await _pool_fetchval(
+            f"SELECT COUNT(*) FROM {table} WHERE {column} = $1", value) == 0,
+            f"reset left rows behind in {table}")
+    for sid in ("w204-f", "w204-g", "w204-h", "w204-i"):
+        require(await _has_session_tombstone(sid),
+                f"reset must stamp {sid}: the union of all four tables, not just one")
+        require(await _source_rev(sid) == 1, f"reset must bump the source rev of {sid}")
+    require(await _pool_fetchval("SELECT reset_generation FROM deletion_epoch") == epoch_before + 1,
+            "reset must advance the deletion epoch so in-flight requests are refused")
+    require(await _pool_fetchval("SELECT COUNT(*) FROM memories") == 3,
+            "reset must keep memories")
+    require(await _pool_fetchval("SELECT COUNT(*) FROM calendar_pages") == 1,
+            "reset must keep calendar pages")
+    require(await _config_row("memory_enabled") == "true",
+            "reset must keep gateway configuration")
+    passed("T-W2-04-11 reset stamps the union of every original-copy table and advances the epoch")
+
+
+def _single_statement_snapshot(source: str, func_name: str) -> str:
+    """Return the body of func_name, for asserting it reads body+rev in ONE statement."""
+    match = re.search(rf"async def {func_name}\(.*?(?=\nasync def |\ndef )", source, re.S)
+    require(match, f"{func_name} not found for the snapshot guard")
+    return match.group(0)
+
+
+async def test_w2_04_background_snapshots(client: httpx.AsyncClient) -> None:
+    """T-W2-04-12..14: extraction and day-page snapshot/recompute contracts."""
+    begin("T-W2-04-12")
+    db_source = (ROOT / "database.py").read_text(encoding="utf-8")
+
+    # ---- 12/13 part one: body and rev must come from ONE statement ---------
+    # A two-query design ("read messages, then read revs") has a window where a
+    # delete lands between them, producing the one forbidden combination:
+    # stale body + fresh rev, which then passes the save-time comparison.
+    for func in ("get_recent_conversation", "get_chat_messages_for_date"):
+        body = _single_statement_snapshot(db_source, func)
+        require("session_source_rev" in body and "deletion_epoch" in body,
+                f"{func} must return source_rev and reset_generation itself, not via a second query")
+        statements = re.findall(r"(?:fetch|fetchrow|fetchval)\s*\(", body)
+        require(len(statements) == 1,
+                f"{func} must read body+rev+generation in a single statement, found {len(statements)} reads")
+    passed("T-W2-04-12 material readers take body, source rev and generation in one snapshot")
+    begin("T-W2-04-13")
+
+    # ---- 12 part two: save compares under the same locks -------------------
+    await _w204_reset_tables()
+    await _truncate("memories")
+    src_a, src_b = "w204-src-a", "w204-src-b"
+    for sid in (src_a, src_b):
+        await _seed_conversation(sid, events=[("user", f"body-{sid}", f"{sid}-k")])
+
+    snapshot = await database.snapshot_recent_conversation(limit=20)
+    require(snapshot["sources"], "the extraction snapshot must record its source sessions")
+    require(set(snapshot["sources"]) >= {src_a, src_b},
+            f"snapshot must cover every source session it read: {snapshot['sources']}")
+
+    async def _save_one(conn):
+        await database._insert_memory_tx(conn, content="w204-should-not-land", importance=5,
+                                         source_session=src_a)
+        return "saved"
+
+    await client.delete(f"/sync/conversations/{src_a}")
+    pool = await database.get_pool()
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            status, _ = await database.save_if_sources_unchanged(conn, snapshot, _save_one)
+    require(status == "changed",
+            f"a save must be refused once one of its sources changed, got {status}")
+    require(await _pool_fetchval(
+        "SELECT COUNT(*) FROM memories WHERE content = 'w204-should-not-land'") == 0,
+        "a refused save still wrote memories")
+
+    # an unchanged snapshot still saves
+    fresh = await database.snapshot_recent_conversation(limit=20)
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            status, _ = await database.save_if_sources_unchanged(
+                conn, fresh,
+                lambda c: database._insert_memory_tx(c, content="w204-should-land",
+                                                     importance=5, source_session=src_b))
+    require(status == "saved", f"an unchanged snapshot must save, got {status}")
+    require(await _pool_fetchval(
+        "SELECT COUNT(*) FROM memories WHERE content = 'w204-should-land'") == 1,
+        "an unchanged snapshot failed to save")
+
+    # a reset also invalidates an in-flight snapshot
+    stale = await database.snapshot_recent_conversation(limit=20)
+    await _reset_all(client)
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            status, _ = await database.save_if_sources_unchanged(conn, stale, _save_one)
+    require(status == "changed", f"a reset must invalidate every in-flight snapshot, got {status}")
+
+    # Comparing revisions is only safe if the save actually waits for a delete that is
+    # already in flight.  Without the shared session lock the save can read the revision
+    # *before* the delete commits, match its snapshot, and save material the delete is
+    # about to erase — the comparison passes and the leak happens anyway.
+    await _w204_reset_tables()
+    await _truncate("memories")
+    lock_sid = "w204-lock-race"
+    await _seed_conversation(lock_sid, events=[("user", "lock-body", "lk")])
+    locked_snapshot = await database.snapshot_recent_conversation(limit=20)
+    reached_delete = asyncio.Event()
+    release_delete = asyncio.Event()
+    original_stamp = database._stamp_session_tx
+
+    async def _paused_stamp(conn, session_id):
+        # Runs inside the real delete transaction, while it holds the exclusive session lock.
+        await original_stamp(conn, session_id)
+        if session_id == lock_sid:
+            reached_delete.set()
+            await release_delete.wait()
+
+    async def _save_under_lock():
+        async with pool.acquire() as conn:
+            async with conn.transaction():
+                return await database.save_if_sources_unchanged(
+                    conn, locked_snapshot,
+                    lambda c: database._insert_memory_tx(
+                        c, content="w204-lockrace-mem", importance=5, source_session=lock_sid),
+                )
+
+    save_status = None
+    with patch.object(database, "_stamp_session_tx", _paused_stamp):
+        deleter = asyncio.create_task(database.sync_delete_conversation(lock_sid))
+        saver = None
+        try:
+            await asyncio.wait_for(reached_delete.wait(), timeout=15)
+            saver = asyncio.create_task(_save_under_lock())
+            await asyncio.sleep(0.6)
+            require(not saver.done(),
+                    "the save did not wait for the in-flight delete: the shared session lock is missing")
+        finally:
+            release_delete.set()
+            await asyncio.wait_for(deleter, timeout=20)
+            if saver is not None:
+                save_status, _ = await asyncio.wait_for(saver, timeout=20)
+    require(save_status == "changed",
+            f"a save released after the delete committed must see the new revision, got {save_status}")
+    require(await _pool_fetchval(
+        "SELECT COUNT(*) FROM memories WHERE content = 'w204-lockrace-mem'") == 0,
+        "the save landed material from a conversation the user had just deleted")
+    passed("T-W2-04-13 saves are refused when any source session changed or a reset intervened")
+    begin("T-W2-04-14")
+
+    # ---- 14. calendar three-state double check (W2-06a hook) ---------------
+    await _w204_reset_tables()
+    await _truncate("calendar_pages")
+    day = "2026-08-13"
+    day_obj = date.fromisoformat(day)
+    conv_x, conv_y = "w204-cal-x", "w204-cal-y"
+    for sid, body in ((conv_x, "cal-body-x"), (conv_y, "cal-body-y")):
+        await _seed_conversation(sid)
+        await _pool_execute(
+            "INSERT INTO chat_messages (id, conversation_id, role, content, time, turn_key) "
+            "VALUES ($1, $2, 'user', $3, $4, $5)",
+            f"{sid}-m1", sid, body, day_obj, f"{sid}-k",
+        )
+        await _pool_execute(
+            "INSERT INTO conversations (session_id, role, content, model, turn_key, scope_known, created_at) "
+            "VALUES ($1, 'user', $2, 'm', $3, TRUE, $4)",
+            sid, body, f"{sid}-k", day_obj,
+        )
+
+    async def _material_agreement(date_str):
+        """chat_messages readers and the ledger must agree on 'is there material'."""
+        rows = await database.get_chat_messages_for_date(date_str)
+        ledger = await _pool_fetchval(
+            f"SELECT COUNT(*) FROM conversations WHERE created_at::date = $1 "
+            f"AND {database.CONVERSATIONS_GLOBAL_SCOPE}", date.fromisoformat(date_str))
+        return bool(rows), bool(ledger)
+
+    chat_has, ledger_has = await _material_agreement(day)
+    require(chat_has and ledger_has,
+            f"seeded day must have material on both sides: chat={chat_has} ledger={ledger_has}")
+    # delete one of two conversations: material remains on both sides
+    await client.delete(f"/sync/conversations/{conv_x}")
+    chat_has, ledger_has = await _material_agreement(day)
+    require(chat_has == ledger_has == True,
+            f"after deleting one of two, both sides must still see material: {chat_has} {ledger_has}")
+    # delete the last one: both sides go empty together
+    await client.delete(f"/sync/conversations/{conv_y}")
+    chat_has, ledger_has = await _material_agreement(day)
+    require(chat_has == ledger_has == False,
+            f"after deleting the last conversation both sides must be empty: {chat_has} {ledger_has}")
+    passed("T-W2-04-14 chat-message and ledger material views stay in agreement across deletes")
+
+
+async def test_w2_04_privacy_and_contracts(client: httpx.AsyncClient) -> None:
+    """T-W2-04-15..17: observability sentinels, structural contracts, legacy guard counts."""
+    begin("T-W2-04-15")
+    # ---- 15. no identifier or exception body escapes any delete path -------
+    await _w204_reset_tables()
+    secret_sid = f"W204_SID_{uuid.uuid4().hex}"
+    secret_key = f"W204_TURNKEY_{uuid.uuid4().hex}"
+    secret_title = f"W204_TITLE_{uuid.uuid4().hex}"
+    await _pool_execute(
+        "INSERT INTO chat_conversations (id, title) VALUES ($1, $2)", secret_sid, secret_title)
+    await _pool_execute(
+        "INSERT INTO chat_messages (id, conversation_id, role, content, turn_key) "
+        "VALUES ('w204-sec-m1', $1, 'user', 'body', $2)", secret_sid, secret_key)
+    await _pool_execute(
+        "INSERT INTO conversations (session_id, role, content, model, turn_key, scope_known) "
+        "VALUES ($1, 'user', 'body', 'm', $2, TRUE)", secret_sid, secret_key)
+
+    secrets = (secret_sid, secret_key, secret_title)
+    out, err = io.StringIO(), io.StringIO()
+    with redirect_stdout(out), redirect_stderr(err):
+        r_msg = await client.delete(f"/sync/conversations/{secret_sid}/messages/w204-sec-m1")
+        r_write = await database.append_turn_events_atomic(
+            secret_sid, "u", "a", "m", turn_key=secret_key, reset_generation=-1)
+        r_conv = await client.delete(f"/sync/conversations/{secret_sid}")
+        r_410 = await client.post("/sync/conversations", json={"id": secret_sid, "title": "x"})
+        r_reset = await _reset_all(client)
+    logs = out.getvalue() + err.getvalue()
+    require(r_write.get("path") == "tombstoned", f"stale-generation write should be refused: {r_write}")
+    for label, text in (("message delete", r_msg.text), ("conversation delete", r_conv.text),
+                        ("410 response", r_410.text), ("reset", r_reset.text), ("logs", logs)):
+        for secret in secrets:
+            require(secret not in text,
+                    f"{label} leaked an identifier read from the database ({secret[:12]}…)")
+    events = [ln.strip() for ln in logs.splitlines() if ln.startswith("event=")]
+    require(events, f"the delete paths must still emit structured events: {logs[:200]!r}")
+    for event in events:
+        for secret in secrets:
+            require(secret not in event, f"a structured event carried an identifier: {event}")
+
+    # the one sanctioned exception: /sync/import echoes back the ids the caller just submitted
+    submitted = f"w204-echo-{uuid.uuid4().hex[:8]}"
+    response = await client.post("/sync/import", json={
+        "conversations": ["not-a-dict", {"id": submitted, "title": "t", "messages": []}],
+        "projects": [],
+    })
+    require(submitted in response.text,
+            "the import receipt must echo submitted ids so callers can reconcile")
+    passed("T-W2-04-15 delete paths leak no identifiers, bodies or exception text")
+    begin("T-W2-04-16")
+
+    # ---- 16. structural contracts -----------------------------------------
+    db_source = (ROOT / "database.py").read_text(encoding="utf-8")
+    main_source = (ROOT / "main.py").read_text(encoding="utf-8")
+
+    # every ledger DELETE is scoped by session_id（只在 Python 定界符 " 处收尾，
+    # SQL 里的单引号常量照收，否则带常量的语句只能被看到前半截）
+    for statement in re.findall(r"DELETE FROM conversations[^\"]*", db_source):
+        flat = " ".join(statement.split())
+        require("session_id" in flat, f"a ledger DELETE is not scoped by session_id: {flat}")
+
+    # the global-scope predicate is referenced, never hand-written
+    hand_written = re.findall(r"scope_known = TRUE AND project_id IS NULL", db_source)
+    require(len(hand_written) == 1,
+            f"CONVERSATIONS_GLOBAL_SCOPE must be referenced, not re-typed ({len(hand_written)} copies)")
+
+    # advisory locks only ever appear inside an explicit transaction helper
+    for helper in ("_lock_global_shared", "_lock_global_exclusive",
+                   "_lock_session", "_lock_sessions_shared"):
+        require(helper in db_source, f"lock helper {helper} is missing")
+    lock_calls = re.findall(r"pg_advisory_xact_lock\w*", db_source)
+    require(lock_calls, "no advisory locks found at all")
+    lock_sites = re.findall(r"async def (_lock_\w+)\(", db_source)
+    require(len(lock_calls) <= len(lock_sites) + 1,
+            f"advisory locks are being hand-rolled outside the lock helpers: {lock_calls}")
+
+    # restore is the single place a stamp is lifted
+    unstamp = re.findall(r"DELETE FROM (?:session|turn|message)_tombstones", db_source)
+    require(unstamp, "nothing ever lifts a stamp — backup restore cannot work")
+    restore_body = _single_statement_snapshot.__doc__ and re.search(
+        r"async def _restore_conversation_tx\(.*?(?=\nasync def |\ndef )", db_source, re.S)
+    require(restore_body, "_restore_conversation_tx must exist as the only un-stamping path")
+    for statement in unstamp:
+        require(statement in restore_body.group(0),
+                f"a stamp is lifted outside _restore_conversation_tx: {statement}")
+
+    # conn-aware transaction primitives never grab a second connection or call outward
+    for primitive in re.findall(r"async def (_\w+_tx)\(", db_source):
+        body = re.search(rf"async def {primitive}\(.*?(?=\nasync def |\ndef )", db_source, re.S)
+        if not body:
+            continue
+        text = body.group(0)
+        require("pool.acquire" not in text and "get_pool()" not in text,
+                f"{primitive} takes its own connection — it must reuse the caller's transaction")
+        for outward in ("get_embedding", "extract_memories", "web_search", "httpx"):
+            require(outward not in text,
+                    f"{primitive} makes an outward call ({outward}) while holding locks")
+
+    require('{"error": "删除失败"}' in main_source or '"删除失败"' in main_source,
+            "the delete routes must use a fixed safe crash message")
+    passed("T-W2-04-16 locks, scoped deletes, single un-stamp path and lock-free primitives all hold")
+    begin("T-W2-04-17")
+
+    # ---- 17. the 107 inherited guards are untouched -------------------------
+    inherited = {"T-S": 34, "T-W1-01-": 4, "T-W1-06-": 4, "T-W1-08-": 6,
+                 "T-W2-01-": 12, "T-W2-02-": 22, "T-W2-03-": 25}
+    for prefix, expected in inherited.items():
+        actual = len([name for name in PASSED if name.startswith(prefix)])
+        require(actual == expected,
+                f"inherited guard count for {prefix} changed: {actual} != {expected}")
+    require(sum(inherited.values()) == 107, "the inherited baseline must stay at 107")
+    passed("T-W2-04-17 all 107 inherited guards still ran and still pass unchanged")
+
+
+async def test_w2_04_concurrency_and_compression(client: httpx.AsyncClient) -> None:
+    """T-W2-04-18..20: per-session locking granularity, batch atomicity, compression rev."""
+    begin("T-W2-04-18")
+    # ---- 18. different sessions never serialize against each other ---------
+    await _w204_reset_tables()
+    sid_a, sid_b = "w204-par-a", "w204-par-b"
+    await _seed_conversation(sid_a)
+    await _seed_conversation(sid_b)
+    reached_a = asyncio.Event()
+    release_a = asyncio.Event()
+    original_status = database._tombstone_status_tx
+
+    async def _hold_a(conn, session_id, *args, **kwargs):
+        outcome = await original_status(conn, session_id, *args, **kwargs)
+        if session_id == sid_a:
+            reached_a.set()
+            await release_a.wait()
+        return outcome
+
+    with patch.object(database, "_tombstone_status_tx", _hold_a):
+        writer_a = asyncio.create_task(
+            database.append_turn_events_atomic(sid_a, "u", "a", "m", turn_key="pk"))
+        result_b, over_locked = None, False
+        try:
+            await asyncio.wait_for(reached_a.wait(), timeout=15)
+            try:
+                # B must finish while A still holds its own session lock.  If ordinary writes
+                # took the GLOBAL exclusive lock, or shared one session key, this would hang.
+                result_b = await asyncio.wait_for(
+                    database.append_turn_events_atomic(sid_b, "u", "a", "m", turn_key="pk"),
+                    timeout=8,
+                )
+            except asyncio.TimeoutError:
+                over_locked = True
+        finally:
+            # 同 T-9：先放行 A，再断言。A 还握着连接和未结事务时抛断言会变成挂起。
+            release_a.set()
+            await asyncio.wait_for(writer_a, timeout=15)
+        require(not over_locked, "session B blocked behind session A: ordinary writes are over-locking")
+        require(result_b.get("ok") is True, f"session B failed while A was held: {result_b}")
+    require(await _pool_fetchval(
+        "SELECT COUNT(*) FROM conversations WHERE session_id = $1", sid_b) == 2,
+        "session B's turn did not land")
+    passed("T-W2-04-18 ordinary writes lock per session, so unrelated sessions never queue")
+    begin("T-W2-04-19")
+
+    # ---- 19. memory batches are atomic and take no outward calls under lock -
+    await _w204_reset_tables()
+    await _truncate("memories")
+    batch_sid = "w204-batch"
+    await _seed_conversation(batch_sid, events=[("user", "batch-body", "bk")])
+    snapshot = await database.snapshot_recent_conversation(limit=20)
+    await _pool_execute(
+        """
+        CREATE OR REPLACE FUNCTION w204_fail_second_memory() RETURNS trigger AS $fn$
+        BEGIN
+            IF NEW.content = 'w204-batch-second'
+            THEN RAISE EXCEPTION 'W2_04_INJECTED_BATCH_FAILURE'; END IF;
+            RETURN NEW;
+        END; $fn$ LANGUAGE plpgsql
+        """
+    )
+    await _pool_execute("DROP TRIGGER IF EXISTS w204_fail_second_memory_trg ON memories")
+    await _pool_execute(
+        "CREATE TRIGGER w204_fail_second_memory_trg BEFORE INSERT ON memories "
+        "FOR EACH ROW EXECUTE FUNCTION w204_fail_second_memory()"
+    )
+    outward_calls = []
+
+    async def _forbidden_outward(*args, **kwargs):
+        outward_calls.append("outward")
+        raise AssertionError("an outward call was made while holding the save locks")
+
+    async def _save_batch(conn):
+        await database._insert_memory_tx(conn, content="w204-batch-first", importance=5,
+                                         source_session=batch_sid)
+        await database._insert_memory_tx(conn, content="w204-batch-second", importance=5,
+                                         source_session=batch_sid)
+        return "saved"
+
+    pool = await database.get_pool()
+    try:
+        with patch.object(database, "get_embedding", _forbidden_outward):
+            failed = False
+            try:
+                async with pool.acquire() as conn:
+                    async with conn.transaction():
+                        await database.save_if_sources_unchanged(conn, snapshot, _save_batch)
+            except Exception as exc:
+                failed = True
+                require("W2_04_INJECTED_BATCH_FAILURE" in str(exc),
+                        f"the batch failed for an unexpected reason: {exc}")
+        require(failed, "the injected batch failure did not propagate")
+        require(not outward_calls, "an embedding call happened inside the locked save")
+        require(await _pool_fetchval(
+            "SELECT COUNT(*) FROM memories WHERE content LIKE 'w204-batch-%'") == 0,
+            "the first memory of a failed batch survived: the batch is not atomic")
+        passed("T-W2-04-19 memory batches commit all-or-nothing with no outward calls under lock")
+        begin("T-W2-04-20")
+    finally:
+        await _pool_execute("DROP TRIGGER IF EXISTS w204_fail_second_memory_trg ON memories")
+        await _pool_execute("DROP FUNCTION IF EXISTS w204_fail_second_memory()")
+
+    # ---- 20. compression summaries follow the source revision --------------
+    await _w204_reset_tables()
+    comp_sid = "w204-comp"
+    await _seed_conversation(
+        comp_sid,
+        messages=[("w204-comp-u1", "user", "u1", "ck1"),
+                  ("w204-comp-a1", "assistant", "a1", "ck1"),
+                  ("w204-comp-u2", "user", "u2", "ck2")],
+        events=[("user", "u1", "ck1"), ("assistant", "a1", "ck1")],
+        summaries=1,
+    )
+    await _seed_divider(comp_sid, "w204-comp-d1", summary="auto-comp")
+    await _seed_divider(comp_sid, "w204-comp-h1", summary="handoff-comp", handoff=True)
+
+    conv = await client.get(f"/sync/conversations/{comp_sid}")
+    require(conv.status_code == 200, "reading the conversation failed")
+    rev_before = conv.json().get("source_rev")
+    require(rev_before == 0, f"a untouched conversation must report source_rev 0, got {rev_before}")
+
+    response = await client.delete(f"/sync/conversations/{comp_sid}/messages/w204-comp-a1")
+    rev_after = response.json()["source_rev"]
+    require(rev_after == rev_before + 1, f"the delete must advance the rev: {rev_before} -> {rev_after}")
+    require(await _pool_fetchval(
+        "SELECT COUNT(*) FROM compression_summaries WHERE conversation_id = $1", comp_sid) == 0,
+        "the delete must clear the internal compression summaries")
+    require(await _pool_fetchval(
+        "SELECT EXISTS(SELECT 1 FROM chat_messages WHERE id = 'w204-comp-h1')"),
+        "the handoff divider must survive")
+
+    # a summary computed from the pre-delete material is refused
+    response = await client.post("/admin/compression-summary", json={
+        "conversation_id": comp_sid, "summary": "stale-summary",
+        "msg_count": 2, "expected_source_rev": rev_before,
+    })
+    require(response.status_code == 409 and response.json() == {
+        "error": "对话素材已变化", "code": "sources_changed"},
+        f"a stale compression summary must be refused with 409: {response.status_code} {response.text}")
+    require(await _pool_fetchval(
+        "SELECT COUNT(*) FROM compression_summaries WHERE conversation_id = $1", comp_sid) == 0,
+        "a refused summary still wrote a row")
+
+    # an auto-compression divider carrying the stale rev is refused the same way
+    response = await client.put(f"/sync/conversations/{comp_sid}/messages/w204-comp-d9", json={
+        "role": "divider", "content": "", "summary": "stale-divider",
+        "summarySourceRev": rev_before,
+    })
+    require(response.status_code == 409 and response.json().get("code") == "sources_changed",
+            f"a stale auto divider must be refused: {response.status_code} {response.text}")
+    response = await client.put(f"/sync/conversations/{comp_sid}/messages/w204-comp-d8", json={
+        "role": "divider", "content": "", "summary": "no-rev-divider",
+    })
+    require(response.status_code == 409,
+            f"an auto divider without a source rev must be refused: {response.status_code}")
+    # True == 1 in Python: a bool must never be accepted as a revision number.
+    response = await client.put(f"/sync/conversations/{comp_sid}/messages/w204-comp-d6", json={
+        "role": "divider", "content": "", "summary": "bool-rev", "summarySourceRev": True})
+    require(response.status_code == 409,
+            f"a boolean source rev must be refused, not silently read as 1: {response.status_code}")
+    response = await client.put(f"/sync/conversations/{comp_sid}", json={"title": "t", "messages": [
+        {"id": "w204-comp-d5", "role": "divider", "content": "", "summary": "bool-rev",
+         "summarySourceRev": True}]})
+    require("w204-comp-d5" in (response.json().get("skipped_stale_summaries") or []),
+            f"the batch channel must refuse a boolean rev too: {response.text}")
+
+    # recomputing against the current rev works
+    response = await client.post("/admin/compression-summary", json={
+        "conversation_id": comp_sid, "summary": "fresh-summary",
+        "msg_count": 1, "expected_source_rev": rev_after,
+    })
+    require(response.status_code == 200,
+            f"a summary at the current rev must be accepted: {response.status_code} {response.text}")
+
+    # once the conversation itself is gone, both channels are 410
+    await client.delete(f"/sync/conversations/{comp_sid}")
+    response = await client.post("/admin/compression-summary", json={
+        "conversation_id": comp_sid, "summary": "after-delete",
+        "msg_count": 1, "expected_source_rev": rev_after + 1,
+    })
+    require(response.status_code == 410, f"summaries for a deleted conversation must be 410: {response.status_code}")
+    response = await client.put(f"/sync/conversations/{comp_sid}/messages/w204-comp-d7", json={
+        "role": "divider", "content": "", "summary": "after-delete", "summarySourceRev": rev_after + 1,
+    })
+    require(response.status_code == 410, f"dividers for a deleted conversation must be 410: {response.status_code}")
+    passed("T-W2-04-20 compression copies are purged, version-gated, and dead after deletion")
+
+
+async def test_w2_04_consistent_reads(client: httpx.AsyncClient) -> None:
+    """T-W2-04-21, 26: reads that feed Chat and handoff must come from one snapshot."""
+    begin("T-W2-04-21")
+    # ---- 21. sync_get_conversation: never "pre-delete body + post-delete rev" ----
+    # That one combination is the dangerous one: Chat compresses the stale body, stamps it
+    # with the fresh rev, and the server's 409 check waves the result through.
+    await _w204_reset_tables()
+    snap_sid = "w204-readsnap"
+    await _seed_conversation(
+        snap_sid,
+        messages=[("w204-rs-u1", "user", "body-u1", "rk1"),
+                  ("w204-rs-a1", "assistant", "body-a1", "rk1")],
+        events=[("user", "body-u1", "rk1"), ("assistant", "body-a1", "rk1")],
+    )
+    original_rev_tx = database._source_rev_tx
+    fired = []
+
+    async def _delete_before_rev(conn, session_id):
+        # Runs inside the real read, after the messages are already in hand.
+        if session_id == snap_sid and not fired:
+            fired.append(True)
+            await database.sync_delete_message(snap_sid, "w204-rs-a1")
+        return await original_rev_tx(conn, session_id)
+
+    with patch.object(database, "_source_rev_tx", _delete_before_rev):
+        result = await database.sync_get_conversation(snap_sid)
+    require(fired, "the read-order hook never fired; _source_rev_tx is not the rev seam")
+    require(result is not None, "the conversation vanished from a read that should be a snapshot")
+    body_ids = sorted(m["id"] for m in result["messages"])
+    stale_body = "w204-rs-a1" in body_ids
+    fresh_rev = result["source_rev"] >= 1
+    require(not (stale_body and fresh_rev),
+            f"read returned pre-delete body with post-delete rev: ids={body_ids} rev={result['source_rev']}")
+
+    # a stamped session reads as absent even while its directory row lingers
+    ghost = "w204-read-ghost"
+    await _pool_execute(
+        "INSERT INTO chat_conversations (id, title) VALUES ($1, 'ghost')", ghost)
+    await _pool_execute(
+        "INSERT INTO session_tombstones (session_id) VALUES ($1)", ghost)
+    require(await database.sync_get_conversation(ghost) is None,
+            "a stamped conversation must read as absent, not hand its body back out")
+    passed("T-W2-04-21 conversation reads take body and revision from one snapshot")
+    begin("T-W2-04-26")
+
+    # ---- 26. handoff never carries a deleted conversation's summary forward ----
+    await _w204_reset_tables()
+    hand_sid = "w204-handoff-src"
+    await _seed_conversation(
+        hand_sid,
+        messages=[("w204-h-u1", "user", "h-u1", "hk1"),
+                  ("w204-h-a1", "assistant", "h-a1", "hk1"),
+                  ("w204-h-u2", "user", "h-u2", "hk2"),
+                  ("w204-h-a2", "assistant", "h-a2", "hk2")],
+        summaries=1,
+    )
+    original_msgs_tx = database._handoff_messages_tx
+    hand_fired = []
+
+    async def _delete_before_messages(conn, conv_id):
+        # Runs inside the real read, after the compression summary is already in hand.
+        if conv_id == hand_sid and not hand_fired:
+            hand_fired.append(True)
+            await database.sync_delete_conversation(hand_sid)
+        return await original_msgs_tx(conn, conv_id)
+
+    with patch.object(database, "_handoff_messages_tx", _delete_before_messages):
+        data = await database.get_handoff_data(hand_sid, tail_count=6)
+    require(hand_fired, "the handoff hook never fired; _handoff_messages_tx is not the seam")
+    if data is not None:
+        require(not (data["comp_summary"] and not data["all_messages"]),
+                "handoff returned a deleted conversation's summary with no messages behind it")
+        require(not (data["comp_summary"] or data["divider_summary"]) or data["all_messages"],
+                "handoff carried a summary whose source messages are gone")
+
+    # an already-stamped source hands back nothing at all
+    require(await database.get_handoff_data(hand_sid, tail_count=6) is None,
+            "a deleted conversation must never be a handoff source")
+    passed("T-W2-04-26 handoff reads one snapshot and refuses a deleted source")
+
+
+async def test_w2_04_turn_stamps_and_late_writes(client: httpx.AsyncClient) -> None:
+    """T-W2-04-22..24, 28: turn stamps, delete-before-put, divider copies, non-chat roles."""
+    begin("T-W2-04-22")
+    # ---- 22. an emptied turn is closed to every write channel --------------
+    await _w204_reset_tables()
+    tsid = "w204-turnstamp-all"
+    await _seed_conversation(
+        tsid,
+        messages=[("w204-ts-u1", "user", "u1", "tk1"), ("w204-ts-a1", "assistant", "a1", "tk1"),
+                  ("w204-ts-u2", "user", "u2", "tk2")],
+        events=[("user", "u1", "tk1"), ("assistant", "a1", "tk1"), ("user", "u2", "tk2")],
+    )
+    await client.delete(f"/sync/conversations/{tsid}/messages/w204-ts-u1")
+    await client.delete(f"/sync/conversations/{tsid}/messages/w204-ts-a1")
+    require(await _pool_fetchval(
+        "SELECT EXISTS(SELECT 1 FROM turn_tombstones WHERE session_id = $1 AND turn_key = 'tk1')", tsid),
+        "emptying the turn must stamp it before this guard can mean anything")
+
+    # a brand-new message id reusing the dead turn key is refused
+    response = await client.put(f"/sync/conversations/{tsid}/messages/w204-ts-a1-new",
+                                json={"role": "assistant", "content": "back?", "turnKey": "tk1"})
+    require(response.status_code == 410 and response.json().get("code") == "turn_deleted",
+            f"a new id on a stamped turn must be 410/turn_deleted: {response.status_code} {response.text}")
+    require(not await _pool_fetchval(
+        "SELECT EXISTS(SELECT 1 FROM chat_messages WHERE id = 'w204-ts-a1-new')"),
+        "a refused turn write still landed")
+
+    # full replace drops only the dead turn's rows and names them
+    response = await client.put(f"/sync/conversations/{tsid}", json={"title": "t", "messages": [
+        {"id": "w204-ts-a1-x", "role": "assistant", "content": "dead turn", "turnKey": "tk1"},
+        {"id": "w204-ts-u2", "role": "user", "content": "u2", "turnKey": "tk2"},
+    ]})
+    require(response.status_code == 200, f"full replace must stay 200: {response.text}")
+    require("w204-ts-a1-x" in (response.json().get("skipped_deleted_messages") or []),
+            f"the replace must name the rows it dropped for a dead turn: {response.text}")
+    surviving = sorted(r["id"] for r in await _pool_fetch(
+        "SELECT id FROM chat_messages WHERE conversation_id = $1", tsid))
+    require(surviving == ["w204-ts-u2"],
+            f"the dead turn came back through a full replace: {surviving}")
+
+    # import drops the same rows, keeps the rest, and reports a distinct code
+    response = await client.post("/sync/import", json={"projects": [], "conversations": [
+        {"id": tsid, "title": "t", "messages": [
+            {"id": "w204-ts-a1-y", "role": "assistant", "content": "dead turn", "turnKey": "tk1"},
+            {"id": "w204-ts-u2", "role": "user", "content": "u2", "turnKey": "tk2"},
+        ]}]})
+    require(response.status_code == 200, "import must stay 200 for per-row drops")
+    body = response.json()
+    turn_rejects = [d for d in body["rejected_details"] if d.get("code") == "turn_deleted"]
+    require(turn_rejects and "w204-ts-a1-y" in turn_rejects[0].get("message_ids", []),
+            f"import must name the rows it dropped for a dead turn: {body['rejected_details']}")
+    require(not await _pool_fetchval(
+        "SELECT EXISTS(SELECT 1 FROM chat_messages WHERE id = 'w204-ts-a1-y')"),
+        "import resurrected a stamped turn")
+
+    # the closed-gate legacy path knows about turn stamps too
+    result = await database.append_legacy_turn_if_not_deleted(tsid, "u", "a", "m", turn_key="tk1")
+    require(result.get("path") == "tombstoned" and result.get("reason") == "turn",
+            f"the legacy path ignored a turn stamp: {result}")
+    require(await _pool_fetchval(
+        "SELECT COUNT(*) FROM conversations WHERE session_id = $1 AND turn_key = 'tk1'", tsid) == 0,
+        "a refused legacy write left ledger rows on a dead turn")
+    main_source = (ROOT / "main.py").read_text(encoding="utf-8")
+    legacy_call = re.search(r"append_legacy_turn_if_not_deleted\((?:[^)]|\n)*?\)", main_source, re.S)
+    require(legacy_call and "turn_key" in legacy_call.group(0),
+            "main.py calls the legacy path without turn_key, so turn stamps cannot be seen there")
+    passed("T-W2-04-22 an emptied turn is closed to single PUT, full replace, import and legacy")
+    begin("T-W2-04-23")
+
+    # ---- 23. DELETE that arrives before the PUT still closes the id -------
+    await _w204_reset_tables()
+    race_sid = "w204-delete-first"
+    await _seed_conversation(race_sid, messages=[("w204-df-keep", "user", "keep", "dk")])
+    response = await client.delete(f"/sync/conversations/{race_sid}/messages/w204-df-inflight")
+    require(response.status_code == 200, "deleting an unknown id must not error")
+    body = response.json()
+    require(body["deleted"] is False,
+            f"deleting an id the server never saw still reports deleted=false: {body}")
+    require(await _pool_fetchval(
+        "SELECT EXISTS(SELECT 1 FROM message_tombstones WHERE session_id = $1 AND message_id = $2)",
+        race_sid, "w204-df-inflight"),
+        "a delete that lost the race to its own PUT must still close the id forever")
+    response = await client.put(f"/sync/conversations/{race_sid}/messages/w204-df-inflight",
+                                json={"role": "user", "content": "the message that was in flight"})
+    require(response.status_code == 410 and response.json().get("code") == "message_deleted",
+            f"the in-flight PUT must be refused: {response.status_code} {response.text}")
+    require(await _pool_fetchval(
+        "SELECT COUNT(*) FROM chat_messages WHERE conversation_id = $1", race_sid) == 1,
+        "the in-flight PUT landed anyway")
+    passed("T-W2-04-23 a delete arriving before its own message still closes that id")
+    begin("T-W2-04-24")
+
+    # ---- 24. compression copies cannot be re-seeded by an old device ------
+    await _w204_reset_tables()
+    dsid = "w204-divider-stamp"
+    await _seed_conversation(
+        dsid,
+        messages=[("w204-dv-u1", "user", "u1", "dk1"), ("w204-dv-a1", "assistant", "a1", "dk1")],
+        events=[("user", "u1", "dk1"), ("assistant", "a1", "dk1")],
+        summaries=1,
+    )
+    await _seed_divider(dsid, "w204-dv-auto", summary="auto-summary")
+    await _seed_divider(dsid, "w204-dv-auto2", summary="auto-summary-2")
+    await _seed_divider(dsid, "w204-dv-hand", summary="handoff-summary", handoff=True)
+    response = await client.delete(f"/sync/conversations/{dsid}/messages/w204-dv-a1")
+    rev_now = response.json()["source_rev"]
+    require(response.json()["purged"]["compression_dividers"] == 2,
+            f"every auto divider must be counted, not just the first: {response.json()}")
+    for divider_id in ("w204-dv-auto", "w204-dv-auto2"):
+        require(await _pool_fetchval(
+            "SELECT EXISTS(SELECT 1 FROM message_tombstones WHERE session_id = $1 AND message_id = $2)",
+            dsid, divider_id),
+            f"every purged auto divider must be stamped, {divider_id} was not")
+    require(not await _pool_fetchval(
+        "SELECT EXISTS(SELECT 1 FROM message_tombstones WHERE session_id = $1 AND message_id = $2)",
+        dsid, "w204-dv-hand"),
+        "handoff dividers are not compression copies and must not be stamped")
+
+    # all three channels refuse the old divider id
+    response = await client.put(f"/sync/conversations/{dsid}/messages/w204-dv-auto", json={
+        "role": "divider", "content": "", "summary": "auto-summary", "summarySourceRev": rev_now})
+    require(response.status_code == 410 and response.json().get("code") == "message_deleted",
+            f"the purged divider came back through a single PUT: {response.status_code}")
+    response = await client.put(f"/sync/conversations/{dsid}", json={"title": "t", "messages": [
+        {"id": "w204-dv-auto", "role": "divider", "content": "", "summary": "auto-summary",
+         "summarySourceRev": rev_now}]})
+    require("w204-dv-auto" in (response.json().get("skipped_deleted_messages") or []),
+            f"the purged divider came back through a full replace: {response.text}",
+            tag="T-W2-04-24-replace")
+    response = await client.post("/sync/import", json={"projects": [], "conversations": [
+        {"id": dsid, "title": "t", "messages": [
+            {"id": "w204-dv-auto", "role": "divider", "content": "", "summary": "auto-summary",
+             "summarySourceRev": rev_now}]}]})
+    require(not await _pool_fetchval(
+        "SELECT EXISTS(SELECT 1 FROM chat_messages WHERE id = 'w204-dv-auto')"),
+        "the purged divider came back through import", tag="T-W2-04-24-import")
+
+    # a stale-rev auto divider under a fresh id is dropped and named
+    response = await client.put(f"/sync/conversations/{dsid}", json={"title": "t", "messages": [
+        {"id": "w204-dv-stale", "role": "divider", "content": "", "summary": "stale",
+         "summarySourceRev": rev_now - 1},
+        {"id": "w204-dv-norev", "role": "divider", "content": "", "summary": "no rev"},
+        {"id": "w204-dv-fresh", "role": "divider", "content": "", "summary": "fresh",
+         "summarySourceRev": rev_now},
+    ]})
+    stale_named = response.json().get("skipped_stale_summaries") or []
+    require(sorted(stale_named) == ["w204-dv-norev", "w204-dv-stale"],
+            f"the replace must drop and name stale/rev-less auto dividers: {response.text}")
+    require(await _pool_fetchval(
+        "SELECT EXISTS(SELECT 1 FROM chat_messages WHERE id = 'w204-dv-fresh')"),
+        "an auto divider carrying the current rev must still be accepted")
+    response = await client.post("/sync/import", json={"projects": [], "conversations": [
+        {"id": dsid, "title": "t", "messages": [
+            {"id": "w204-dv-imp-stale", "role": "divider", "content": "", "summary": "stale",
+             "summarySourceRev": rev_now - 1}]}]})
+    stale_rejects = [d for d in response.json()["rejected_details"]
+                     if d.get("code") == "sources_changed"]
+    require(stale_rejects and "w204-dv-imp-stale" in stale_rejects[0].get("message_ids", []),
+            f"import must name stale auto dividers: {response.json()['rejected_details']}")
+    passed("T-W2-04-24 purged and stale compression copies cannot be re-seeded by any channel")
+    begin("T-W2-04-28")
+
+    # ---- 28. deleting a divider must not wipe the whole ledger ------------
+    await _w204_reset_tables()
+    nsid = "w204-divider-role"
+    await _seed_conversation(
+        nsid,
+        messages=[("w204-nr-u1", "user", "u1", "nk1"), ("w204-nr-a1", "assistant", "a1", "nk1"),
+                  ("w204-nr-u2", "user", "u2", "nk2"), ("w204-nr-a2", "assistant", "a2", "nk2")],
+        events=[("user", "u1", "nk1"), ("assistant", "a1", "nk1"),
+                ("user", "u2", "nk2"), ("assistant", "a2", "nk2")],
+        summaries=1,
+    )
+    await _seed_divider(nsid, "w204-nr-auto", summary="auto")
+    await _seed_divider(nsid, "w204-nr-hand", summary="handoff", handoff=True)
+    for divider_id in ("w204-nr-auto", "w204-nr-hand"):
+        before = await _pool_fetchval(
+            "SELECT COUNT(*) FROM conversations WHERE session_id = $1", nsid)
+        rev_before = await _source_rev(nsid)
+        response = await client.delete(f"/sync/conversations/{nsid}/messages/{divider_id}")
+        require(response.status_code == 200, f"deleting {divider_id} failed")
+        body = response.json()
+        require(body["ledger_mode"] == "not_applicable",
+                f"a divider delete must not touch the ledger at all: {body}")
+        require(body["ledger_events_deleted"] == 0, f"a divider delete purged ledger rows: {body}")
+        require(await _pool_fetchval(
+            "SELECT COUNT(*) FROM conversations WHERE session_id = $1", nsid) == before == 4,
+            "deleting a divider wiped the conversation's ledger")
+        require(not await _pool_fetchval(
+            "SELECT EXISTS(SELECT 1 FROM turn_tombstones WHERE session_id = $1)", nsid),
+            "deleting a divider stamped a turn that is still alive")
+        require(await _source_rev(nsid) == rev_before + 1,
+                "a divider delete must still advance the source rev")
+        require(await _pool_fetchval(
+            "SELECT EXISTS(SELECT 1 FROM message_tombstones WHERE session_id = $1 AND message_id = $2)",
+            nsid, divider_id), "a deleted divider id must still be stamped")
+    require(await _pool_fetchval(
+        "SELECT COUNT(*) FROM compression_summaries WHERE conversation_id = $1", nsid) == 0,
+        "a divider delete must still clear the internal compression summaries")
+    passed("T-W2-04-28 deleting a divider stamps and purges copies but never wipes the ledger")
+
+
+async def test_w2_04_receipts_and_contracts(client: httpx.AsyncClient) -> None:
+    """T-W2-04-27, 29, 30, 33, 34: restore three-state, fixed texts, import receipts, contracts."""
+    begin("T-W2-04-27")
+    # ---- 27. backup restore honours the three-state messages contract -----
+    await _w204_reset_tables()
+    empty_sid, keep_sid = "w204-restore-empty", "w204-restore-keep"
+    for sid in (empty_sid, keep_sid):
+        await _seed_conversation(sid, messages=[(f"{sid}-m1", "user", "old body", "rk")])
+    response = await client.post("/sync/import-backup", files={"file": (
+        "backup.zip", _backup_zip([
+            {"id": empty_sid, "title": "emptied", "messages": []},
+            {"id": keep_sid, "title": "metadata only"},
+        ]), "application/zip")})
+    require(response.status_code == 200, f"backup restore failed: {response.text}")
+    require(await _pool_fetchval(
+        "SELECT COUNT(*) FROM chat_messages WHERE conversation_id = $1", empty_sid) == 0,
+        "an explicit empty array is an authoritative empty snapshot: the old body must go")
+    require(await _pool_fetchval(
+        "SELECT COUNT(*) FROM chat_messages WHERE conversation_id = $1", keep_sid) == 1,
+        "a missing messages key means metadata-only: existing messages must survive")
+    passed("T-W2-04-27 backup restore keeps the absent / empty / present three-state contract")
+    begin("T-W2-04-29")
+
+    # ---- 29. fixed crash texts and no message body in any observable ------
+    await _w204_reset_tables()
+    secret_body = f"W204_BODY_{uuid.uuid4().hex}"
+    leak_sid = "w204-body-leak"
+    await _seed_conversation(leak_sid, messages=[("w204-bl-m1", "user", secret_body, "bk")],
+                             events=[("user", secret_body, "bk")], summaries=1)
+    out, err = io.StringIO(), io.StringIO()
+    with redirect_stdout(out), redirect_stderr(err):
+        r_msg = await client.delete(f"/sync/conversations/{leak_sid}/messages/w204-bl-m1")
+        r_write = await database.append_turn_events_atomic(
+            leak_sid, secret_body, secret_body, "m", turn_key="bk", reset_generation=-1)
+        r_conv = await client.delete(f"/sync/conversations/{leak_sid}")
+        r_410 = await client.post("/sync/conversations", json={"id": leak_sid, "title": secret_body})
+        r_409 = await client.post("/admin/compression-summary", json={
+            "conversation_id": leak_sid, "summary": secret_body, "expected_source_rev": 0})
+        r_reset = await _reset_all(client)
+    logs = out.getvalue() + err.getvalue()
+    require(r_write.get("path") == "tombstoned", f"stale-generation write should be refused: {r_write}")
+    for label, text in (("message delete", r_msg.text), ("conversation delete", r_conv.text),
+                        ("410", r_410.text), ("409", r_409.text), ("reset", r_reset.text),
+                        ("logs", logs)):
+        require(secret_body not in text, f"{label} leaked a message body")
+
+    # the reset crash face uses its own fixed text
+    await _pool_execute(
+        """
+        CREATE OR REPLACE FUNCTION w204_fail_reset() RETURNS trigger AS $fn$
+        BEGIN RAISE EXCEPTION 'W2_04_INJECTED_RESET_FAILURE'; END; $fn$ LANGUAGE plpgsql
+        """
+    )
+    await _pool_execute("DROP TRIGGER IF EXISTS w204_fail_reset_trg ON chat_projects")
+    await _seed_conversation("w204-reset-victim")
+    await _pool_execute("INSERT INTO chat_projects (id, name) VALUES ('w204-reset-p', 'p')")
+    await _pool_execute(
+        "CREATE TRIGGER w204_fail_reset_trg BEFORE DELETE ON chat_projects "
+        "FOR EACH ROW EXECUTE FUNCTION w204_fail_reset()")
+    try:
+        capture, err_capture = io.StringIO(), io.StringIO()
+        with redirect_stdout(capture), redirect_stderr(err_capture):
+            response = await _reset_all(client)
+        require(response.status_code == 500, f"injected reset failure must be 500: {response.status_code}")
+        require(response.json() == {"error": "重置失败"},
+                f"reset crash must use its own fixed message: {response.text}")
+        crash_logs = capture.getvalue() + err_capture.getvalue()
+        require("W2_04_INJECTED_RESET_FAILURE" not in (response.text + crash_logs),
+                "the injected reset exception leaked out")
+        require(await _pool_fetchval(
+            "SELECT COUNT(*) FROM chat_conversations WHERE id = 'w204-reset-victim'") == 1,
+            "a failed reset must roll back entirely")
+    finally:
+        await _pool_execute("DROP TRIGGER IF EXISTS w204_fail_reset_trg ON chat_projects")
+        await _pool_execute("DROP FUNCTION IF EXISTS w204_fail_reset()")
+    passed("T-W2-04-29 crash faces are fixed per route and no message body ever escapes")
+    begin("T-W2-04-30")
+
+    # ---- 30. import against a live conversation holding a stamped id ------
+    await _w204_reset_tables()
+    live = "w204-import-live"
+    await _seed_conversation(live, messages=[("w204-il-m1", "user", "m1", "ik1"),
+                                             ("w204-il-m2", "assistant", "m2", "ik1"),
+                                             ("w204-il-m3", "user", "m3", "ik2")],
+                             events=[("user", "m1", "ik1"), ("assistant", "m2", "ik1")])
+    await client.delete(f"/sync/conversations/{live}/messages/w204-il-m2")
+    response = await client.post("/sync/import", json={"projects": [], "conversations": [
+        {"id": live, "title": "live", "messages": [
+            {"id": "w204-il-m1", "role": "user", "content": "m1", "turnKey": "ik1"},
+            {"id": "w204-il-m2", "role": "assistant", "content": "m2", "turnKey": "ik1"},
+            {"id": "w204-il-m3", "role": "user", "content": "m3", "turnKey": "ik2"},
+        ]}]})
+    require(response.status_code == 200, f"import must stay 200: {response.text}")
+    body = response.json()
+    surviving = sorted(r["id"] for r in await _pool_fetch(
+        "SELECT id FROM chat_messages WHERE conversation_id = $1", live))
+    require(surviving == ["w204-il-m1", "w204-il-m3"],
+            f"import re-seeded a stamped message id: {surviving}")
+    require(body["counts"]["messages"]["success"] == 2,
+            f"import must count only the rows it actually wrote: {body['counts']}")
+    named = [d for d in body["rejected_details"]
+             if d.get("type") == "message" and d.get("code") == "message_deleted"]
+    require(named and named[0]["id"] == live and named[0].get("message_ids") == ["w204-il-m2"],
+            f"import must name the stamped id it dropped: {body['rejected_details']}")
+    require(live in body["imported_conversation_ids"],
+            "a live conversation must still import even when one of its ids is stamped")
+    passed("T-W2-04-30 import drops stamped ids by name and still imports the live conversation")
+    begin("T-W2-04-33")
+
+    # ---- 33. un-stamping lives in exactly one function (AST, not regex) ---
+    db_source = (ROOT / "database.py").read_text(encoding="utf-8")
+    tree = ast.parse(db_source)
+    unstamp_marks = ("DELETE FROM session_tombstones", "DELETE FROM turn_tombstones",
+                     "DELETE FROM message_tombstones")
+    owners = {}
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        for inner in ast.walk(node):
+            if isinstance(inner, ast.Constant) and isinstance(inner.value, str):
+                for mark in unstamp_marks:
+                    if mark in inner.value:
+                        owners.setdefault(mark, set()).add(node.name)
+    require(set(owners) == set(unstamp_marks),
+            f"not every stamp table has an un-stamp path: {sorted(owners)}")
+    for mark, names in owners.items():
+        # A nested helper would show up under its parent too; the innermost owner is what counts.
+        require(names <= {"_restore_conversation_tx"},
+                f"'{mark}' is reachable outside _restore_conversation_tx: {sorted(names)}")
+    passed("T-W2-04-33 un-stamping exists in exactly one function, proven by AST not regex")
+    begin("T-W2-04-34")
+
+    # ---- 34. a blank summary does not make a divider a compression copy ---
+    await _w204_reset_tables()
+    bsid = "w204-blank-divider"
+    await _seed_conversation(bsid, messages=[("w204-bd-u1", "user", "u1", "bk1"),
+                                             ("w204-bd-a1", "assistant", "a1", "bk1")],
+                             events=[("user", "u1", "bk1"), ("assistant", "a1", "bk1")])
+    await _pool_execute(
+        "INSERT INTO chat_messages (id, conversation_id, role, content, summary) "
+        "VALUES ('w204-bd-blank', $1, 'divider', '', '   ')", bsid)
+    await client.delete(f"/sync/conversations/{bsid}/messages/w204-bd-a1")
+    require(await _pool_fetchval(
+        "SELECT EXISTS(SELECT 1 FROM chat_messages WHERE id = 'w204-bd-blank')"),
+        "a divider whose summary is only whitespace is not a compression copy and must survive")
+    response = await client.put(f"/sync/conversations/{bsid}/messages/w204-bd-blank2", json={
+        "role": "divider", "content": "", "summary": "   "})
+    require(response.status_code == 200,
+            f"a blank-summary divider must not be forced to carry a source rev: {response.text}")
+    passed("T-W2-04-34 the auto-divider test agrees between the delete SQL and the write guard")
+
+
+async def test_w2_04_real_entrypoints(client: httpx.AsyncClient) -> None:
+    """T-W2-04-25, 31, 32: no version-less extraction, legacy locking, real recompute paths."""
+    begin("T-W2-04-25")
+    # ---- 25. extraction without persisted material is abandoned ----------
+    await _w204_reset_tables()
+    await _truncate("memories")
+    out = io.StringIO()
+    with redirect_stdout(out), redirect_stderr(io.StringIO()):
+        result = await app_module._extract_and_save_batch(
+            session_id="w204-nomaterial", limit=20, existing_contents=[], cat_names=[],
+            emotion_level="normal", project_id=None, model_override=None, prompt_override=None,
+        )
+    require(result[0] == "abandoned",
+            f"an extraction with no persisted material must be abandoned, got {result[0]}")
+    require("no_persisted_material" in out.getvalue(),
+            f"the abandoned extraction must say why: {out.getvalue()[:200]!r}")
+    require(await _pool_fetchval("SELECT COUNT(*) FROM memories") == 0,
+            "an extraction with no persisted material still wrote memories")
+    main_source = (ROOT / "main.py").read_text(encoding="utf-8")
+    require("is_session_deleted" not in main_source or "no_persisted_material" in main_source,
+            "the degraded in-memory extraction branch must be gone, not patched")
+    passed("T-W2-04-25 extraction never runs on material that has no versioned source")
+    begin("T-W2-04-31")
+
+    # ---- 31. the legacy path serializes against a concurrent delete ------
+    await _w204_reset_tables()
+    lsid = "w204-legacy-race"
+    await _seed_conversation(lsid)
+    reached = asyncio.Event()
+    release = asyncio.Event()
+    original_status = database._tombstone_status_tx
+
+    async def _paused(conn, session_id, *args, **kwargs):
+        outcome = await original_status(conn, session_id, *args, **kwargs)
+        if session_id == lsid:
+            reached.set()
+            await release.wait()
+        return outcome
+
+    with patch.object(database, "_tombstone_status_tx", _paused):
+        writer = asyncio.create_task(
+            database.append_legacy_turn_if_not_deleted(lsid, "u", "a", "m"))
+        deleter = None
+        try:
+            await asyncio.wait_for(reached.wait(), timeout=15)
+            deleter = asyncio.create_task(database.sync_delete_conversation(lsid))
+            await asyncio.sleep(0.6)
+            require(not deleter.done(),
+                    "the delete did not wait for the in-flight legacy write: session lock missing")
+        finally:
+            release.set()
+            await asyncio.wait_for(writer, timeout=20)
+            if deleter is not None:
+                await asyncio.wait_for(deleter, timeout=20)
+    require(await _pool_fetchval(
+        "SELECT COUNT(*) FROM conversations WHERE session_id = $1", lsid) == 0,
+        "the legacy race left ledger rows behind")
+    require(await _has_session_tombstone(lsid), "the legacy race lost the session tombstone")
+
+    # and the closed gate really routes through the guarded legacy helper
+    await _w204_reset_tables()
+    await _set_ledger_gate(False)
+    gate_sid = "w204-legacy-gate"
+    await _seed_conversation(gate_sid)
+    await client.delete(f"/sync/conversations/{gate_sid}")
+    seen = []
+    original_legacy = database.append_legacy_turn_if_not_deleted
+
+    async def _record_legacy(session_id, *args, **kwargs):
+        seen.append(kwargs.get("turn_key"))
+        return await original_legacy(session_id, *args, **kwargs)
+
+    try:
+        with patch.object(app_module, "append_legacy_turn_if_not_deleted", _record_legacy):
+            with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                outcome = await app_module.process_memories_background(
+                    gate_sid, "u", "a", "m", turn_key="gk", reset_generation=None)
+        require(seen, "the closed gate did not route through the guarded legacy helper")
+        require(seen[0] == "gk", f"the closed gate dropped turn_key on the way: {seen}")
+        require(outcome.get("action") == "skip_tombstoned",
+                f"a stamped session must stop the closed-gate write: {outcome}")
+        require(await _pool_fetchval(
+            "SELECT COUNT(*) FROM conversations WHERE session_id = $1", gate_sid) == 0,
+            "the closed gate wrote to a stamped session")
+    finally:
+        await _set_ledger_gate(True)
+    passed("T-W2-04-31 the closed-gate legacy path locks, carries turn_key and obeys stamps")
+    begin("T-W2-04-32")
+
+    # ---- 32. recompute-once / abandon happens through the real entrypoints -
+    await _w204_reset_tables()
+    await _truncate("memories")
+    src_one, src_two = "w204-real-a", "w204-real-b"
+    for sid in (src_one, src_two):
+        await _seed_conversation(sid, events=[("user", f"body-{sid}", f"{sid}-k")])
+    calls = []
+    original_prepare = app_module._prepare_memory_batch
+
+    async def _delete_once(candidates, **kwargs):
+        calls.append(len(calls))
+        if len(calls) == 1:
+            await database.sync_delete_conversation(src_one)
+        return await original_prepare(candidates, **kwargs)
+
+    async def _fake_extract(messages, **kwargs):
+        return [{"content": "w204-real-memory", "importance": 5, "title": "t"}]
+
+    async def _no_dupe(*args, **kwargs):
+        return False, []
+
+    with patch.object(app_module, "_prepare_memory_batch", _delete_once), \
+         patch.object(app_module, "extract_memories", _fake_extract), \
+         patch.object(app_module, "check_memory_duplicate", _no_dupe), \
+         patch.object(database, "get_embedding", _none_embedding):
+        with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+            result = await app_module._extract_and_save_batch(
+                session_id=src_two, limit=20, existing_contents=[], cat_names=[],
+                emotion_level="normal", project_id=None, model_override=None,
+                prompt_override=None)
+    require(len(calls) == 2, f"a changed source must trigger exactly one recompute: {len(calls)}")
+    require(result[0] == "extract", f"the recompute must succeed on the remaining material: {result[0]}")
+    require(await _pool_fetchval(
+        "SELECT COUNT(*) FROM memories WHERE content = 'w204-real-memory'") == 1,
+        "the recomputed batch did not land")
+
+    # sources that keep changing are abandoned, not forced through
+    await _w204_reset_tables()
+    await _truncate("memories")
+    for sid in (src_one, src_two):
+        await _seed_conversation(sid, events=[("user", f"body-{sid}", f"{sid}-k")])
+    victims = [src_one, src_two]
+
+    async def _delete_every_time(candidates, **kwargs):
+        if victims:
+            await database.sync_delete_conversation(victims.pop(0))
+        return await original_prepare(candidates, **kwargs)
+
+    with patch.object(app_module, "_prepare_memory_batch", _delete_every_time), \
+         patch.object(app_module, "extract_memories", _fake_extract), \
+         patch.object(app_module, "check_memory_duplicate", _no_dupe), \
+         patch.object(database, "get_embedding", _none_embedding):
+        with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+            result = await app_module._extract_and_save_batch(
+                session_id=src_two, limit=20, existing_contents=[], cat_names=[],
+                emotion_level="normal", project_id=None, model_override=None,
+                prompt_override=None)
+    require(result[0] == "abandoned", f"sources that keep changing must be abandoned: {result[0]}")
+    require(await _pool_fetchval("SELECT COUNT(*) FROM memories") == 0,
+            "an abandoned extraction still wrote memories")
+
+    # the day page takes the same road through its real implementation
+    await _w204_reset_tables()
+    await _truncate("calendar_pages")
+    import daily_digest
+    day = "2026-08-11"
+    day_obj = date.fromisoformat(day)
+    cal_a, cal_b = "w204-day-a", "w204-day-b"
+    for sid in (cal_a, cal_b):
+        await _seed_conversation(sid)
+        await _pool_execute(
+            "INSERT INTO chat_messages (id, conversation_id, role, content, time) "
+            "VALUES ($1, $2, 'user', 'day body', $3)", f"{sid}-m1", sid, day_obj)
+    remaining = [cal_a, cal_b]
+
+    async def _render_and_delete(date_str, messages, model_override=None):
+        if remaining:
+            await database.sync_delete_conversation(remaining.pop(0))
+        return {"sections": [], "diary": "", "all_keywords": [], "summary": "s", "digest": "d"}, None, "m"
+
+    with patch.object(daily_digest, "_render_day_page", _render_and_delete):
+        with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+            page = await daily_digest._generate_day_page_impl(day)
+    require(page.get("status") == "skipped"
+            and page.get("reason") == "sources_changed_during_generation",
+            f"a day page whose sources keep changing must be skipped: {page}")
+    require(await _pool_fetchval("SELECT COUNT(*) FROM calendar_pages") == 0,
+            "a skipped day page still wrote a page")
+    passed("T-W2-04-32 recompute-once and abandon both run through the real production entrypoints")
+
+
+def _accepts(func, *names) -> bool:
+    """Does this production function already take these parameters?
+
+    The rework guards must fail on *behaviour*, never on a missing seam: on the old head
+    they call the same entrypoint without the new arguments, so the assertion below is
+    what goes red, not a TypeError on the way in.
+    """
+    try:
+        params = inspect.signature(func).parameters
+    except (TypeError, ValueError):
+        return False
+    return all(name in params for name in names)
+
+
+async def _seed_handoff_divider(target: str, mid: str, *, source_id, source_rev=0) -> None:
+    """A handoff divider in `target` that declares where it was carried over from."""
+    info = {"version": 2, "summary": "carried over"}
+    if source_id is not None:
+        info["sourceId"] = source_id
+        info["sourceRev"] = source_rev
+    await _pool_execute(
+        "INSERT INTO chat_messages (id, conversation_id, role, content, handoff_info) "
+        "VALUES ($1, $2, 'divider', '', $3)",
+        mid, target, json.dumps(info),
+    )
+
+
+async def _legacy_ledger_row(sid: str, role: str, content: str) -> None:
+    """A closed-gate legacy ledger row: no turn_key, no scope, no link."""
+    await _pool_execute(
+        "INSERT INTO conversations (session_id, role, content, model) VALUES ($1, $2, $3, 'm')",
+        sid, role, content,
+    )
+
+
+async def test_w2_04_mixed_generation_ledger(client: httpx.AsyncClient) -> None:
+    """T-W2-04-35: a keyed delete sweeps every ledger row that cannot name its own message."""
+    begin("T-W2-04-35")
+    await _w204_reset_tables()
+    sid = "w204-mixed"
+    await _seed_conversation(
+        sid,
+        messages=[("w204-mx-u1", "user", "u1", "tk1"), ("w204-mx-a1", "assistant", "a1", "tk1"),
+                  ("w204-mx-u2", "user", "u2", "tk2")],
+        # tk1's rows are W2-03 vintage: they know their turn but not which sentence they came
+        # from.  tk2's row is linked, and that is the only reason it may outlive a delete here.
+        events=[("user", "u1", "tk1"), ("assistant", "a1", "tk1"),
+                ("user", "u2", "tk2", "w204-mx-u2")],
+    )
+    # Two rows from the closed-gate era: not even a turn.
+    await _legacy_ledger_row(sid, "user", "u1")
+    await _legacy_ledger_row(sid, "assistant", "a1")
+    require(await _pool_fetchval(
+        "SELECT COUNT(*) FROM conversations WHERE session_id = $1 AND turn_key IS NULL", sid) == 2,
+        "the mixed-generation fixture did not seed its key-less rows")
+    require(await _pool_fetchval(
+        "SELECT COUNT(*) FROM conversations WHERE session_id = $1 AND source_message_id IS NULL",
+        sid) == 4,
+        "the fixture must hold both vintages of unlinked row: key-less and keyed-but-unlinked")
+
+    response = await client.delete(f"/sync/conversations/{sid}/messages/w204-mx-u1")
+    require(response.status_code == 200, f"keyed delete failed: {response.text}")
+    body = response.json()
+    require(await _pool_fetchval(
+        "SELECT COUNT(*) FROM conversations WHERE session_id = $1 AND turn_key IS NULL", sid) == 0,
+        "key-less legacy rows survived a keyed delete: they are indistinguishable, so they must go")
+    # v3.2 ruling: a turn_key is not an identity.  A W2-03-era row knows which turn it belongs
+    # to and still cannot say which sentence it holds, so it is exactly as unaccountable as a
+    # key-less one and goes with it.
+    require(await _pool_fetchval(
+        "SELECT COUNT(*) FROM conversations WHERE session_id = $1 AND turn_key = 'tk1'", sid) == 0,
+        "a keyed row that cannot name its message survived: a turn_key is not an identity")
+    require(body["ledger_mode"] == "turn+legacy_sweep",
+            f"the receipt must own up to the legacy sweep: {body}")
+    require(await _pool_fetchval(
+        "SELECT COUNT(*) FROM conversations WHERE session_id = $1 AND turn_key = 'tk2'", sid) == 1,
+        "the sweep took a linked row on another turn: those can account for themselves")
+
+    response = await client.delete(f"/sync/conversations/{sid}/messages/w204-mx-a1")
+    require(response.status_code == 200, "second keyed delete failed")
+    require(await _pool_fetchval(
+        "SELECT COUNT(*) FROM conversations WHERE session_id = $1 AND turn_key = 'tk1'", sid) == 0,
+        "the emptied turn still holds ledger rows")
+    require(await _pool_fetchval(
+        "SELECT EXISTS(SELECT 1 FROM turn_tombstones WHERE session_id = $1 AND turn_key = 'tk1')", sid),
+        "the emptied turn was not stamped")
+    require(await _pool_fetchval(
+        "SELECT COUNT(*) FROM conversations WHERE session_id = $1 AND turn_key = 'tk2'", sid) == 1,
+        "turn tk2 was damaged by the tk1 delete")
+    passed("T-W2-04-35 a keyed delete sweeps every ledger row that cannot name its message")
+
+
+async def test_w2_04_message_identity_barrier(client: httpx.AsyncClient) -> None:
+    """T-W2-04-36: a stamped message id stops the background write, per role."""
+    begin("T-W2-04-36")
+    await _w204_reset_tables()
+
+    # ---- the not-present delete does the full cleanup, not just a stamp -----
+    sid = "w204-notpresent"
+    await _seed_conversation(sid, summaries=1)
+    await _seed_divider(sid, "w204-np-auto", summary="auto")
+    await _legacy_ledger_row(sid, "user", "orphan-u")
+    response = await client.delete(f"/sync/conversations/{sid}/messages/u9")
+    require(response.status_code == 200, f"not-present delete failed: {response.text}")
+    body = response.json()
+    require(body["deleted"] is False and body["ledger_mode"] == "not_present",
+            f"a not-present delete must say so: {body}")
+    require(await _pool_fetchval(
+        "SELECT COUNT(*) FROM compression_summaries WHERE conversation_id = $1", sid) == 0,
+        "a not-present delete must still clear the compression summaries")
+    require(not await _pool_fetchval(
+        "SELECT EXISTS(SELECT 1 FROM chat_messages WHERE id = 'w204-np-auto')"),
+        "a not-present delete must still purge the auto-compression dividers")
+    require(await _pool_fetchval(
+        "SELECT COUNT(*) FROM conversations WHERE session_id = $1 AND turn_key IS NULL", sid) == 0,
+        "a not-present delete must sweep the key-less ledger rows it cannot address")
+
+    # ---- the barrier is per role, keyed on the message id ------------------
+    for role_under_test in ("user", "assistant"):
+        await _w204_reset_tables()
+        bsid = f"w204-barrier-{role_under_test}"
+        await _seed_conversation(bsid)
+        user_id, assistant_id = f"{bsid}-u9", f"{bsid}-a9"
+        doomed = user_id if role_under_test == "user" else assistant_id
+        response = await client.delete(f"/sync/conversations/{bsid}/messages/{doomed}")
+        require(response.status_code == 200, "pre-emptive delete failed")
+        require(await _pool_fetchval(
+            "SELECT EXISTS(SELECT 1 FROM message_tombstones WHERE session_id = $1 AND message_id = $2)",
+            bsid, doomed), "the pre-emptive delete did not stamp the id")
+
+        kwargs = {"turn_key": user_id}
+        if _accepts(database.append_turn_events_atomic, "user_message_id", "assistant_message_id"):
+            kwargs["user_message_id"] = user_id
+            kwargs["assistant_message_id"] = assistant_id
+        await database.append_turn_events_atomic(bsid, "u-body", "a-body", "m", **kwargs)
+        roles = sorted(r["role"] for r in await _pool_fetch(
+            "SELECT role FROM conversations WHERE session_id = $1", bsid))
+        survivor = "assistant" if role_under_test == "user" else "user"
+        require(role_under_test not in roles,
+                f"the stamped {role_under_test} message still reached the ledger: {roles}")
+        require(roles == [survivor],
+                f"only the un-stamped role may land, got {roles}")
+
+        # and the closed-gate path obeys the same barrier
+        legacy_kwargs = {"turn_key": user_id}
+        if _accepts(database.append_legacy_turn_if_not_deleted,
+                    "user_message_id", "assistant_message_id"):
+            legacy_kwargs["user_message_id"] = user_id
+            legacy_kwargs["assistant_message_id"] = assistant_id
+        await _truncate("conversations")
+        await database.append_legacy_turn_if_not_deleted(bsid, "u-body", "a-body", "m",
+                                                         **legacy_kwargs)
+        legacy_roles = sorted(r["role"] for r in await _pool_fetch(
+            "SELECT role FROM conversations WHERE session_id = $1", bsid))
+        require(role_under_test not in legacy_roles,
+                f"the closed-gate path ignored the {role_under_test} stamp: {legacy_roles}")
+
+    # ---- the link is written, and the not-present delete really uses it ----
+    # Without it the delete can only fall back to the blunt key-less sweep, which cannot
+    # touch a keyed row — so the background write of a message the user already deleted
+    # would survive.  This is what makes the column load-bearing rather than decorative.
+    await _w204_reset_tables()
+    lsid = "w204-link"
+    await _seed_conversation(lsid)
+    kwargs = {"turn_key": "lk1"}
+    if _accepts(database.append_turn_events_atomic, "user_message_id", "assistant_message_id"):
+        kwargs["user_message_id"] = "w204-link-u1"
+        kwargs["assistant_message_id"] = "w204-link-a1"
+    await database.append_turn_events_atomic(lsid, "u-body", "a-body", "m", **kwargs)
+    require(await _pool_fetchval(
+        "SELECT COUNT(*) FROM conversations WHERE session_id = $1 AND source_message_id IS NOT NULL",
+        lsid) == 2,
+        "both ledger rows must record which message they came from")
+
+    response = await client.delete(f"/sync/conversations/{lsid}/messages/w204-link-a1")
+    require(response.status_code == 200, f"not-present delete failed: {response.text}")
+    body = response.json()
+    require(body["ledger_mode"] == "not_present", f"expected the not-present branch: {body}")
+    require(body["ledger_events_deleted"] == 1,
+            f"the link must delete exactly the one row it points at: {body}")
+    surviving = sorted(r["role"] for r in await _pool_fetch(
+        "SELECT role FROM conversations WHERE session_id = $1", lsid))
+    require(surviving == ["user"],
+            f"the linked assistant row must go and the user row must stay, got {surviving}")
+
+    # ---- a turn_key-only client is covered too (today's Chat) --------------
+    # The message-id link is the long-term design, but it only exists once Chat sends the
+    # ids.  A client that follows the W2-03 contract and sends turn_key alone would still
+    # be exposed: user types, deletes at once, the PUT is still in flight, the DELETE wins
+    # the race — and the background write of that very sentence stays in the ledger.
+    # Chat's contract is turnKey == the user message's id, so a not-present id can only
+    # ever be the key of the turn it was the user of, and that turn has just lost its
+    # carrier — it is already dead.
+    await _w204_reset_tables()
+    bsid2 = "w204-beltless"
+    await _seed_conversation(bsid2)
+    await database.append_turn_events_atomic(
+        bsid2, "the sentence the user deleted", "a-body", "m", turn_key="w204-belt-u1")
+    require(await _pool_fetchval(
+        "SELECT COUNT(*) FROM conversations WHERE session_id = $1", bsid2) == 2,
+        "the turn_key-only fixture did not land")
+
+    response = await client.delete(f"/sync/conversations/{bsid2}/messages/w204-belt-u1")
+    require(response.status_code == 200, f"not-present delete failed: {response.text}")
+    require(await _pool_fetchval(
+        "SELECT COUNT(*) FROM conversations WHERE session_id = $1 AND turn_key = $2",
+        bsid2, "w204-belt-u1") == 0,
+        "a turn_key-only client's deleted sentence is still sitting in the ledger")
+    require(response.json()["ledger_events_deleted"] >= 2,
+            f"the receipt must own up to the rows it swept: {response.json()}")
+    require(await _pool_fetchval(
+        "SELECT EXISTS(SELECT 1 FROM turn_tombstones WHERE session_id = $1 AND turn_key = $2)",
+        bsid2, "w204-belt-u1"),
+        "the turn whose user carrier never existed must be stamped, or it just lands again")
+    again = await database.append_turn_events_atomic(
+        bsid2, "the sentence the user deleted", "a-body", "m", turn_key="w204-belt-u1")
+    require(again.get("path") == "tombstoned" and again.get("reason") == "turn",
+            f"the dead turn accepted another write: {again}")
+    require(await _pool_fetchval(
+        "SELECT COUNT(*) FROM conversations WHERE session_id = $1", bsid2) == 0,
+        "the dead turn's rows came back")
+
+    # A delete that names an assistant id must not take that turn's *future* down with it.
+    # Its unlinked ledger rows do go — nothing in them can say which sentence they hold —
+    # but a turn stamp is permanent, and this turn has done nothing to deserve one.
+    await _w204_reset_tables()
+    safe = "w204-belt-safe"
+    await _seed_conversation(safe)
+    await database.append_turn_events_atomic(safe, "u", "a", "m", turn_key="w204-safe-u1")
+    await client.delete(f"/sync/conversations/{safe}/messages/w204-safe-a1")
+    require(not await _pool_fetchval(
+        "SELECT EXISTS(SELECT 1 FROM turn_tombstones WHERE session_id = $1)", safe),
+        "an assistant id is not a turn key and must never stamp a turn")
+
+    # ---- the client may declare the role, and then the belt stands down -----
+    # The belt is a guess: "an id the server has never seen is the key of its own turn".
+    # It is right for every client that follows the W2-03 contract and wrong for a third
+    # party whose assistant ids happen to collide with turn keys — there it would close a
+    # live turn forever.  `?role=assistant` turns the guess off.  The id below deliberately
+    # IS a live turn key, so only the declaration can save it.
+    await _w204_reset_tables()
+    declared = "w204-belt-declared"
+    await _seed_conversation(declared)
+    await database.append_turn_events_atomic(declared, "u", "a", "m", turn_key="w204-decl-k1")
+    response = await client.delete(
+        f"/sync/conversations/{declared}/messages/w204-decl-k1?role=assistant")
+    require(response.status_code == 200, f"a declared delete failed: {response.text}")
+    require(not await _pool_fetchval(
+        "SELECT EXISTS(SELECT 1 FROM turn_tombstones WHERE session_id = $1 AND turn_key = $2)",
+        declared, "w204-decl-k1"),
+        "a delete that declared role=assistant still closed the turn behind the belt")
+    later = await database.append_turn_events_atomic(
+        declared, "u2", "a2", "m", turn_key="w204-decl-k1")
+    require(later.get("ok") is True,
+            f"the turn the client kept open now refuses writes: {later}")
+    # …and with nothing declared the belt still runs: today's Chat depends on it.
+    await client.delete(f"/sync/conversations/{declared}/messages/w204-decl-k1")
+    require(await _pool_fetchval(
+        "SELECT EXISTS(SELECT 1 FROM turn_tombstones WHERE session_id = $1 AND turn_key = $2)",
+        declared, "w204-decl-k1"),
+        "with no role declared the belt must still close the turn it guessed at")
+
+    # a declared turn_key is what the belt aims at — no guessing from the message id
+    await _w204_reset_tables()
+    aimed = "w204-belt-aimed"
+    await _seed_conversation(aimed)
+    await database.append_turn_events_atomic(aimed, "u", "a", "m", turn_key="w204-aim-k1")
+    response = await client.delete(
+        f"/sync/conversations/{aimed}/messages/w204-aim-u1?role=user&turn_key=w204-aim-k1")
+    require(response.status_code == 200, f"a declared-key delete failed: {response.text}")
+    require(await _pool_fetchval(
+        "SELECT EXISTS(SELECT 1 FROM turn_tombstones WHERE session_id = $1 AND turn_key = $2)",
+        aimed, "w204-aim-k1"),
+        "a declared turn_key must be what the belt aims at, not the message id it guessed")
+
+    # ---- linked row and unaccountable rows in one session: ① is no excuse to skip ③ ----
+    # Finding the row that names this message proves that one row had an owner.  It proves
+    # nothing about the rows that cannot name theirs, so the sweep still has to run — an
+    # "either/or" cleanup leaves behind exactly the sentences nobody can account for.
+    await _w204_reset_tables()
+    mixed = "w204-np-mixed"
+    await _seed_conversation(mixed)
+    await database.append_turn_events_atomic(
+        mixed, "u-body", "a-body", "m", turn_key="mx-k1",
+        user_message_id="w204-np-u1", assistant_message_id="w204-np-a1")
+    await _legacy_ledger_row(mixed, "user", "a closed-gate sentence")
+    await _pool_execute(
+        "INSERT INTO conversations (session_id, role, content, model, turn_key, scope_known) "
+        "VALUES ($1, 'assistant', 'a W2-03 sentence', 'm', 'mx-k0', TRUE)", mixed)
+    require(await _pool_fetchval(
+        "SELECT COUNT(*) FROM conversations WHERE session_id = $1", mixed) == 4,
+        "the mixed not-present fixture did not land")
+
+    response = await client.delete(f"/sync/conversations/{mixed}/messages/w204-np-a1")
+    require(response.status_code == 200, f"not-present delete failed: {response.text}")
+    body = response.json()
+    require(body["ledger_mode"] == "not_present", f"expected the not-present branch: {body}")
+    require(await _pool_fetchval(
+        "SELECT COUNT(*) FROM conversations WHERE session_id = $1 AND source_message_id = $2",
+        mixed, "w204-np-a1") == 0,
+        "the row the delete could name by its link is still in the ledger")
+    require(await _pool_fetchval(
+        "SELECT COUNT(*) FROM conversations WHERE session_id = $1 AND source_message_id IS NULL",
+        mixed) == 0,
+        "a precise hit cancelled the sweep: rows that cannot name their message stayed behind")
+    require(body["ledger_events_deleted"] == 3,
+            f"all three leads must be counted, not just the one that hit first: {body}")
+    survivors = [(r["role"], r["source_message_id"]) for r in await _pool_fetch(
+        "SELECT role, source_message_id FROM conversations WHERE session_id = $1", mixed)]
+    require(survivors == [("user", "w204-np-u1")],
+            f"exactly the linked user row should be left standing, got {survivors}")
+
+    # ---- a fresh assistant id in the same turn is still allowed ------------
+    await _w204_reset_tables()
+    rsid = "w204-barrier-regen"
+    await _seed_conversation(rsid)
+    await client.delete(f"/sync/conversations/{rsid}/messages/a9")
+    kwargs = {"turn_key": "u9"}
+    if _accepts(database.append_turn_events_atomic, "user_message_id", "assistant_message_id"):
+        kwargs["user_message_id"] = "u9"
+        kwargs["assistant_message_id"] = "a10"
+    result = await database.append_turn_events_atomic(rsid, "u-body", "a-body", "m", **kwargs)
+    require(result.get("ok") is True,
+            f"a fresh assistant id in the same turn must still land: {result}")
+    require(await _pool_fetchval(
+        "SELECT COUNT(*) FROM conversations WHERE session_id = $1", rsid) == 2,
+        "regenerating under a new assistant id must write the whole turn")
+    require(not await _pool_fetchval(
+        "SELECT EXISTS(SELECT 1 FROM turn_tombstones WHERE session_id = $1)", rsid),
+        "deleting one assistant id must never stamp the whole turn")
+    passed("T-W2-04-36 a stamped message id stops exactly its own role's ledger write")
+
+
+async def test_w2_04_entry_message_identity(client: httpx.AsyncClient) -> None:
+    """T-W2-04-40: the real chat entry carries both message ids, or refuses the request."""
+    begin("T-W2-04-40")
+    mem_key = "memory_enabled"
+    mem_had = await _pool_fetchval("SELECT EXISTS(SELECT 1 FROM gateway_config WHERE key = $1)", mem_key)
+    mem_prev = await _config_row(mem_key)
+    try:
+        # Memory off keeps extraction and embeddings out of this guard; the ledger write
+        # still happens, and the ledger is the whole point here.
+        await _upsert_config(mem_key, "false")
+        await _w204_reset_tables()
+
+        # ---- a valid pair reaches the ledger through the real entrypoint ----
+        # Testing append_turn_events_atomic() directly proves the ledger can store a link.
+        # Only the real POST proves the ids survive request parsing, the background hop and
+        # the scope machinery on the way there — which is the half that actually breaks.
+        captured = []
+        response = await _chat(client, {
+            "model": "mock-model", "stream": False, "conversation_id": "w204-entry",
+            "messages": [{"role": "user", "content": "hi"}],
+            "turn_key": "w204-entry-k1",
+            "userMsgId": "w204-entry-u1", "assistantMsgId": "w204-entry-a1",
+        }, captured=captured)
+        require(response.status_code == 200, f"the real entry refused a valid pair: {response.text}")
+        await _await_ledger("w204-entry", 2)
+        links = sorted((r["role"], r["source_message_id"]) for r in await _pool_fetch(
+            "SELECT role, source_message_id FROM conversations WHERE session_id = $1", "w204-entry"))
+        require(links == [("assistant", "w204-entry-a1"), ("user", "w204-entry-u1")],
+                f"the entry must carry both message ids all the way to the ledger, got {links}")
+
+        # ---- and they never leave the gateway ------------------------------
+        require(captured, "the gateway never called the upstream at all")
+        identity_keys = ("user_message_id", "userMsgId", "assistant_message_id", "assistantMsgId")
+        for sent in captured:
+            leaked = [key for key in identity_keys if key in (sent or {})]
+            require(not leaked,
+                    f"chat message identity was passed through to the provider: {leaked}")
+
+        # ---- both absent stays compatible ----------------------------------
+        await _truncate("conversations")
+        response = await _chat(client, {
+            "model": "mock-model", "stream": False, "conversation_id": "w204-entry-old",
+            "messages": [{"role": "user", "content": "hi"}], "turn_key": "w204-entry-k2",
+        })
+        require(response.status_code == 200, f"an old client without ids was refused: {response.text}")
+        await _await_ledger("w204-entry-old", 2)
+        require(await _pool_fetchval(
+            "SELECT COUNT(*) FROM conversations WHERE session_id = $1", "w204-entry-old") == 2,
+            "an old client's turn must still land in the ledger")
+
+        # ---- half a pair, or a malformed one, is refused at the door -------
+        # Silently dropping the bad half would let a client believe it is on the new contract
+        # while half its ledger rows can never be addressed again.
+        for name, identity in (
+            ("only the user id", {"userMsgId": "w204-entry-u2"}),
+            ("only the assistant id", {"assistantMsgId": "w204-entry-a2"}),
+            ("an explicit null", {"userMsgId": None, "assistantMsgId": "w204-entry-a2"}),
+            ("a blank string", {"userMsgId": "   ", "assistantMsgId": "w204-entry-a2"}),
+            ("a non-string", {"userMsgId": 7, "assistantMsgId": "w204-entry-a2"}),
+            ("a boolean", {"userMsgId": True, "assistantMsgId": "w204-entry-a2"}),
+            ("over 200 characters", {"userMsgId": "u" * 201, "assistantMsgId": "w204-entry-a2"}),
+            ("the snake_case alias", {"user_message_id": "w204-entry-u2"}),
+        ):
+            await _truncate("conversations")
+            sent_bodies = []
+            response = await _chat(client, {
+                "model": "mock-model", "stream": False, "conversation_id": "w204-entry-bad",
+                "messages": [{"role": "user", "content": "hi"}], "turn_key": "w204-entry-k3",
+                **identity,
+            }, captured=sent_bodies)
+            require(response.status_code == 400,
+                    f"{name} must be refused, got {response.status_code}: {response.text}")
+            require(response.json().get("code") == "invalid_message_identity",
+                    f"{name} must be refused with code=invalid_message_identity: {response.text}")
+            require(not sent_bodies,
+                    f"{name} reached the provider before the gateway refused it")
+            await _settle_background()
+            require(await _pool_fetchval(
+                "SELECT COUNT(*) FROM conversations WHERE session_id = $1", "w204-entry-bad") == 0,
+                f"{name} was refused but still wrote to the ledger")
+        passed("T-W2-04-40 the chat entry carries both message ids end to end, or refuses the turn")
+    finally:
+        if mem_had:
+            await _upsert_config(mem_key, mem_prev)
+        else:
+            await _pool_execute("DELETE FROM gateway_config WHERE key = $1", mem_key)
+
+
+async def test_w2_04_handoff_copies(client: httpx.AsyncClient) -> None:
+    """T-W2-04-37, 38: handoff final check, late-write gate, cross-session cleanup."""
+    begin("T-W2-04-37")
+    # ---- 37a. the source can die during compression: check again before injecting ----
+    await _w204_reset_tables()
+    src = "w204-ho-src"
+    await _seed_conversation(
+        src,
+        messages=[("w204-ho-u1", "user", "u1", "hk1"), ("w204-ho-a1", "assistant", "a1", "hk1"),
+                  ("w204-ho-u2", "user", "u2", "hk2"), ("w204-ho-a2", "assistant", "a2", "hk2")],
+        summaries=1,
+    )
+    data = await database.get_handoff_data(src, tail_count=6)
+    require(data is not None, "the fixture must produce handoff data")
+    require("source_rev" in data and "source_session_id" in data,
+            f"handoff data must carry the version it was read at: {sorted(data)}")
+    require(data["source_session_id"] == src, "handoff data must name its own source")
+
+    await client.delete(f"/sync/conversations/{src}")
+    require(not await database.handoff_source_unchanged(src, data["source_rev"]),
+            "the final check must notice the source died while we were compressing")
+
+    # ---- 37a-real. the production prompt builder must run that final check ----
+    # Testing handoff_source_unchanged() on its own proves the function works, not that
+    # anyone calls it.  Drive the real builder, kill the source mid-read, and require that
+    # no handoff section and no ev_handoff payload come out the other side.
+    await _w204_reset_tables()
+    real_src = "w204-ho-real"
+    await _seed_conversation(
+        real_src,
+        messages=[("w204-hr-u1", "user", "u1", "rk1"), ("w204-hr-a1", "assistant", "a1", "rk1"),
+                  ("w204-hr-u2", "user", "u2", "rk2"), ("w204-hr-a2", "assistant", "a2", "rk2")],
+    )
+    original_msgs = database._handoff_messages_tx
+    killed = []
+
+    async def _kill_source_mid_read(conn, conv_id):
+        rows = await original_msgs(conn, conv_id)
+        if conv_id == real_src and not killed:
+            killed.append(True)
+            await database.sync_delete_conversation(real_src)
+        return rows
+
+    await _upsert_config("handoff_enabled", "true")
+    with patch.object(database, "_handoff_messages_tx", _kill_source_mid_read):
+        with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+            _prompt, meta = await app_module.build_system_prompt_with_memories(
+                "hello", user_msg_count=1, conversation_id="w204-ho-new")
+    require(killed, "the hook never fired; the builder did not read handoff data at all")
+    require("handoff" not in meta,
+            "the prompt builder injected a handoff whose source was deleted mid-flight")
+    require("上一个对话衔接" not in (_prompt or ""),
+            "the deleted source's summary reached the prompt text")
+
+    # ---- 37b. a divider whose source is gone is refused by all three channels ----
+    await _w204_reset_tables()
+    src2, tgt = "w204-ho-src2", "w204-ho-tgt"
+    await _seed_conversation(src2, messages=[("w204-ho2-m1", "user", "u1", "k1")])
+    await _seed_conversation(tgt)
+    live_rev = await _source_rev(src2)
+    await client.delete(f"/sync/conversations/{src2}")
+
+    divider = {"role": "divider", "content": "",
+               "handoffInfo": {"version": 2, "sourceId": src2, "sourceRev": live_rev,
+                               "summary": "carried over"}}
+    response = await client.put(f"/sync/conversations/{tgt}/messages/w204-ho-late", json=divider)
+    require(response.status_code in (409, 410),
+            f"a handoff divider from a deleted source must be refused: {response.status_code} {response.text}")
+    require(not await _pool_fetchval(
+        "SELECT EXISTS(SELECT 1 FROM chat_messages WHERE id = 'w204-ho-late')"),
+        "the late handoff divider landed anyway")
+    response = await client.put(f"/sync/conversations/{tgt}", json={"title": "t", "messages": [
+        dict(divider, id="w204-ho-late2")]})
+    require(not await _pool_fetchval(
+        "SELECT EXISTS(SELECT 1 FROM chat_messages WHERE id = 'w204-ho-late2')"),
+        "the late handoff divider came back through a full replace")
+    response = await client.post("/sync/import", json={"projects": [], "conversations": [
+        {"id": tgt, "title": "t", "messages": [dict(divider, id="w204-ho-late3")]}]})
+    require(not await _pool_fetchval(
+        "SELECT EXISTS(SELECT 1 FROM chat_messages WHERE id = 'w204-ho-late3')"),
+        "the late handoff divider came back through import")
+
+    # a live source at the current revision still writes
+    await _w204_reset_tables()
+    src3, tgt3 = "w204-ho-src3", "w204-ho-tgt3"
+    await _seed_conversation(src3, messages=[("w204-ho3-m1", "user", "u1", "k1")])
+    await _seed_conversation(tgt3)
+    ok_divider = {"role": "divider", "content": "",
+                  "handoffInfo": {"version": 2, "sourceId": src3,
+                                  "sourceRev": await _source_rev(src3), "summary": "ok"}}
+    response = await client.put(f"/sync/conversations/{tgt3}/messages/w204-ho-ok", json=ok_divider)
+    require(response.status_code == 200,
+            f"a handoff divider from a live source at the current rev must land: {response.text}")
+    passed("T-W2-04-37 handoff copies are re-checked after compression and gated on write")
+    begin("T-W2-04-38")
+
+    # ---- 38. deleting a source clears its handoff copies everywhere --------
+    await _w204_reset_tables()
+    s, t1, t2 = "w204-x-src", "w204-x-t1", "w204-x-t2"
+    for sid in (s, t1, t2):
+        await _seed_conversation(sid, messages=[(f"{sid}-m1", "user", "u", "k1")],
+                                 events=[("user", "u", "k1")])
+    await _seed_handoff_divider(t1, "w204-x-from-s", source_id=s)
+    await _seed_handoff_divider(t2, "w204-x-from-other", source_id="w204-x-unrelated")
+    t1_rev = await _source_rev(t1)
+
+    response = await client.delete(f"/sync/conversations/{s}")
+    require(response.status_code == 200, f"source delete failed: {response.text}")
+    require(not await _pool_fetchval(
+        "SELECT EXISTS(SELECT 1 FROM chat_messages WHERE id = 'w204-x-from-s')"),
+        "deleting the source left its handoff copy alive in another conversation")
+    require(await _pool_fetchval(
+        "SELECT EXISTS(SELECT 1 FROM message_tombstones WHERE session_id = $1 AND message_id = $2)",
+        t1, "w204-x-from-s"),
+        "the purged handoff copy's id must be stamped in its own conversation")
+    require(await _source_rev(t1) == t1_rev + 1,
+            "the target conversation's rev must move so its in-flight jobs recompute")
+    require(await _pool_fetchval(
+        "SELECT EXISTS(SELECT 1 FROM chat_messages WHERE id = 'w204-x-from-other')"),
+        "an unrelated conversation's handoff copy was destroyed")
+    require(response.json()["purged"].get("handoff_dividers") == 1,
+            f"the receipt must count the handoff copies it purged: {response.json()}")
+
+    # a single-message delete on the source does the same
+    await _w204_reset_tables()
+    s2, t3 = "w204-x2-src", "w204-x2-t"
+    await _seed_conversation(s2, messages=[("w204-x2-m1", "user", "u", "k1")],
+                             events=[("user", "u", "k1")])
+    await _seed_conversation(t3)
+    await _seed_handoff_divider(t3, "w204-x2-copy", source_id=s2)
+    await client.delete(f"/sync/conversations/{s2}/messages/w204-x2-m1")
+    require(not await _pool_fetchval(
+        "SELECT EXISTS(SELECT 1 FROM chat_messages WHERE id = 'w204-x2-copy')"),
+        "a single-message delete on the source must clear its handoff copies too")
+
+    # reset clears every handoff copy
+    await _w204_reset_tables()
+    await _seed_conversation("w204-x3-t")
+    await _seed_handoff_divider("w204-x3-t", "w204-x3-copy", source_id="w204-x3-src")
+    await _reset_all(client)
+    require(not await _pool_fetchval(
+        "SELECT EXISTS(SELECT 1 FROM chat_messages WHERE id = 'w204-x3-copy')"),
+        "reset left a handoff copy behind")
+
+    # the lock order itself must be ascending, not "whatever the set happened to yield".
+    # Two conversations that carry each other over need {A,B} and {B,A} to resolve to the
+    # same order; a plain set iterates by hash, which is stable within one process and so
+    # hides the bug from any pure timing test.  Watch the order directly instead.
+    await _w204_reset_tables()
+    hi, lo = "w204-zz-source", "w204-aa-target"   # source sorts after target on purpose
+    for sid in (hi, lo):
+        await _seed_conversation(sid, messages=[(f"{sid}-m1", "user", "u", "k1")])
+    await _seed_handoff_divider(lo, "w204-order-copy", source_id=hi)
+    taken = []
+    original_lock = database._lock_session
+
+    async def _record(conn, session_id):
+        taken.append(session_id)
+        return await original_lock(conn, session_id)
+
+    with patch.object(database, "_lock_session", _record):
+        await client.delete(f"/sync/conversations/{hi}")
+    require(taken, "no session lock was taken at all")
+    require(taken == sorted(taken),
+            f"session locks must be taken in ascending id order, got {taken}")
+    # The behavioural half above only catches a missing sort when the set happens to
+    # iterate the wrong way, and set order follows PYTHONHASHSEED — so on its own it is a
+    # coin flip.  Pin the canonical order in the helper's source as well: that is the whole
+    # reason the helper exists.
+    lock_helper = re.search(
+        r"async def _lock_sessions_exclusive\(.*?(?=\nasync def |\ndef )",
+        (ROOT / "database.py").read_text(encoding="utf-8"), re.S)
+    require(lock_helper and "sorted(" in lock_helper.group(0),
+            "_lock_sessions_exclusive must impose a canonical order, not iterate a set")
+    require(lo in taken and hi in taken,
+            f"both the source and its handoff target must be locked, got {taken}")
+
+    # two conversations that carried each other over: deleting both must not deadlock
+    await _w204_reset_tables()
+    a, b = "w204-x4-a", "w204-x4-b"
+    for sid in (a, b):
+        await _seed_conversation(sid, messages=[(f"{sid}-m1", "user", "u", "k1")],
+                                 events=[("user", "u", "k1")])
+    await _seed_handoff_divider(b, "w204-x4-a-in-b", source_id=a)
+    await _seed_handoff_divider(a, "w204-x4-b-in-a", source_id=b)
+    results = await asyncio.wait_for(asyncio.gather(
+        client.delete(f"/sync/conversations/{a}"),
+        client.delete(f"/sync/conversations/{b}"),
+    ), timeout=25)
+    require(all(r.status_code == 200 for r in results),
+            f"mutually-referencing deletes failed: {[r.status_code for r in results]}")
+    require(await _pool_fetchval(
+        "SELECT COUNT(*) FROM chat_messages WHERE id IN ('w204-x4-a-in-b', 'w204-x4-b-in-a')") == 0,
+        "mutually-referencing handoff copies survived")
+
+    # legacy handoff dividers with no sourceId are cleaned once by the migration
+    await _w204_reset_tables()
+    await _seed_conversation("w204-x5-t")
+    await _seed_handoff_divider("w204-x5-t", "w204-x5-legacy", source_id=None)
+    await database.init_tables()
+    require(not await _pool_fetchval(
+        "SELECT EXISTS(SELECT 1 FROM chat_messages WHERE id = 'w204-x5-legacy')"),
+        "a handoff divider with no traceable source must be cleaned by the migration")
+    require(await _pool_fetchval(
+        "SELECT EXISTS(SELECT 1 FROM message_tombstones WHERE session_id = $1 AND message_id = $2)",
+        "w204-x5-t", "w204-x5-legacy"),
+        "the cleaned legacy handoff divider must be stamped so it cannot come back")
+    await database.init_tables()
+    passed("T-W2-04-38 a source's handoff copies die with it, across conversations and safely")
+
+
+async def test_w2_04_restore_stamp_states(client: httpx.AsyncClient) -> None:
+    """T-W2-04-39: backup restore lifts exactly the stamps the backup speaks for."""
+    begin("T-W2-04-39")
+    await _w204_reset_tables()
+    sid = "w204-restore-stamps"
+    await _seed_conversation(
+        sid,
+        messages=[("w204-rst-m1", "user", "u1", "rk1"), ("w204-rst-m2", "assistant", "a1", "rk1"),
+                  ("w204-rst-m3", "user", "u2", "rk2")],
+        events=[("user", "u1", "rk1"), ("assistant", "a1", "rk1")],
+    )
+    await client.delete(f"/sync/conversations/{sid}/messages/w204-rst-m2")
+    require(await _pool_fetchval(
+        "SELECT EXISTS(SELECT 1 FROM message_tombstones WHERE session_id = $1 AND message_id = $2)",
+        sid, "w204-rst-m2"), "the fixture needs a stamped message id")
+
+    # metadata-only backup: says nothing about messages, so it lifts nothing
+    await client.post("/sync/import-backup", files={"file": (
+        "backup.zip", _backup_zip([{"id": sid, "title": "metadata only"}]), "application/zip")})
+    require(await _pool_fetchval(
+        "SELECT EXISTS(SELECT 1 FROM message_tombstones WHERE session_id = $1 AND message_id = $2)",
+        sid, "w204-rst-m2"),
+        "a metadata-only backup speaks for no message and must lift no message stamp")
+    response = await client.put(f"/sync/conversations/{sid}/messages/w204-rst-m2",
+                                json={"role": "assistant", "content": "back?"})
+    require(response.status_code == 410,
+            f"the stamp survived in name only: {response.status_code} {response.text}")
+
+    # an authoritative empty snapshot clears the messages but still speaks for none of them
+    await client.post("/sync/import-backup", files={"file": (
+        "backup.zip", _backup_zip([{"id": sid, "title": "emptied", "messages": []}]),
+        "application/zip")})
+    require(await _pool_fetchval(
+        "SELECT COUNT(*) FROM chat_messages WHERE conversation_id = $1", sid) == 0,
+        "an explicit empty array must clear the messages")
+    require(await _pool_fetchval(
+        "SELECT EXISTS(SELECT 1 FROM message_tombstones WHERE session_id = $1 AND message_id = $2)",
+        sid, "w204-rst-m2"),
+        "an empty backup speaks for no message either and must lift no stamp")
+
+    # a backup that names m1/m3 lifts their stamps and leaves m2's alone
+    await _pool_execute(
+        "INSERT INTO message_tombstones (session_id, message_id) VALUES ($1, 'w204-rst-m1') "
+        "ON CONFLICT DO NOTHING", sid)
+    await client.post("/sync/import-backup", files={"file": (
+        "backup.zip", _backup_zip([{"id": sid, "title": "partial", "messages": [
+            {"id": "w204-rst-m1", "role": "user", "content": "u1", "turnKey": "rk1"},
+            {"id": "w204-rst-m3", "role": "user", "content": "u2", "turnKey": "rk2"},
+        ]}]), "application/zip")})
+    require(not await _pool_fetchval(
+        "SELECT EXISTS(SELECT 1 FROM message_tombstones WHERE session_id = $1 AND message_id = $2)",
+        sid, "w204-rst-m1"),
+        "a backup that names a message must lift that message's stamp")
+    require(await _pool_fetchval(
+        "SELECT EXISTS(SELECT 1 FROM message_tombstones WHERE session_id = $1 AND message_id = $2)",
+        sid, "w204-rst-m2"),
+        "a backup that never mentions a message must leave its stamp in place")
+    require(sorted(r["id"] for r in await _pool_fetch(
+        "SELECT id FROM chat_messages WHERE conversation_id = $1", sid)) ==
+        ["w204-rst-m1", "w204-rst-m3"], "the named messages did not come back")
+    passed("T-W2-04-39 backup restore lifts exactly the stamps its file speaks for")
+
+
 async def run_suite(test_dsn: str) -> None:
     global database, config, app_module, memory_extractor
 
@@ -3046,6 +5736,21 @@ async def run_suite(test_dsn: str) -> None:
         await test_w2_03_scope_and_order()
         await test_w2_03_entry_and_panel(client)
         await test_w2_03_chat_paths(client)
+        await test_w2_04_schema_and_conversation_delete(client)
+        await test_w2_04_message_delete_and_ledger(client)
+        await test_w2_04_no_resurrection(client)
+        await test_w2_04_background_snapshots(client)
+        await test_w2_04_privacy_and_contracts(client)
+        await test_w2_04_concurrency_and_compression(client)
+        await test_w2_04_consistent_reads(client)
+        await test_w2_04_turn_stamps_and_late_writes(client)
+        await test_w2_04_receipts_and_contracts(client)
+        await test_w2_04_real_entrypoints(client)
+        await test_w2_04_mixed_generation_ledger(client)
+        await test_w2_04_message_identity_barrier(client)
+        await test_w2_04_entry_message_identity(client)
+        await test_w2_04_handoff_copies(client)
+        await test_w2_04_restore_stamp_states(client)
 
 
 async def async_main() -> int:
@@ -3062,6 +5767,7 @@ async def async_main() -> int:
         w2_01_passed = [name for name in PASSED if name.startswith("T-W2-01-")]
         w2_02_passed = [name for name in PASSED if name.startswith("T-W2-02-")]
         w2_03_passed = [name for name in PASSED if name.startswith("T-W2-03-")]
+        w2_04_passed = [name for name in PASSED if name.startswith("T-W2-04-")]
         print(f"\nPASS: {len(legacy_passed)} permanent S1-S6 behavior guards")
         print(f"PASS: {len(w1_01_passed)} W1-01 isolation/permanent guards")
         print(f"PASS: {len(w1_06_passed)} W1-06 calendar-delete atomicity guards")
@@ -3069,7 +5775,13 @@ async def async_main() -> int:
         print(f"PASS: {len(w2_01_passed)} W2-01 granular-sync guards")
         print(f"PASS: {len(w2_02_passed)} W2-02 message-identity/atomic-import guards")
         print(f"PASS: {len(w2_03_passed)} W2-03 ledger-schema/scope/dark-write guards")
-        print(f"PASS: {len(PASSED)} total permanent behavior guards")
+        print(f"PASS: {len(w2_04_passed)} W2-04 session-delete/privacy guards")
+        if _MUTES_USED:
+            print(f"MUTED: {len(_MUTES_USED)} assertion(s) let through via KIWI_KNIFE_MUTE: "
+                  f"{sorted(set(_MUTES_USED))}")
+            print("NOT A CLEAN RUN — mutes are for mutation-knife evidence only")
+        else:
+            print(f"PASS: {len(PASSED)} total permanent behavior guards")
         print("Real database path: disposable PostgreSQL verified")
         print("Real model/API path: not called; embedding/model/HTTP boundaries were mocked")
         return 0

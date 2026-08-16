@@ -35,6 +35,7 @@ from database import (
     migrate_embeddings, backfill_permanent_memory_embeddings, get_embedding_stats,
     # v5.3 时间有效期 + 矛盾检测
     invalidate_memory, create_memory_edge, detect_contradictions,
+    get_embedding, _invalidate_memory_tx, _create_memory_edge_tx,
     get_all_providers, get_provider, create_provider, update_provider, delete_provider,
     get_provider_models, get_all_saved_models, get_enabled_provider_models, add_provider_model, update_provider_model, delete_provider_model,
     resolve_provider_for_model,
@@ -46,6 +47,11 @@ from database import (
     sync_upsert_messages, sync_upsert_single_message, sync_delete_message,
     sync_get_projects, sync_upsert_project, sync_create_project, sync_patch_project,
     sync_delete_project, sync_import_all,
+    # W2-04 会话删除与隐私语义
+    append_legacy_turn_if_not_deleted, reset_all_chat_data, save_compression_summary,
+    restore_conversation_from_backup, get_reset_generation,
+    snapshot_recent_conversation, save_if_sources_unchanged, _insert_memory_tx,
+    SessionDeletedError,
     # v4.2 提醒系统
     create_reminder, get_reminders, update_reminder, delete_reminder, get_due_reminders, fire_reminder,
 )
@@ -1009,6 +1015,9 @@ async def build_system_prompt_with_memories(user_message: str, user_msg_count: i
                     tail_count = await get_config_int("handoff_tail_count", fallback=6)
                     data = await get_handoff_data(source["id"], tail_count=tail_count)
 
+                # 选源与读数据之间那段时间里源可能刚被删掉：读到 None 就是「没有可换窗的源」，
+                # 这一轮不注入，绝不拿一份已删对话的摘要顶上。
+                if source and data is not None:
                     existing_summary = None
                     msgs_to_compress = []
 
@@ -1057,7 +1066,14 @@ async def build_system_prompt_with_memories(user_message: str, user_msg_count: i
                         summary_parts.append(f"[结尾原文]\n{tail_text}")
                     full_summary = "\n\n".join(summary_parts).strip()
 
-                    if full_summary:
+                    # 终检：上面的压缩是一次外呼，几十秒里用户完全来得及把源对话删掉。
+                    # 快照那一刻源还在，不代表现在还在——注入前必须再问一次。
+                    from database import handoff_source_unchanged
+                    still_there = await handoff_source_unchanged(
+                        data["source_session_id"], data["source_rev"])
+                    if full_summary and not still_there:
+                        print("event=handoff_skipped reason=source_changed increment=1")
+                    elif full_summary:
                         title_hint = source.get("title", "") or ""
                         usage_rule = "仅供了解上下文背景。用户延续话题时自然参考，开启新话题时安静忽略，不要主动提起上一窗口。"
                         _append_runtime_context_section(
@@ -1067,6 +1083,9 @@ async def build_system_prompt_with_memories(user_message: str, user_msg_count: i
                         prompt_meta["handoff"] = {
                             "version": 2,
                             "sourceId": source["id"],
+                            # Chat 把这张卡落成 handoff divider 时要原样带回来：
+                            # 服务端据此判断这份浓缩稿的来源是不是还活着、版本对不对得上。
+                            "sourceRev": data["source_rev"],
                             "sourceTitle": title_hint,
                             "summary": full_summary,
                             "status": "full" if handoff_summary else "tail_only",
@@ -1172,7 +1191,166 @@ def emotion_to_weight(level: str) -> int:
 MEMORY_TRIGGER_WORDS = ["记住", "记下", "帮我记", "请记", "别忘了", "不要忘记", "你要记得", "记一下"]
 
 
-async def process_memories_background(session_id: str, user_msg: str, assistant_msg: str, model: str, emotion_level: str = "normal", project_id: str = None, is_regenerate: bool = False, *, extract_enabled: bool = True, usage: dict = None, turn_key: str = None, client_gave_conv_id: bool = False, project_id_present: bool = False, payload_project_id=None):
+# 提取时硬过滤的元记忆关键词（不靠模型自觉）
+META_BLACKLIST = [
+    "记忆库", "记忆系统", "检索", "没有被记录", "没有被提取",
+    "记忆遗漏", "尚未被记录", "写入不完整", "检索功能",
+    "系统没有返回", "关键词匹配", "语义匹配", "语义检索",
+    "阈值", "数据库", "seed", "导入", "部署",
+    "bug", "debug", "端口", "网关",
+]
+
+
+def _filter_meta_memories(new_memories: list) -> list:
+    """滤掉在谈论记忆系统自身的"元记忆"。"""
+    kept = []
+    for mem in new_memories:
+        content = mem["content"]
+        if any(kw in content for kw in META_BLACKLIST):
+            print(f"🚫 过滤掉meta记忆: {content[:60]}...")
+            continue
+        kept.append(mem)
+    return kept
+
+
+async def _snapshot_extraction_material(session_id: str, *, limit: int):
+    """读提取素材，连同来源版本一起快照，返回 `(snapshot, messages)`。
+
+    正文、每个来源会话的版本与重置世代出自同一条 SELECT 的同一快照。
+
+    账本一行都读不到时**直接放弃提取**，不再退回内存里的这一轮：内存正文没有任何
+    可以和版本原子绑定的持久化来源，无论怎么补查版本，删除都能挤进"读正文"和
+    "读版本"之间，造出旧正文配新版本、保存前比对照样放行的组合。账本读不到只在
+    落账失败或被拒时才发生，本就是罕见兜底——宁可这一轮不提取。
+    """
+    snapshot = await snapshot_recent_conversation(limit=limit)
+    messages = [{"role": row["role"], "content": row["content"]} for row in snapshot["rows"]]
+    if not messages:
+        print("event=extraction_skipped reason=no_persisted_material increment=1")
+        return None, []
+    print(f"📨 提取范围：最近 {len(messages)} 条消息（约 {len(messages)//2} 轮对话）")
+    return snapshot, messages
+
+
+async def _prepare_memory_batch(candidates: list, *, project_id=None, emotion_level="normal",
+                                detect_contradiction: bool = True):
+    """锁外把候选记忆算成可直接落库的计划，返回 `(plans, skipped_count)`。
+
+    去重搜索、矛盾判断、分类匹配和向量生成——所有会外呼或耗时的事都在这里做完，
+    这样随后的整批写入只剩纯 INSERT/UPDATE，能安心放进一个短事务里。
+    """
+    plans, skipped = [], 0
+    for mem in candidates:
+        # 去重检测（v5.4：传标题，标题不同时不误杀；v5.8：按 project_id 作用域去重）
+        is_dup, similar_results = await check_memory_duplicate(
+            mem["content"], new_title=mem.get("title", ""), project_id=project_id)
+        if is_dup:
+            skipped += 1
+            continue
+
+        contradicted_ids = []
+        if detect_contradiction:
+            # 按作用域过滤矛盾候选：项目碎片只能替代同项目的旧碎片，全局只看全局
+            if project_id:
+                scoped_results = [m for m in similar_results if m.get("project_id") == project_id]
+            else:
+                scoped_results = [m for m in similar_results if m.get("project_id") is None]
+
+            # 矛盾检测（v5.3：复用去重搜索结果，不额外调 embedding API）
+            contradicted_ids = detect_contradictions(
+                mem.get("title", ""), mem["content"], scoped_results)
+
+        # 自动匹配分类
+        cat_hint = mem.get("category", "")
+        cat_id = await match_category_by_name(cat_hint) if cat_hint else None
+
+        title = mem.get("title", "")
+        content = mem["content"]
+        plans.append({
+            "content": content,
+            "importance": mem["importance"],
+            "title": title,
+            "category_id": cat_id,
+            "emotional_weight": mem.get("emotional_weight", 0) or emotion_to_weight(emotion_level),
+            "contradicted_ids": contradicted_ids,
+            "embedding": await get_embedding(f"{title} {content}" if title else content),
+        })
+    return plans, skipped
+
+
+async def _commit_memory_batch(conn, plans: list, *, session_id: str, project_id=None,
+                               source: str = "ai_extracted"):
+    """在调用方的事务里整批落库，返回 `(saved_items, contradiction_count)`。
+
+    只用 conn-aware 的 `_tx` 原语，锁内一次外呼都没有；任一条失败整批回滚——
+    要么这批记忆全在，要么一条都不在，不会留下"存了一半"的记忆库。
+    """
+    saved_items, contradictions = [], 0
+    for plan in plans:
+        new_id = await _insert_memory_tx(
+            conn,
+            content=plan["content"], importance=plan["importance"], source_session=session_id,
+            title=plan["title"], category_id=plan["category_id"], source=source,
+            emotional_weight=plan["emotional_weight"], project_id=project_id,
+            embedding=plan["embedding"],
+        )
+        saved_items.append({"title": plan["title"], "content": plan["content"][:120]})
+
+        # 处理矛盾：标旧记忆失效 + 创建 supersedes edge
+        if plan["contradicted_ids"] and new_id:
+            for old_id in plan["contradicted_ids"]:
+                if not await _invalidate_memory_tx(conn, old_id, reason=f"被新记忆 #{new_id} 替代"):
+                    print(f"⚠️ 记忆 #{old_id} 失效未命中，仍建 supersedes 边（矛盾计数可能偏高）")
+                await _create_memory_edge_tx(
+                    conn, new_id, "memory", old_id, "memory", "supersedes",
+                    reason="提取时自动检测到信息更新", created_by="extractor")
+                contradictions += 1
+    return saved_items, contradictions
+
+
+async def _extract_and_save_batch(*, session_id, limit,
+                                  existing_contents, cat_names, emotion_level, project_id,
+                                  model_override, prompt_override):
+    """快照素材 → 锁外提取算好 → 同锁比对版本 → 整批落库。最多重算一次。
+
+    素材在提取途中被删（`changed`）就丢掉结果、用剩余素材重来一遍；第二遍还在变说明
+    用户正在连续删，这时候放弃比硬存更对——返回 `("abandoned", ...)`。
+    """
+    for attempt in (1, 2):
+        snapshot, messages = await _snapshot_extraction_material(session_id, limit=limit)
+        if not messages:
+            return "abandoned", [], 0, 0
+
+        new_memories = await extract_memories(
+            messages,
+            existing_memories=existing_contents,
+            categories=cat_names,
+            model_override=model_override,
+            prompt_override=prompt_override,
+            emotion_level=emotion_level,
+        )
+        plans, skipped = await _prepare_memory_batch(
+            _filter_meta_memories(new_memories), project_id=project_id,
+            emotion_level=emotion_level)
+
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            async with conn.transaction():
+                outcome, result = await save_if_sources_unchanged(
+                    conn, snapshot,
+                    lambda c: _commit_memory_batch(c, plans, session_id=session_id,
+                                                   project_id=project_id),
+                )
+        if outcome == "saved":
+            saved_items, contradictions = result
+            return "extract", saved_items, skipped, contradictions
+        print(f"event=extraction_sources_changed attempt={attempt} increment=1")
+    return "abandoned", [], 0, 0
+
+
+async def process_memories_background(session_id: str, user_msg: str, assistant_msg: str, model: str, emotion_level: str = "normal", project_id: str = None, is_regenerate: bool = False, *, extract_enabled: bool = True, usage: dict = None, turn_key: str = None, client_gave_conv_id: bool = False, project_id_present: bool = False, payload_project_id=None, user_message_id: str = None,
+                                     assistant_message_id: str = None,
+                                     reset_generation: int = None):
     """
     后台异步：存储对话 + 按间隔提取记忆（不阻塞主流程）
     
@@ -1206,19 +1384,29 @@ async def process_memories_background(session_id: str, user_msg: str, assistant_
         #   闸门开 → 单事务原子落账（项目/轮次/用量三重身份）；
         #   闸门关 → 字节级旧路径（两次独立 save_message，新列全默认）。
         if await get_config_bool("memory_event_ledger_write_enabled", fallback=True):
-            await append_turn_events_atomic(
+            ledger_result = await append_turn_events_atomic(
                 session_id, user_msg, assistant_msg, model,
                 client_gave_conv_id=client_gave_conv_id,
                 project_id_present=project_id_present,
                 payload_project_id=payload_project_id,
                 usage=usage, turn_key=turn_key, is_regenerate=is_regenerate,
+                user_message_id=user_message_id,
+                assistant_message_id=assistant_message_id,
+                reset_generation=reset_generation,
             )
         else:
-            if is_regenerate:
-                await delete_latest_assistant_message(session_id)
-            else:
-                await save_message(session_id, "user", user_msg, model)
-            await save_message(session_id, "assistant", assistant_msg, model)
+            ledger_result = await append_legacy_turn_if_not_deleted(
+                session_id, user_msg, assistant_msg, model,
+                is_regenerate=is_regenerate, turn_key=turn_key,
+                user_message_id=user_message_id,
+                assistant_message_id=assistant_message_id,
+                reset_generation=reset_generation,
+            )
+
+        # W2-04：这一轮的素材已经被删掉了（会话章 / 轮次章 / 重置世代）。
+        # 事件没落账，从它提取出来的记忆自然也不该落——直接收工，不往下走提取。
+        if ledger_result.get("path") == "tombstoned":
+            return {"action": "skip_tombstoned", "reason": ledger_result.get("reason")}
 
         # W2-03 分层：事件已经落账，但记忆关闭或内部请求时到此为止。
         if not extract_enabled:
@@ -1270,117 +1458,31 @@ async def process_memories_background(session_id: str, user_msg: str, assistant_
         
         print(f"📋 对比范围：{len(existing_contents)} 条已有记忆（搜索相关 {len(related_contents)} + 最近 {len(recent_contents)}，去重后 {len(existing_contents)}）")
         
-        # ===== v3.7 改进：攒 N 轮完整对话一起提取 =====
-        # 从数据库捞最近 N*2 条消息（N轮 = N条user + N条assistant）
-        recent_msgs = await get_recent_conversation(limit=extract_interval * 2)
-        
-        if recent_msgs:
-            messages_for_extraction = [
-                {"role": row["role"], "content": row["content"]}
-                for row in recent_msgs
-            ]
-            print(f"📨 提取范围：最近 {len(messages_for_extraction)} 条消息（约 {len(messages_for_extraction)//2} 轮对话）")
-        else:
-            # 降级：如果数据库查不到，至少用当前这一轮
-            messages_for_extraction = [
-                {"role": "user", "content": user_msg},
-                {"role": "assistant", "content": assistant_msg},
-            ]
-            print(f"📨 提取范围：当前 1 轮对话（降级）")
-        
         # 获取可用分类名（用于自动归类）
         try:
             all_cats = await get_all_categories()
             cat_names = [c["name"] for c in all_cats]
         except Exception:
             cat_names = []
-        
+
         # 读取数据库中的模型和提示词配置
         from config import get_config
         db_memory_model = await get_config("default_memory_model")
         db_memory_prompt = await get_config("prompt_memory_extract")
-        
-        new_memories = await extract_memories(
-            messages_for_extraction,
-            existing_memories=existing_contents,
-            categories=cat_names,
+
+        # ===== v3.7 改进：攒 N 轮完整对话一起提取 =====
+        # 从数据库捞最近 N*2 条消息（N轮 = N条user + N条assistant）
+        action, saved_items, skipped_count, contradiction_count = await _extract_and_save_batch(
+            session_id=session_id, limit=extract_interval * 2,
+            existing_contents=existing_contents, cat_names=cat_names,
+            emotion_level=emotion_level, project_id=project_id,
             model_override=db_memory_model if db_memory_model else None,
             prompt_override=db_memory_prompt if db_memory_prompt else None,
-            emotion_level=emotion_level,
         )
-        
-        # 过滤垃圾记忆（不靠模型自觉，硬过滤）
-        META_BLACKLIST = [
-            "记忆库", "记忆系统", "检索", "没有被记录", "没有被提取",
-            "记忆遗漏", "尚未被记录", "写入不完整", "检索功能",
-            "系统没有返回", "关键词匹配", "语义匹配", "语义检索",
-            "阈值", "数据库", "seed", "导入", "部署",
-            "bug", "debug", "端口", "网关",
-        ]
-        
-        filtered_memories = []
-        for mem in new_memories:
-            content = mem["content"]
-            if any(kw in content for kw in META_BLACKLIST):
-                print(f"🚫 过滤掉meta记忆: {content[:60]}...")
-                continue
-            filtered_memories.append(mem)
-        
-        # ===== v5.3 改进：去重 + 矛盾检测（共用一次搜索）=====
-        saved_count = 0
-        skipped_count = 0
-        contradiction_count = 0
-        saved_items = []  # 收集保存的记忆内容（供事件 payload 使用）
-
-        for mem in filtered_memories:
-            # 去重检测（v5.4：传标题，标题不同时不误杀；v5.8：按 project_id 作用域去重）
-            is_dup, similar_results = await check_memory_duplicate(mem["content"], new_title=mem.get("title", ""), project_id=project_id)
-
-            if is_dup:
-                skipped_count += 1
-                continue
-
-            # 按作用域过滤矛盾候选：项目碎片只能替代同项目的旧碎片，全局只看全局
-            if project_id:
-                scoped_results = [m for m in similar_results if m.get("project_id") == project_id]
-            else:
-                scoped_results = [m for m in similar_results if m.get("project_id") is None]
-
-            # 矛盾检测（v5.3：复用去重搜索结果，不额外调 embedding API）
-            contradicted_ids = detect_contradictions(
-                mem.get("title", ""), mem["content"], scoped_results
-            )
-
-            # 自动匹配分类
-            cat_id = None
-            cat_hint = mem.get("category", "")
-            if cat_hint:
-                cat_id = await match_category_by_name(cat_hint)
-
-            # 保存新记忆（v5.3：返回 ID，用于创建 supersedes edge）
-            new_id = await save_memory(
-                content=mem["content"],
-                importance=mem["importance"],
-                source_session=session_id,
-                title=mem.get("title", ""),
-                category_id=cat_id,
-                source="ai_extracted",
-                emotional_weight=mem.get("emotional_weight", 0) or emotion_to_weight(emotion_level),
-                project_id=project_id,
-            )
-            saved_count += 1
-            saved_items.append({"title": mem.get("title", ""), "content": mem["content"][:120]})
-
-            # 处理矛盾：标旧记忆失效 + 创建 supersedes edge
-            if contradicted_ids and new_id:
-                for old_id in contradicted_ids:
-                    if not await invalidate_memory(old_id, reason=f"被新记忆 #{new_id} 替代"):
-                        print(f"⚠️ 记忆 #{old_id} 失效未命中，仍建 supersedes 边（矛盾计数可能偏高）")
-                    await create_memory_edge(
-                        new_id, "memory", old_id, "memory", "supersedes",
-                        reason="提取时自动检测到信息更新", created_by="extractor"
-                    )
-                    contradiction_count += 1
+        if action == "abandoned":
+            print("💭 提取素材在生成期间被删改，本轮放弃保存")
+            return {"action": "abandoned", "reason": "sources_changed"}
+        saved_count = len(saved_items)
 
         if saved_count > 0 or skipped_count > 0:
             total = await get_all_memories_count()
@@ -1879,11 +1981,51 @@ async def chat_completions(request: Request):
     # 其 payload 才可能成为归属的唯一证据。
     client_gave_conv_id = bool(conversation_id)
     # 归属上下文打包传递：从请求入口一路带到暗写，避免每层都摊开四个参数。
+    # reset 世代在**请求入口**取一次快照：暗写是后台任务，从这里到落账中间可能夹进一次
+    # 全局重置。带着旧世代去落账会被拒（reason=reset），于是"重置前发出、重置后才落表"
+    # 的在途请求不会把刚清空的库又写回一条。
+    # W2-04 v3：Chat 在发起生成前就把这一轮两条消息的 ID 定好并一起发过来。
+    # 账本行记下自己来源的那条消息，删除才能精确落到账本上——不必拿 message_id 猜
+    # turn_key，也不必用整轮章去代替单条消息的身份。缺失时按 None 处理（老客户端）。
+    # W2-04 v3.2：两条 ID 要么一起缺（老客户端，按老路走），要么一起给且都合法。
+    # 只给一半 = 客户端自以为在用新合同、实际只有半条链路，那半条账本行永远失联；
+    # 显式非法同理。一律 400 code=invalid_message_identity，与 turn_key 的两层拒绝
+    # 哲学一致。四个键在这里就被摘干净，绝不随请求体透传给上游供应商。
+    def _take_msg_id(*keys):
+        present, raw = False, None
+        for key in keys:
+            if key in body:
+                value = body.pop(key)
+                if not present:
+                    present, raw = True, value
+        return present, raw
+
+    user_id_present, user_id_raw = _take_msg_id("user_message_id", "userMsgId")
+    assistant_id_present, assistant_id_raw = _take_msg_id("assistant_message_id", "assistantMsgId")
+
+    def _clean_msg_id(value):
+        if not isinstance(value, str):
+            return None
+        value = value.strip()
+        return value if 1 <= len(value) <= 200 else None
+
+    user_message_id = _clean_msg_id(user_id_raw)
+    assistant_message_id = _clean_msg_id(assistant_id_raw)
+    if (user_id_present or assistant_id_present) and (
+            user_message_id is None or assistant_message_id is None):
+        return JSONResponse(status_code=400, content={
+            "error": "userMsgId / assistantMsgId 必须成对出现，且都是 1-200 字符的非空字符串",
+            "code": "invalid_message_identity",
+        })
+
     ledger_ctx = {
         "client_gave_conv_id": client_gave_conv_id,
         "project_id_present": project_id_present,
         "payload_project_id": raw_project_id,
         "turn_key": turn_key,
+        "user_message_id": user_message_id,
+        "assistant_message_id": assistant_message_id,
+        "reset_generation": await get_reset_generation(),
     }
 
     # 先确定最终模型，后面的 prompt cache 判断要用它。
@@ -3831,84 +3973,74 @@ async def api_extract_now(request: Request):
             project_id = body.get("project_id")
         except Exception:
             pass
-        # 获取最近的对话消息
         extract_interval = await get_extract_interval()
-        recent_msgs = await get_recent_conversation(limit=extract_interval * 2)
-        if not recent_msgs:
-            return {"status": "ok", "action": "extract", "saved": 0, "skipped": 0, "message": "没有最近的对话可提取"}
-        
-        messages_for_extraction = [
-            {"role": row["role"], "content": row["content"]}
-            for row in recent_msgs
-        ]
-        
-        # 获取对比用的已有记忆
-        user_text = " ".join(r["content"] for r in recent_msgs if r["role"] == "user")
-        related = await search_memories(user_text[:500], limit=50, track_recall=False, project_id=project_id)
-        recent = await get_recent_memories(limit=30, project_id=project_id)
-        seen = set()
-        existing_contents = []
-        for content in [r["content"] for r in related] + [r["content"] for r in recent]:
-            if content not in seen:
-                seen.add(content)
-                existing_contents.append(content)
-        
-        # 获取分类
-        try:
-            all_cats = await get_all_categories()
-            cat_names = [c["name"] for c in all_cats]
-        except Exception:
-            cat_names = []
-        
-        from config import get_config
-        db_memory_model = await get_config("default_memory_model")
-        db_memory_prompt = await get_config("prompt_memory_extract")
-        
-        new_memories = await extract_memories(
-            messages_for_extraction,
-            existing_memories=existing_contents,
-            categories=cat_names,
-            model_override=db_memory_model if db_memory_model else None,
-            prompt_override=db_memory_prompt if db_memory_prompt else None,
-        )
-        
-        # 过滤 + 去重 + 保存
-        META_BLACKLIST = [
-            "记忆库", "记忆系统", "检索", "没有被记录", "没有被提取",
-            "记忆遗漏", "尚未被记录", "写入不完整", "检索功能",
-            "系统没有返回", "关键词匹配", "语义匹配", "语义检索",
-            "阈值", "数据库", "seed", "导入", "部署",
-            "bug", "debug", "端口", "网关",
-        ]
-        saved_count = 0
-        skipped_count = 0
         session_id = "manual-" + str(uuid.uuid4())[:8]
-        
-        for mem in new_memories:
-            if any(kw in mem["content"] for kw in META_BLACKLIST):
-                continue
-            is_dup, _ = await check_memory_duplicate(mem["content"], new_title=mem.get("title", ""), project_id=project_id)
-            if is_dup:
-                skipped_count += 1
-                continue
-            cat_id = None
-            cat_hint = mem.get("category", "")
-            if cat_hint:
-                cat_id = await match_category_by_name(cat_hint)
-            await save_memory(
-                content=mem["content"],
-                importance=mem["importance"],
-                source_session=session_id,
-                title=mem.get("title", ""),
-                category_id=cat_id,
-                source="manual_extracted",
-                emotional_weight=mem.get("emotional_weight", 0),
-                project_id=project_id,
+
+        # W2-04：素材读取即快照来源版本；提取、去重、向量都在锁外算完，最后在一个事务里
+        # 同锁比对版本并整批落库。素材在生成期间被删就用剩余素材重算一次，仍在变则放弃。
+        for attempt in (1, 2):
+            snapshot = await snapshot_recent_conversation(limit=extract_interval * 2)
+            recent_msgs = snapshot["rows"]
+            if not recent_msgs:
+                return {"status": "ok", "action": "extract", "saved": 0, "skipped": 0, "message": "没有最近的对话可提取"}
+
+            messages_for_extraction = [
+                {"role": row["role"], "content": row["content"]}
+                for row in recent_msgs
+            ]
+
+            # 获取对比用的已有记忆
+            user_text = " ".join(r["content"] for r in recent_msgs if r["role"] == "user")
+            related = await search_memories(user_text[:500], limit=50, track_recall=False, project_id=project_id)
+            recent = await get_recent_memories(limit=30, project_id=project_id)
+            seen = set()
+            existing_contents = []
+            for content in [r["content"] for r in related] + [r["content"] for r in recent]:
+                if content not in seen:
+                    seen.add(content)
+                    existing_contents.append(content)
+
+            # 获取分类
+            try:
+                all_cats = await get_all_categories()
+                cat_names = [c["name"] for c in all_cats]
+            except Exception:
+                cat_names = []
+
+            from config import get_config
+            db_memory_model = await get_config("default_memory_model")
+            db_memory_prompt = await get_config("prompt_memory_extract")
+
+            new_memories = await extract_memories(
+                messages_for_extraction,
+                existing_memories=existing_contents,
+                categories=cat_names,
+                model_override=db_memory_model if db_memory_model else None,
+                prompt_override=db_memory_prompt if db_memory_prompt else None,
             )
-            saved_count += 1
-        
-        total = await get_all_memories_count()
-        return {"status": "ok", "action": "extract", "saved": saved_count, "skipped": skipped_count, "total": total}
+
+            plans, skipped_count = await _prepare_memory_batch(
+                _filter_meta_memories(new_memories), project_id=project_id,
+                detect_contradiction=False,
+            )
+            pool = await get_pool()
+            async with pool.acquire() as conn:
+                async with conn.transaction():
+                    outcome, result = await save_if_sources_unchanged(
+                        conn, snapshot,
+                        lambda c: _commit_memory_batch(c, plans, session_id=session_id,
+                                                       project_id=project_id,
+                                                       source="manual_extracted"),
+                    )
+            if outcome == "saved":
+                saved_items, _ = result
+                total = await get_all_memories_count()
+                return {"status": "ok", "action": "extract", "saved": len(saved_items),
+                        "skipped": skipped_count, "total": total}
+            print(f"event=extraction_sources_changed attempt={attempt} increment=1")
+
+        return {"status": "ok", "action": "abandoned", "reason": "sources_changed",
+                "saved": 0, "skipped": 0, "total": await get_all_memories_count()}
     except Exception as e:
         return {"error": str(e)}
 
@@ -4089,16 +4221,18 @@ async def api_save_compression_summary(request: Request):
         summary = body.get("summary", "")
         if not conv_id or not summary:
             return JSONResponse(status_code=400, content={"error": "缺少 conversation_id 或 summary"})
-        pool = await get_pool()
-        async with pool.acquire() as conn:
-            await conn.execute(
-                "INSERT INTO compression_summaries (conversation_id, summary, model, summary_type, msg_count) VALUES ($1, $2, $3, $4, $5)",
-                conv_id,
-                summary,
-                body.get("model", ""),
-                body.get("summary_type", "auto"),
-                body.get("msg_count", 0),
-            )
+        status, code, error_code = await save_compression_summary(
+            conv_id, summary,
+            model=body.get("model", ""),
+            summary_type=body.get("summary_type", "auto"),
+            msg_count=body.get("msg_count", 0),
+            expected_source_rev=body.get("expected_source_rev"),
+        )
+        if code != 200:
+            payload = {"error": status}
+            if error_code:
+                payload["code"] = error_code
+            return JSONResponse(status_code=code, content=payload)
         return JSONResponse(content={"ok": True})
     except Exception as e:
         return JSONResponse(status_code=500, content={"error": str(e)})
@@ -5383,6 +5517,14 @@ async def _legacy_write_gate(endpoint: str):
 
 # ──── 对话 ────
 
+def _deleted_conversation_response():
+    """普通同步通道撞上会话章的统一回执：410 + 固定机器码，不带任何 ID 或异常正文。
+
+    Chat 的 outbox 已经把 putMsg 404 当"远端已删"处理，410 是同一语义的明确版本。
+    """
+    return JSONResponse(status_code=410, content={"error": "对话已删除", "code": "deleted"})
+
+
 @app.get("/sync/conversations")
 async def api_sync_get_conversations():
     """获取对话列表（不含消息体）"""
@@ -5417,7 +5559,11 @@ async def api_sync_create_conversation(request: Request):
         data.pop("messages", None)
         if not str(data.get("id") or "").strip():
             return JSONResponse(status_code=400, content={"error": "缺少对话 id"})
-        if not await sync_create_conversation(data):
+        try:
+            created = await sync_create_conversation(data)
+        except SessionDeletedError:
+            return _deleted_conversation_response()
+        if not created:
             return JSONResponse(status_code=409, content={"error": "对话已存在"})
         result = {"status": "ok"}
         if warning:
@@ -5437,10 +5583,22 @@ async def api_sync_upsert_conversation(conv_id: str, request: Request):
         data = await request.json()
         data["id"] = conv_id
         messages = data.pop("messages", None)
-        await sync_upsert_conversation(data)
-        if messages is not None:
-            await sync_upsert_messages(conv_id, messages)
-        return {"status": "ok"}
+        try:
+            await sync_upsert_conversation(data)
+            replaced = await sync_upsert_messages(conv_id, messages) if messages is not None else {}
+        except SessionDeletedError:
+            return _deleted_conversation_response()
+        result = {"status": "ok"}
+        # 全量替换里被章挡下的 ID 要点名回报：调用方据此把它们从本地也清掉，
+        # 否则每次同步都会再试一遍，看起来像"删不掉"。两类分开报——
+        # 章是永久的（本地删掉即可），版本过期的压缩副本重算一次还能再写进来。
+        skipped = replaced.get("skipped_deleted_messages") or []
+        if skipped:
+            result["skipped_deleted_messages"] = skipped
+        stale = replaced.get("skipped_stale_summaries") or []
+        if stale:
+            result["skipped_stale_summaries"] = stale
+        return result
     except Exception as e:
         return JSONResponse(status_code=500, content={"error": str(e)})
 
@@ -5465,12 +5623,14 @@ async def api_sync_patch_conversation(conv_id: str, request: Request):
 
 @app.delete("/sync/conversations/{conv_id}")
 async def api_sync_delete_conversation(conv_id: str):
-    """删除对话"""
+    """永久删除一段对话的全部原始副本，并盖上会话章。"""
     try:
-        deleted = await sync_delete_conversation(conv_id)
-        return {"deleted": deleted}
-    except Exception as e:
-        return JSONResponse(status_code=500, content={"error": str(e)})
+        return await sync_delete_conversation(conv_id)
+    except Exception:
+        # 崩溃回执用固定文案：异常正文里可能带着会话 ID、消息片段或 SQL，
+        # 一旦回给客户端或打进日志就是隐私泄漏。
+        print("event=session_delete_failed kind=conversation increment=1")
+        return JSONResponse(status_code=500, content={"error": "删除失败"})
 
 
 # ──── 单消息 ────
@@ -5484,21 +5644,35 @@ async def api_sync_upsert_message(conv_id: str, msg_id: str, request: Request):
         data, err = await _read_json_object(request)
         if err:
             return err
-        status, code = await sync_upsert_single_message(conv_id, msg_id, data)
+        status, code, error_code = await sync_upsert_single_message(conv_id, msg_id, data)
         if code != 200:
-            return JSONResponse(status_code=code, content={"error": status})
+            body = {"error": status}
+            if error_code:
+                body["code"] = error_code
+            return JSONResponse(status_code=code, content=body)
         return {"status": "ok"}
     except Exception as e:
         return JSONResponse(status_code=500, content={"error": str(e)})
 
 
 @app.delete("/sync/conversations/{conv_id}/messages/{msg_id}")
-async def api_sync_delete_message(conv_id: str, msg_id: str):
-    """以对话和消息双条件删除单条消息。"""
+async def api_sync_delete_message(conv_id: str, msg_id: str, request: Request):
+    """永久删除一条消息在所有原始副本里的痕迹，并盖上消息章。
+
+    W2-04 v3.2：客户端可以用 `?role=&turn_key=` 把这条消息的身份说清楚。声明
+    `role=assistant` 就关掉"把 msg_id 当候选轮次键"的兜底（assistant 的 ID 本不该是
+    任何轮次键）；声明 turn_key 则让兜底直接用它，不必猜。两个都不给时按老客户端
+    处理，兜底照跑——见 sync_delete_message 的申报边界。
+    """
     try:
-        return {"deleted": await sync_delete_message(conv_id, msg_id)}
-    except Exception as e:
-        return JSONResponse(status_code=500, content={"error": str(e)})
+        declared_role = (request.query_params.get("role") or "").strip().lower() or None
+        declared_turn_key = (request.query_params.get("turn_key")
+                             or request.query_params.get("turnKey") or "").strip() or None
+        return await sync_delete_message(conv_id, msg_id, declared_role=declared_role,
+                                         declared_turn_key=declared_turn_key)
+    except Exception:
+        print("event=message_delete_failed kind=message increment=1")
+        return JSONResponse(status_code=500, content={"error": "删除失败"})
 
 
 # ──── 项目 ────
@@ -5780,7 +5954,8 @@ async def api_sync_import_backup(file: UploadFile = File(...)):
             return JSONResponse(status_code=400, content={"error": "不是有效的 zip 文件"})
 
         buf.seek(0)
-        result = {"conversations": 0, "messages": 0, "projects": 0, "memories": 0, "settings": 0, "config": 0}
+        result = {"conversations": 0, "messages": 0, "projects": 0, "memories": 0,
+                  "settings": 0, "config": 0, "failed_conversations": 0}
 
         with zipfile.ZipFile(buf, 'r') as zf:
             names = zf.namelist()
@@ -5793,14 +5968,21 @@ async def api_sync_import_backup(file: UploadFile = File(...)):
                     result["projects"] += 1
 
             # 导入对话 + 消息
+            # 备份恢复是用户明确的"把它带回来"，因此是全仓唯一能撤销删除章的通道；
+            # 一段对话一个事务，撤章与重建同生共死，失败的那段保持原样（章还在、数据没变）。
             if "conversations.json" in names:
                 convs = json.loads(zf.read("conversations.json"))
                 for conv in convs:
-                    messages = conv.pop("messages", [])
-                    await sync_upsert_conversation(conv)
-                    if messages:
-                        await sync_upsert_messages(conv["id"], messages)
-                        result["messages"] += len(messages)
+                    # 缺键取 None（只恢复元数据），不能取 []——那是「权威空快照」的意思。
+                    messages = conv.pop("messages", None)
+                    try:
+                        await restore_conversation_from_backup(conv, messages)
+                    except Exception as e:
+                        result["failed_conversations"] += 1
+                        print(f"event=backup_restore_failed "
+                              f"exception_type={type(e).__name__} increment=1")
+                        continue
+                    result["messages"] += len(messages or [])
                     result["conversations"] += 1
 
             # 导入记忆
@@ -5856,27 +6038,12 @@ async def api_sync_reset(request: Request):
         if confirm != "RESET_ALL_DATA":
             return JSONResponse(status_code=400, content={"error": "需要确认码 confirm='RESET_ALL_DATA'"})
 
-        pool = await get_pool()
-        async with pool.acquire() as conn:
-            # 删除所有消息和对话（级联）
-            deleted_convs = await conn.execute("DELETE FROM chat_conversations")
-            deleted_projs = await conn.execute("DELETE FROM chat_projects")
-            # compression_summaries 无外键，不会随对话级联删除，手动清空
-            await conn.execute("DELETE FROM compression_summaries")
-
-            # 清除同步设置
-            for key in SYNC_SETTING_KEYS:
-                await conn.execute("DELETE FROM gateway_config WHERE key = $1", key)
-
+        result = await reset_all_chat_data(SYNC_SETTING_KEYS)
         print("⚠️ 数据重置完成")
-        return {
-            "status": "ok",
-            "message": "所有聊天数据已重置",
-            "deleted_conversations": deleted_convs,
-            "deleted_projects": deleted_projs,
-        }
-    except Exception as e:
-        return JSONResponse(status_code=500, content={"error": str(e)})
+        return {"status": "ok", "message": "所有聊天数据已重置", **result}
+    except Exception:
+        print("event=session_delete_failed kind=reset increment=1")
+        return JSONResponse(status_code=500, content={"error": "重置失败"})
 
 
 # ============================================================
