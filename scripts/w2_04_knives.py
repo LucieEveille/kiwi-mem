@@ -97,15 +97,60 @@ KNIVES = [
                         session_id, user_content, model, project_id, scope_known, turn_key,
                         None,''', ()),
 
-    ("R2-belt", "not-present 不把 msg_id 当候选轮次键", "database.py", "T-W2-04-36",
+    ("R2-belt", "not-present 不清候选轮次键那一轮", "database.py", "T-W2-04-36",
      ("a turn_key-only client's deleted sentence is still sitting in the ledger",
-      "must be stamped, or it just lands again"),
-     '''                by_key = await conn.execute(
-                    "DELETE FROM conversations WHERE session_id = $1 AND turn_key = $2",
-                    conv_id, msg_id,
-                )
-                ledger_deleted += _rowcount(by_key)''',
-     '''                by_key = "DELETE 0"''', ()),
+      "must be stamped, or it just lands again",
+      "the belt must still close the turn it guessed at",
+      "must be what the belt aims at"),
+     '''                if declared_role != "assistant":
+                    belt_key = declared_turn_key or msg_id
+                    by_key = await conn.execute(
+                        "DELETE FROM conversations WHERE session_id = $1 AND turn_key = $2",
+                        conv_id, belt_key,
+                    )
+                    ledger_deleted += _rowcount(by_key)''',
+     '''                if declared_role != "assistant":
+                    belt_key = declared_turn_key or msg_id
+                    by_key = "DELETE 0"''', ()),
+
+    ("A1-uncond", "命中①就不再无条件清扫", "database.py", "T-W2-04-36",
+     "a precise hit cancelled the sweep",
+     '''                ledger_deleted += await _sweep_unlinked_legacy_rows_tx(conn, conv_id)''',
+     '''                if ledger_deleted == 0:
+                    ledger_deleted += await _sweep_unlinked_legacy_rows_tx(conn, conv_id)''', ()),
+
+    ("A1-keyed", "清扫放过带 turn_key 的无关联行", "database.py", "T-W2-04-35",
+     "a keyed row that cannot name its message survived",
+     '''        DELETE FROM conversations
+        WHERE session_id = $1 AND source_message_id IS NULL''',
+     '''        DELETE FROM conversations
+        WHERE session_id = $1 AND turn_key IS NULL AND source_message_id IS NULL''', ()),
+
+    ("belt-role", "not-present 不理会客户端声明的 role", "database.py", "T-W2-04-36",
+     "still closed the turn behind the belt",
+     '''                if declared_role != "assistant":''',
+     '''                if True:''', ()),
+
+    ("A2-entry", "聊天入口把两条消息 ID 丢掉", "main.py", "T-W2-04-40",
+     "must carry both message ids all the way to the ledger",
+     '''        "user_message_id": user_message_id,
+        "assistant_message_id": assistant_message_id,''',
+     '''        "user_message_id": None,
+        "assistant_message_id": None,''', ()),
+
+    ("A2-halfpair", "聊天入口放行半对消息 ID", "main.py", "T-W2-04-40",
+     "must be refused, got",
+     '''    if (user_id_present or assistant_id_present) and (
+            user_message_id is None or assistant_message_id is None):''',
+     '''    if False and (user_id_present or assistant_id_present) and (
+            user_message_id is None or assistant_message_id is None):''', ()),
+
+    ("A2-passthrough", "聊天入口不摘 ID、原样透传上游", "main.py", "T-W2-04-40",
+     "was passed through to the provider",
+     '''            if key in body:
+                value = body.pop(key)''',
+     '''            if key in body:
+                value = body.get(key)''', ()),
 
     ("R3a", "换窗压缩后不做终检", "main.py", "T-W2-04-37",
      "the prompt builder injected a handoff whose source was deleted mid-flight",
@@ -294,19 +339,27 @@ def main():
 
 
 def _verdict(code, out, target, expect_text):
-    """非零退出还不够：必须红在目标守卫、且断言文本对得上，才算这把刀被咬住。"""
+    """非零退出还不够：必须**红在目标守卫里**、且断言文本对得上，才算这把刀被咬住。
+
+    红在哪一条守卫，以断言前打出的最后一个 `BEGIN T-xx` 为准（套件每条守卫开跑前打
+    一行）。以前这里拿 traceback 的函数名做模糊匹配，一条刀红在隔壁守卫上照样能算数；
+    现在守卫编号真参与裁决，对不上就是 RED-ELSEWHERE，并把实际咬住它的守卫写进刀账。
+    """
     if code == 0:
         return "suite still fully green", "SURVIVED"
     assertion = re.search(r"AssertionError: (.*)", out)
-    reached = re.search(rf"in (\w*{re.escape(target.split('-')[-1])}\w*)", out)
+    begins = re.findall(r"^BEGIN (\S+)", out, flags=re.MULTILINE)
+    reached = begins[-1] if begins else "(no guard started)"
     if not assertion:
         tail = out.strip().splitlines()[-1][:160]
-        return f"non-assertion failure: {tail}", "CRASH"
+        return f"non-assertion failure in {reached}: {tail}", "CRASH"
     text = assertion.group(1)[:200]
+    if reached != target:
+        return f"red in {reached}, not in {target}: {text}", "RED-ELSEWHERE"
     wanted = (expect_text,) if isinstance(expect_text, str) else tuple(expect_text or ())
     if wanted and not any(w and w in text for w in wanted):
-        return f"red, but not where expected ({target}): {text}", "RED-ELSEWHERE"
-    return f"[{target}] {text}", "RED"
+        return f"red in {target}, but on another assertion: {text}", "RED-ELSEWHERE"
+    return f"[{reached}] {text}", "RED"
 
 
 if __name__ == "__main__":
