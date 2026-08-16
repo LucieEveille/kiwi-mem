@@ -4125,7 +4125,9 @@ async def sync_delete_message(conv_id: str, msg_id: str):
 
     服务器上查不到这条消息时**照样盖章、照样清副本**：本地 PUT 还在网络里排队、
     DELETE 先到，是完全正常的时序。只盖章不清副本的话，摘要、自动 divider 与后台
-    刚落下的账本行都会带着这句话活下来。
+    刚落下的账本行都会带着这句话活下来。账本行按两条线索找：先按稳定关联
+    `source_message_id` 精确删（新客户端），再把 msg_id 当候选 turn_key 删一次并盖
+    轮次章（只发 turn_key 的客户端），两条都落空才退回无键 legacy 清扫。
 
     最后，源会话发生任何删除都要顺手清掉别的会话里从它搬过去的换窗卡（露露裁决：
     删了旧对话，新对话就不该再从那里衔接）——所以取锁时把目标会话一起排序取上。
@@ -4155,6 +4157,24 @@ async def sync_delete_message(conv_id: str, msg_id: str):
                     conv_id, msg_id,
                 )
                 ledger_deleted = _rowcount(linked)
+                # 只发 turn_key、不发消息 ID 的客户端（今天的 Chat，以及任何按 W2-03
+                # 合同办事的第三方）落下的行没有上面那条关联，所以再把 msg_id 当作
+                # **候选轮次键**清一次。安全性：Chat 合同规定 turnKey 就是该轮 user
+                # 消息的 id，所以 msg_id 只可能等于「它自己作为 user 那一轮」的键；而这
+                # 条消息服务端并不存在 = 那一轮的 user 载体不存在 = 这一轮本就该死。
+                # assistant 的 id 不会是任何 turn_key，这两句对它命中零行、章也无害。
+                by_key = await conn.execute(
+                    "DELETE FROM conversations WHERE session_id = $1 AND turn_key = $2",
+                    conv_id, msg_id,
+                )
+                ledger_deleted += _rowcount(by_key)
+                if _rowcount(by_key):
+                    # 清了就要盖章，否则同一个 turn_key 的下一次落账照样进来。
+                    await conn.execute(
+                        "INSERT INTO turn_tombstones (session_id, turn_key) VALUES ($1, $2) "
+                        "ON CONFLICT DO NOTHING",
+                        conv_id, msg_id,
+                    )
                 if ledger_deleted == 0:
                     ledger_deleted = await _sweep_unlinked_legacy_rows_tx(conn, conv_id)
                 ledger_mode = "not_present"

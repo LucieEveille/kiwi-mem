@@ -39,7 +39,11 @@ EXPECT_SHA = os.environ.get("KIWI_KNIFE_SHA", "")
 TIMEOUT = int(os.environ.get("KIWI_KNIFE_TIMEOUT", "1500"))
 SUITE = os.path.join("scripts", "test_kiwi_safety_sync.py")
 
-# (tag, 说明, 目标文件, 目标守卫标识, 期望红点文本片段, 原文, 替换, 额外静默 tag)
+# (tag, 说明, 目标文件, 目标守卫标识, 可接受红点文本（str 或 tuple，任一命中即可）,
+#  原文, 替换, 额外静默 tag)
+#
+# 期望文本写成元组时，同一守卫里的任意一句断言命中都算数：守卫补一句更强的断言不该
+# 让刀账变成 RED-ELSEWHERE。真正要防的是"红在别的守卫上"，那由目标守卫编号把关。
 KNIVES = [
     ("R1", "带键单删不扫无键 legacy 行", "database.py", "T-W2-04-35",
      "key-less legacy rows survived a keyed delete",
@@ -92,6 +96,16 @@ KNIVES = [
      '''                    "VALUES ($1, 'user', $2, $3, $4, $5, $6, $7) RETURNING id",
                         session_id, user_content, model, project_id, scope_known, turn_key,
                         None,''', ()),
+
+    ("R2-belt", "not-present 不把 msg_id 当候选轮次键", "database.py", "T-W2-04-36",
+     ("a turn_key-only client's deleted sentence is still sitting in the ledger",
+      "must be stamped, or it just lands again"),
+     '''                by_key = await conn.execute(
+                    "DELETE FROM conversations WHERE session_id = $1 AND turn_key = $2",
+                    conv_id, msg_id,
+                )
+                ledger_deleted += _rowcount(by_key)''',
+     '''                by_key = "DELETE 0"''', ()),
 
     ("R3a", "换窗压缩后不做终检", "main.py", "T-W2-04-37",
      "the prompt builder injected a handoff whose source was deleted mid-flight",
@@ -151,7 +165,8 @@ async def _handoff_source_alive_tx''',
 async def _handoff_source_alive_tx''', ()),
 
     ("R3c-lockorder", "跨会话取锁不排序", "database.py", "T-W2-04-38",
-     "session locks must be taken in ascending id order",
+     ("session locks must be taken in ascending id order",
+      "must impose a canonical order"),
      '''    for session_id in sorted({s for s in session_ids if s}):
         await _lock_session(conn, session_id)''',
      '''    for session_id in {s for s in session_ids if s}:
@@ -288,7 +303,8 @@ def _verdict(code, out, target, expect_text):
         tail = out.strip().splitlines()[-1][:160]
         return f"non-assertion failure: {tail}", "CRASH"
     text = assertion.group(1)[:200]
-    if expect_text and expect_text not in text:
+    wanted = (expect_text,) if isinstance(expect_text, str) else tuple(expect_text or ())
+    if wanted and not any(w and w in text for w in wanted):
         return f"red, but not where expected ({target}): {text}", "RED-ELSEWHERE"
     return f"[{target}] {text}", "RED"
 
