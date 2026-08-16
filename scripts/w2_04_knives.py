@@ -181,7 +181,7 @@ async def _handoff_source_alive_tx''', ()),
                     return ("对话素材已变化", 409, "sources_changed")''', ()),
 
     ("R6", "爹爹刀 κ：只清第一条自动 divider", "database.py", "T-W2-04-24",
-     "every purged auto divider must be stamped",
+     "every auto divider must be counted, not just the first",
      '''            if doomed_dividers:''',
      '''            doomed_dividers = doomed_dividers[:1]
             if doomed_dividers:''', ("T-W2-04-7-purge-receipt", "T-W2-04-7-divider-count")),
