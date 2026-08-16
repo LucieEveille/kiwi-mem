@@ -4985,6 +4985,58 @@ async def test_w2_04_message_identity_barrier(client: httpx.AsyncClient) -> None
     require(surviving == ["user"],
             f"the linked assistant row must go and the user row must stay, got {surviving}")
 
+    # ---- a turn_key-only client is covered too (today's Chat) --------------
+    # The message-id link is the long-term design, but it only exists once Chat sends the
+    # ids.  A client that follows the W2-03 contract and sends turn_key alone would still
+    # be exposed: user types, deletes at once, the PUT is still in flight, the DELETE wins
+    # the race — and the background write of that very sentence stays in the ledger.
+    # Chat's contract is turnKey == the user message's id, so a not-present id can only
+    # ever be the key of the turn it was the user of, and that turn has just lost its
+    # carrier — it is already dead.
+    await _w204_reset_tables()
+    bsid2 = "w204-beltless"
+    await _seed_conversation(bsid2)
+    await database.append_turn_events_atomic(
+        bsid2, "the sentence the user deleted", "a-body", "m", turn_key="w204-belt-u1")
+    require(await _pool_fetchval(
+        "SELECT COUNT(*) FROM conversations WHERE session_id = $1", bsid2) == 2,
+        "the turn_key-only fixture did not land")
+
+    response = await client.delete(f"/sync/conversations/{bsid2}/messages/w204-belt-u1")
+    require(response.status_code == 200, f"not-present delete failed: {response.text}")
+    require(await _pool_fetchval(
+        "SELECT COUNT(*) FROM conversations WHERE session_id = $1 AND turn_key = $2",
+        bsid2, "w204-belt-u1") == 0,
+        "a turn_key-only client's deleted sentence is still sitting in the ledger")
+    require(response.json()["ledger_events_deleted"] >= 2,
+            f"the receipt must own up to the rows it swept: {response.json()}")
+    require(await _pool_fetchval(
+        "SELECT EXISTS(SELECT 1 FROM turn_tombstones WHERE session_id = $1 AND turn_key = $2)",
+        bsid2, "w204-belt-u1"),
+        "the turn whose user carrier never existed must be stamped, or it just lands again")
+    again = await database.append_turn_events_atomic(
+        bsid2, "the sentence the user deleted", "a-body", "m", turn_key="w204-belt-u1")
+    require(again.get("path") == "tombstoned" and again.get("reason") == "turn",
+            f"the dead turn accepted another write: {again}")
+    require(await _pool_fetchval(
+        "SELECT COUNT(*) FROM conversations WHERE session_id = $1", bsid2) == 0,
+        "the dead turn's rows came back")
+
+    # a delete that names an assistant id must not take a whole turn down with it:
+    # an assistant id is never a turn key, so the belt has to miss it entirely.
+    await _w204_reset_tables()
+    safe = "w204-belt-safe"
+    await _seed_conversation(safe)
+    await database.append_turn_events_atomic(safe, "u", "a", "m", turn_key="w204-safe-u1")
+    await client.delete(f"/sync/conversations/{safe}/messages/w204-safe-a1")
+    require(await _pool_fetchval(
+        "SELECT COUNT(*) FROM conversations WHERE session_id = $1 AND turn_key = $2",
+        safe, "w204-safe-u1") == 2,
+        "deleting an assistant id wrongly took down the turn it belongs to")
+    require(not await _pool_fetchval(
+        "SELECT EXISTS(SELECT 1 FROM turn_tombstones WHERE session_id = $1)", safe),
+        "an assistant id is not a turn key and must never stamp a turn")
+
     # ---- a fresh assistant id in the same turn is still allowed ------------
     await _w204_reset_tables()
     rsid = "w204-barrier-regen"
