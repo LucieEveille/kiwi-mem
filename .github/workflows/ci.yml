@@ -80,7 +80,7 @@ jobs:
       - name: 票 C 十刀变异账（一次性证据）
         env:
           KIWI_KNIFE_DSN: postgresql://postgres:postgres@127.0.0.1:5432/postgres
-          KIWI_KNIFE_SHA: ${{ github.event.pull_request.head.sha }}
+          KIWI_KNIFE_SHA: ${{ github.sha }}
           KIWI_KNIFE_OUT: ${{ runner.temp }}/ticket-c-knife-results.json
         run: >-
           python scripts/w2_04_knives.py
