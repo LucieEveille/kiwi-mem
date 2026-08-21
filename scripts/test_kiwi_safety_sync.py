@@ -5691,6 +5691,631 @@ async def test_w2_04_restore_stamp_states(client: httpx.AsyncClient) -> None:
     passed("T-W2-04-39 backup restore lifts exactly the stamps its file speaks for")
 
 
+async def test_w2_04_1_ticket_c(client: httpx.AsyncClient) -> None:
+    """T-C-01..12: W2-04.1 narrow privacy and compatibility backfill."""
+    begin("T-C-01")
+    await _w204_reset_tables()
+    sid = "tc01-delete-restore"
+    await _seed_conversation(
+        sid,
+        messages=[("tc01-chat-m1", "user", "chat body", "tc01-chat-turn")],
+        events=[("assistant", "ledger body", "tc01-ledger-turn", "tc01-ledger-m1")],
+    )
+    response = await client.delete(f"/sync/conversations/{sid}")
+    require(response.status_code == 200, f"ticket C delete fixture failed: {response.text}")
+    for mid in ("tc01-chat-m1", "tc01-ledger-m1"):
+        require(await _pool_fetchval(
+            "SELECT EXISTS(SELECT 1 FROM message_tombstones "
+            "WHERE session_id = $1 AND message_id = $2)", sid, mid),
+            f"conversation delete failed to stamp visible message id {mid}")
+    for turn_key in ("tc01-chat-turn", "tc01-ledger-turn"):
+        require(await _pool_fetchval(
+            "SELECT EXISTS(SELECT 1 FROM turn_tombstones "
+            "WHERE session_id = $1 AND turn_key = $2)", sid, turn_key),
+            f"conversation delete failed to stamp visible turn key {turn_key}")
+    response = await client.post("/sync/import-backup", files={"file": (
+        "backup.zip", _backup_zip([{"id": sid, "title": "metadata only"}]),
+        "application/zip")})
+    require(response.status_code == 200 and response.json()["conversations"] == 1,
+            f"metadata-only restore failed: {response.text}")
+    response = await client.put(f"/sync/conversations/{sid}/messages/tc01-ledger-m1", json={
+        "role": "assistant", "content": "late replay", "turnKey": "tc01-ledger-turn"})
+    require(response.status_code == 410 and response.json().get("code") in {
+        "message_deleted", "turn_deleted"},
+        f"metadata-only restore reopened a ledger-only message: {response.status_code} {response.text}")
+    require(not await _pool_fetchval(
+        "SELECT EXISTS(SELECT 1 FROM chat_messages WHERE id = 'tc01-ledger-m1')"),
+        "the refused ledger-only message still landed")
+    passed("T-C-01 delete stamps chat and ledger identities before metadata-only restore")
+
+    begin("T-C-02")
+    await _w204_reset_tables()
+    sid = "tc02-empty-restore"
+    await _seed_conversation(
+        sid,
+        messages=[("tc02-m1", "user", "one", "tc02-k1"),
+                  ("tc02-m2", "assistant", "two", "tc02-k1")],
+        events=[("user", "one", "tc02-k1", "tc02-m1"),
+                ("assistant", "two", "tc02-k1", "tc02-m2")],
+    )
+    await client.delete(f"/sync/conversations/{sid}")
+    response = await client.post("/sync/import-backup", files={"file": (
+        "backup.zip", _backup_zip([{"id": sid, "title": "empty", "messages": []}]),
+        "application/zip")})
+    require(response.status_code == 200, f"empty restore failed: {response.text}")
+    response = await client.put(f"/sync/conversations/{sid}/messages/tc02-m1", json={
+        "role": "user", "content": "single replay", "turnKey": "tc02-k1"})
+    require(response.status_code == 410, "single PUT reopened an id after empty restore")
+    await _upsert_config("sync_legacy_write_enabled", "true")
+    response = await client.put(f"/sync/conversations/{sid}", json={
+        "title": "legacy replay", "messages": [
+            {"id": "tc02-m2", "role": "assistant", "content": "legacy", "turnKey": "tc02-k1"}]})
+    require(response.status_code == 200 and "tc02-m2" in (
+        response.json().get("skipped_deleted_messages") or []),
+        f"legacy full replace did not report the stamped id: {response.text}")
+    response = await client.post("/sync/import", json={"projects": [], "conversations": [{
+        "id": sid, "title": "ordinary import", "messages": [
+            {"id": "tc02-m1", "role": "user", "content": "import", "turnKey": "tc02-k1"}]}]})
+    rejects = response.json().get("rejected_details") or []
+    require(any(d.get("type") == "message" and d.get("id") == sid
+                and d.get("code") in {"message_deleted", "turn_deleted"}
+                and "tc02-m1" in (d.get("message_ids") or []) for d in rejects),
+            f"ordinary import did not name its stamped message rejection: {rejects}")
+    require(sid in (response.json().get("imported_conversation_ids") or []),
+            "message rejection incorrectly rejected the whole live conversation")
+    require(await _pool_fetchval(
+        "SELECT COUNT(*) FROM chat_messages WHERE conversation_id = $1", sid) == 0,
+        "an ordinary write channel reopened content after an authoritative empty restore")
+    passed("T-C-02 empty restore keeps delete stamps across every ordinary write channel")
+
+    begin("T-C-03")
+    await _w204_reset_tables()
+    sid = "tc03-partial-restore"
+    await _seed_conversation(
+        sid,
+        messages=[("tc03-m1", "user", "one", "tc03-k1"),
+                  ("tc03-m2", "assistant", "two", "tc03-k1"),
+                  ("tc03-m3", "user", "three", "tc03-k2")],
+        events=[("user", "one", "tc03-k1", "tc03-m1"),
+                ("assistant", "two", "tc03-k1", "tc03-m2"),
+                ("user", "three", "tc03-k2", "tc03-m3")],
+    )
+    await client.delete(f"/sync/conversations/{sid}")
+    response = await client.post("/sync/import-backup", files={"file": (
+        "backup.zip", _backup_zip([{"id": sid, "title": "partial", "messages": [
+            {"id": "tc03-m1", "role": "user", "content": "restored", "turnKey": "tc03-k1"}
+        ]}]), "application/zip")})
+    require(response.status_code == 200, f"partial restore failed: {response.text}")
+    require(not await _pool_fetchval(
+        "SELECT EXISTS(SELECT 1 FROM message_tombstones "
+        "WHERE session_id = $1 AND message_id = 'tc03-m1')", sid),
+        "partial restore did not lift the named message stamp")
+    require(await _pool_fetchval(
+        "SELECT EXISTS(SELECT 1 FROM message_tombstones "
+        "WHERE session_id = $1 AND message_id = 'tc03-m2')", sid),
+        "partial restore lifted an unnamed message stamp")
+    require(await _pool_fetchval(
+        "SELECT EXISTS(SELECT 1 FROM turn_tombstones "
+        "WHERE session_id = $1 AND turn_key = 'tc03-k2')", sid),
+        "partial restore lifted an unnamed turn stamp")
+    response = await client.put(f"/sync/conversations/{sid}/messages/tc03-m2", json={
+        "role": "assistant", "content": "old id", "turnKey": "tc03-k1"})
+    require(response.status_code == 410 and response.json().get("code") == "message_deleted",
+            f"partial restore reopened an unnamed id: {response.status_code} {response.text}")
+    response = await client.put(f"/sync/conversations/{sid}/messages/tc03-new-k2", json={
+        "role": "assistant", "content": "dead turn", "turnKey": "tc03-k2"})
+    require(response.status_code == 410 and response.json().get("code") == "turn_deleted",
+            f"partial restore reopened an unnamed turn: {response.status_code} {response.text}")
+    passed("T-C-03 non-empty restore lifts only identities explicitly named by the backup")
+
+    begin("T-C-04")
+    await _w204_reset_tables()
+    generation_before = await _pool_fetchval(
+        "SELECT reset_generation FROM deletion_epoch WHERE id = 1")
+    for index in range(3):
+        current = f"tc04-reset-{index}"
+        await _seed_conversation(
+            current,
+            messages=[(f"{current}-chat", "user", "chat", f"{current}-chat-k")],
+            events=[("assistant", "ledger", f"{current}-ledger-k", f"{current}-ledger")],
+        )
+    response = await _reset_all(client)
+    require(response.status_code == 200, f"reset fixture failed: {response.text}")
+    sid = "tc04-reset-0"
+    response = await client.post("/sync/import-backup", files={"file": (
+        "backup.zip", _backup_zip([{"id": sid, "title": "metadata only"}]),
+        "application/zip")})
+    require(response.status_code == 200, f"post-reset restore failed: {response.text}")
+    response = await client.put(f"/sync/conversations/{sid}/messages/{sid}-ledger", json={
+        "role": "assistant", "content": "late", "turnKey": f"{sid}-ledger-k"})
+    require(response.status_code == 410,
+            f"reset + metadata restore reopened a ledger-only identity: {response.text}")
+    response = await client.put("/sync/conversations/tc04-reset-1/messages/tc04-reset-1-chat", json={
+        "role": "user", "content": "late", "turnKey": "tc04-reset-1-chat-k"})
+    require(response.status_code == 410 and response.json().get("code") == "deleted",
+            "an unrestored reset conversation lost its session stamp")
+    late = await database.append_turn_events_atomic(
+        sid, "late user", "late assistant", "m", turn_key="tc04-late-k",
+        user_message_id="tc04-late-u", assistant_message_id="tc04-late-a",
+        reset_generation=generation_before,
+    )
+    require(late == {"ok": False, "path": "tombstoned", "reason": "reset"},
+            f"an old-generation ledger write survived reset: {late}")
+    passed("T-C-04 reset stamps every visible identity and rejects old-generation writes")
+
+    begin("T-C-05")
+    require(hasattr(database, "_is_sourceless_handoff_divider"),
+            "restore has no SQL-aligned sourceless handoff predicate")
+    faces = [
+        ("missing", {}),
+        ("empty", {"sourceId": ""}),
+        ("blank", {"sourceId": "   "}),
+        ("json-object-string", json.dumps({"sourceId": ""})),
+        ("array", []),
+        ("scalar", "x"),
+        ("bad-json-string", "{oops"),
+    ]
+    pool = await database.get_pool()
+    async with pool.acquire() as conn:
+        for label, value in faces:
+            msg = {"role": "divider", "handoff_info": value}
+            python_result = database._is_sourceless_handoff_divider(msg)
+            sql_result = await conn.fetchval(
+                "SELECT $1::jsonb IS NOT NULL AND "
+                "NULLIF(BTRIM(COALESCE($1::jsonb->>'sourceId', '')), '') IS NULL",
+                json.dumps(value, ensure_ascii=False),
+            )
+            require(python_result is True and python_result == sql_result,
+                    f"Python/SQL sourceless classification diverged for {label}: "
+                    f"python={python_result} sql={sql_result}")
+    require(not database._is_sourceless_handoff_divider({
+        "role": "divider", "handoff_info": {"sourceId": " live "}}),
+        "a non-blank sourceId was classified as sourceless")
+    require(not database._is_sourceless_handoff_divider({
+        "role": "divider", "summary": "ordinary"}),
+        "an ordinary divider without handoff_info was classified as a handoff")
+
+    await _w204_reset_tables()
+    source_id, target_id = "tc05-live-source", "tc05-restore-target"
+    await _seed_conversation(source_id, messages=[("tc05-source-m", "user", "source", "tc05-source-k")])
+    messages = [
+        {"id": f"tc05-{label}", "role": "divider", "content": "",
+         "handoffInfo": value, "summary": f"filtered-{label}"}
+        for label, value in faces
+    ]
+    messages.extend([
+        {"id": "tc05-live-handoff", "role": "divider", "content": "",
+         "handoffInfo": {"version": 2, "sourceId": source_id, "sourceRev": 0},
+         "summary": "live handoff"},
+        {"id": "tc05-ordinary-divider", "role": "divider", "content": "",
+         "summary": "ordinary divider"},
+        {"id": "tc05-normal", "role": "user", "content": "normal"},
+    ])
+    await _pool_execute(
+        "INSERT INTO message_tombstones (session_id, message_id) VALUES ($1, $2)",
+        target_id, "tc05-missing")
+    sentinel = f"TC05_BODY_{uuid.uuid4().hex}"
+    messages[0]["content"] = sentinel
+    capture = io.StringIO()
+    with redirect_stdout(capture):
+        response = await client.post("/sync/import-backup", files={"file": (
+            "backup.zip", _backup_zip([{"id": target_id, "title": "restore", "messages": messages}]),
+            "application/zip")})
+    body = response.json()
+    require(response.status_code == 200 and body.get("messages") == len(messages),
+            f"restore changed the legacy file-count meaning of messages: {body}")
+    require(body.get("filtered_sourceless_handoffs") == 7,
+            f"restore did not report all seven filtered handoffs: {body}")
+    actual = await _pool_fetchval(
+        "SELECT COUNT(*) FROM chat_messages WHERE conversation_id = $1", target_id)
+    require(actual == body["messages"] - body["filtered_sourceless_handoffs"] == 3,
+            f"restore receipt does not reconcile with committed messages: actual={actual} body={body}")
+    kept = {r["id"] for r in await _pool_fetch(
+        "SELECT id FROM chat_messages WHERE conversation_id = $1", target_id)}
+    require(kept == {"tc05-live-handoff", "tc05-ordinary-divider", "tc05-normal"},
+            f"restore kept or dropped the wrong handoff faces: {sorted(kept)}")
+    require(await _pool_fetchval(
+        "SELECT EXISTS(SELECT 1 FROM message_tombstones "
+        "WHERE session_id = $1 AND message_id = 'tc05-missing')", target_id),
+        "filtering happened after named-id un-stamping")
+    require(sentinel not in response.text and sentinel not in capture.getvalue(),
+            "filtered handoff content leaked through the receipt or audit log")
+    passed("T-C-05 backup restore filters seven SQL-equivalent sourceless handoff faces and reconciles counts")
+
+    begin("T-C-06")
+    restore_tx_source = inspect.getsource(database._restore_conversation_tx)
+    restore_public_source = inspect.getsource(database.restore_conversation_from_backup)
+    require("_drop_sourceless_handoffs" in restore_tx_source
+            and "_drop_sourceless_handoffs" not in restore_public_source,
+            "sourceless handoff filtering moved outside the restore transaction")
+    await _w204_reset_tables()
+    sid = "tc06-rollback"
+    await _seed_conversation(
+        sid,
+        messages=[("tc06-old", "user", "old", "tc06-old-k")],
+        events=[("user", "old", "tc06-old-k", "tc06-old")],
+    )
+    await client.delete(f"/sync/conversations/{sid}")
+    await _install_fail_trigger("chat_messages", "tc06_restore_fail", "conversation_id", sid,
+                                "TC06 injected restore failure")
+    try:
+        response = await client.post("/sync/import-backup", files={"file": (
+            "backup.zip", _backup_zip([{"id": sid, "title": "doomed", "messages": [
+                {"id": "tc06-filtered", "role": "divider", "content": "",
+                 "handoffInfo": {}},
+                {"id": "tc06-new", "role": "user", "content": "new", "turnKey": "tc06-new-k"},
+            ]}]), "application/zip")})
+        body = response.json()
+        require(body.get("failed_conversations") == 1 and body.get("conversations") == 0,
+                f"failed restore receipt was not isolated: {body}")
+        require(body.get("messages") == 0 and body.get("filtered_sourceless_handoffs") == 0,
+                f"failed restore claimed uncommitted message/filter counts: {body}")
+        require(await _has_session_tombstone(sid),
+                "failed restore committed its session un-stamp")
+        require(await _pool_fetchval(
+            "SELECT EXISTS(SELECT 1 FROM message_tombstones "
+            "WHERE session_id = $1 AND message_id = 'tc06-old')", sid),
+            "failed restore committed its message un-stamp")
+        require(not await _pool_fetchval(
+            "SELECT EXISTS(SELECT 1 FROM chat_conversations WHERE id = $1)", sid),
+            "failed restore left a metadata shell")
+        require(not await _pool_fetchval(
+            "SELECT EXISTS(SELECT 1 FROM chat_messages WHERE conversation_id = $1)", sid),
+            "failed restore left message rows")
+    finally:
+        await _drop_fail_trigger("chat_messages", "tc06_restore_fail")
+    passed("T-C-06 restore filtering, un-stamping and writes roll back as one transaction")
+
+    begin("T-C-07")
+    require(hasattr(database, "_w2_04_ready"),
+            "capability readiness has no process-local initialization flag")
+    require("sync_delete_privacy_capability_enabled" in config.CONFIG_SCHEMA,
+            "the capability gate is not registered in CONFIG_SCHEMA")
+    admin_schema = (ROOT / "admin-panel/js/config-schema.js").read_text(encoding="utf-8")
+    require("sync_delete_privacy_capability_enabled" in admin_schema,
+            "the capability gate is missing from the admin configuration schema")
+    require("sync_delete_privacy_capability_enabled" not in app_module.SYNC_SETTING_KEYS,
+            "a service behavior gate leaked into client sync settings")
+    with patch.dict(os.environ, {"KIWI_REVISION": "  tc07-revision  "}, clear=False):
+        responses = [
+            await client.get("/sync/capabilities"),
+            await client.get("/sync/capabilities", headers={"Authorization": "Bearer wrong"}),
+            await client.get("/sync/capabilities", headers={"Authorization": "Bearer chat-token"}),
+        ]
+    require(all(r.status_code == 200 for r in responses),
+            f"kiwi capability probe added a private auth boundary: {[r.status_code for r in responses]}")
+    payload = responses[0].json()
+    require(all(r.json() == payload for r in responses),
+            "authorization headers changed the public kiwi capability response")
+    require({"contracts", "ready", "revision"} <= set(payload),
+            f"capability response dropped a required key: {payload}")
+    version = payload["contracts"].get("w2_04_delete_privacy")
+    require(isinstance(version, int) and not isinstance(version, bool) and version == 1,
+            f"capability contract version is not strict integer 1: {version!r}")
+    require(isinstance(payload["ready"], bool) and payload["ready"] is True,
+            f"initialized schema with default-on gate is not ready: {payload}")
+    require(payload["revision"] == "tc07-revision" and isinstance(payload["revision"], str),
+            f"revision did not use trimmed KIWI_REVISION: {payload}")
+
+    response = await client.put(
+        "/admin/config/sync_delete_privacy_capability_enabled", json={"value": "false"})
+    require(response.status_code == 200 and response.json().get("status") == "updated",
+            f"admin API could not close the capability gate: {response.text}")
+    require((await client.get("/sync/capabilities")).json()["ready"] is False,
+            "closing the capability gate did not take effect immediately")
+    response = await client.put("/sync/settings", json={
+        "sync_delete_privacy_capability_enabled": "true"})
+    require("sync_delete_privacy_capability_enabled" in (response.json().get("rejected") or []),
+            f"/sync/settings accepted a service behavior gate: {response.text}")
+    require(await _config_row("sync_delete_privacy_capability_enabled") == "false",
+            "/sync/settings changed the rejected capability gate")
+    await _pool_execute(
+        "UPDATE gateway_config SET value = 'true' "
+        "WHERE key = 'sync_delete_privacy_capability_enabled'")
+    require((await client.get("/sync/capabilities")).json()["ready"] is True,
+            "direct table update did not reopen the capability gate immediately")
+
+    gate_key = "sync_delete_privacy_capability_enabled"
+    await _w204_reset_tables()
+    require(await config.set_config(gate_key, "false"),
+            "could not close the capability gate through set_config")
+    try:
+        gate_off = await client.get("/sync/capabilities")
+        gate_payload = gate_off.json()
+        require(gate_off.status_code == 200 and gate_payload.get("ready") is False,
+                f"gate off did not advertise ready:false: {gate_off.status_code} {gate_off.text}")
+        require(gate_payload.get("contracts", {}).get("w2_04_delete_privacy") == 1,
+                f"gate off changed the fixed delete-privacy contract: {gate_payload}")
+
+        gate_sid = "tc07-gate-off"
+        await _seed_conversation(
+            gate_sid,
+            messages=[("tc07-m1", "user", "visible", "tc07-k1")],
+            events=[("assistant", "ledger-only", "tc07-k1", "tc07-lm1")],
+        )
+        response = await client.delete(f"/sync/conversations/{gate_sid}")
+        require(response.status_code == 200,
+                f"conversation delete failed while capability gate was off: {response.text}")
+        stamped_ids = {row["message_id"] for row in await _pool_fetch(
+            "SELECT message_id FROM message_tombstones WHERE session_id = $1", gate_sid)}
+        require({"tc07-m1", "tc07-lm1"} <= stamped_ids,
+                f"gate off stopped delete stamping visible message ids: {sorted(stamped_ids)}")
+        require(await _pool_fetchval(
+            "SELECT EXISTS(SELECT 1 FROM turn_tombstones "
+            "WHERE session_id = $1 AND turn_key = 'tc07-k1')", gate_sid),
+            "gate off stopped delete stamping the visible turn key")
+        late = await client.put(f"/sync/conversations/{gate_sid}/messages/tc07-m1", json={
+            "role": "user", "content": "late replay", "turnKey": "tc07-k1"})
+        require(late.status_code == 410,
+                f"gate off let a late PUT resurrect a deleted message: "
+                f"{late.status_code} {late.text}")
+    finally:
+        require(await config.set_config(gate_key, "true"),
+                "could not restore the capability gate after the gate-off guard")
+
+    await _pool_execute("ALTER TABLE chat_messages DROP COLUMN reminder_source_id")
+    probe_payload = (await client.get("/sync/capabilities")).json()
+    require(probe_payload["ready"] is False
+            and probe_payload["contracts"].get("w2_04_delete_privacy") == 1,
+            f"missing ticket-C schema did not fail closed with a fixed contract: {probe_payload}")
+    await database.init_tables()
+    require((await client.get("/sync/capabilities")).json()["ready"] is True,
+            "idempotent migration did not restore capability readiness")
+
+    database._w2_04_ready = False
+    try:
+        flag_payload = (await client.get("/sync/capabilities")).json()
+        require(flag_payload["ready"] is False
+                and flag_payload["contracts"].get("w2_04_delete_privacy") == 1,
+                f"schema-only probe ignored the failed current-process init flag: {flag_payload}")
+        with patch.object(app_module, "MEMORY_ENABLED", False):
+            require((await client.get("/sync/capabilities")).json()["ready"] is False,
+                    "MEMORY_ENABLED=false was reported ready without initialization")
+    finally:
+        database._w2_04_ready = True
+
+    gate_sentinel = f"TC07_DSN_{uuid.uuid4().hex}"
+    async def _gate_crash(*args, **kwargs):
+        raise RuntimeError(gate_sentinel)
+    with patch.object(app_module, "get_config_bool", _gate_crash):
+        response = await client.get("/sync/capabilities")
+    require(response.status_code == 200 and response.json()["ready"] is False,
+            f"gate read failure did not fail closed: {response.status_code} {response.text}")
+    require(gate_sentinel not in response.text,
+            "capability error response leaked an exception or database detail")
+    passed("T-C-07 capability shape, readiness, public auth layer and live admin gate are fail-closed")
+
+    begin("T-C-08")
+    await _w204_reset_tables()
+    zero_sid, bumped_sid = "tc08-zero", "tc08-bumped"
+    await _seed_conversation(zero_sid, messages=[("tc08-zero-m", "user", "zero", "tc08-zero-k")])
+    await _seed_conversation(
+        bumped_sid,
+        messages=[("tc08-bump-u", "user", "u", "tc08-bump-k"),
+                  ("tc08-bump-a", "assistant", "a", "tc08-bump-k")],
+        events=[("user", "u", "tc08-bump-k", "tc08-bump-u"),
+                ("assistant", "a", "tc08-bump-k", "tc08-bump-a")],
+    )
+    await client.delete(f"/sync/conversations/{bumped_sid}/messages/tc08-bump-a")
+    listed = {c["id"]: c for c in await database.sync_get_conversations()}
+    require(isinstance(listed[zero_sid].get("source_rev"), int)
+            and listed[zero_sid]["source_rev"] == 0,
+            f"a never-bumped conversation did not list integer source_rev=0: {listed[zero_sid]}")
+    detail = await database.sync_get_conversation(bumped_sid)
+    require(listed[bumped_sid]["source_rev"] == detail["source_rev"],
+            f"list/detail source_rev disagree: list={listed[bumped_sid]} detail={detail}")
+    old_updated, old_rev = listed[zero_sid]["updated_at"], listed[zero_sid]["source_rev"]
+    pool = await database.get_pool()
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            await database._bump_source_rev_tx(conn, zero_sid)
+    listed_after = {c["id"]: c for c in await database.sync_get_conversations()}
+    require(listed_after[zero_sid]["updated_at"] == old_updated
+            and listed_after[zero_sid]["source_rev"] == old_rev + 1,
+            "a source-revision-only change was hidden by the conversation list")
+    passed("T-C-08 conversation lists expose integer source_rev consistent with detail reads")
+
+    begin("T-C-09")
+    require(hasattr(database, "_search_final_check")
+            and hasattr(database, "_search_initial_state_tx"),
+            "search has no two-stage snapshot/final-check seam")
+    search_source = inspect.getsource(database.search_chat_messages)
+    require('transaction(isolation="repeatable_read", readonly=True)' in search_source,
+            "search phase one is not a repeatable-read readonly snapshot")
+    await _w204_reset_tables()
+    doomed, healthy = "tc09-doomed", "tc09-healthy"
+    for sid in (doomed, healthy):
+        await _seed_conversation(
+            sid,
+            messages=[(f"{sid}-m", "user", f"needle body {sid}", f"{sid}-k")],
+        )
+        await _pool_execute("UPDATE chat_conversations SET title = $2 WHERE id = $1",
+                            sid, f"needle title {sid}")
+    original_final = database._search_final_check
+    fired = []
+    async def _delete_before_final(conn, results, initial_state):
+        if not fired:
+            fired.append(True)
+            await database.sync_delete_conversation(doomed)
+        return await original_final(conn, results, initial_state)
+    with patch.object(database, "_search_final_check", _delete_before_final):
+        results = await database.search_chat_messages("needle", limit=20, context_size=2)
+    require(fired, "the search final-check seam was never reached")
+    ids = {r["conversation_id"] for r in results["message_matches"]}
+    title_ids = {r["conversation_id"] for r in results["title_matches"]}
+    require(doomed not in ids and doomed not in title_ids,
+            f"search returned committed-deleted content: {results}")
+    require(healthy in ids and healthy in title_ids,
+            f"search final check damaged an unaffected conversation: {results}")
+    require(results["message_matches"][0]["matches"][0].get("context"),
+            "search final check changed the result/context shape")
+
+    await _w204_reset_tables()
+    stale, control = "tc09-stale", "tc09-control"
+    for sid in (stale, control):
+        await _seed_conversation(
+            sid,
+            messages=[(f"{sid}-m", "user", f"phaseone body {sid}", f"{sid}-k")],
+        )
+    original_initial = database._search_initial_state_tx
+    bumped = []
+    async def _bump_during_phase_one(conn, session_ids):
+        if not bumped:
+            bumped.append(True)
+            pool = await database.get_pool()
+            async with pool.acquire() as other:
+                async with other.transaction():
+                    await database._bump_source_rev_tx(other, stale)
+        return await original_initial(conn, session_ids)
+    with patch.object(database, "_search_initial_state_tx", _bump_during_phase_one):
+        results = await database.search_chat_messages("phaseone", limit=20, context_size=2)
+    ids = {r["conversation_id"] for r in results["message_matches"]}
+    require(bumped and stale not in ids and control in ids,
+            f"phase-one content and initial rev were not from one snapshot: {results}")
+
+    calls = []
+    async def _fake_search(*args, **kwargs):
+        calls.append((args, kwargs))
+        return {"title_matches": [{"conversation_id": "tc09-route", "title": "route",
+                                   "project_id": None, "date": None}],
+                "message_matches": []}
+    with patch.object(database, "search_chat_messages", _fake_search):
+        response = await client.get("/search/messages", params={"q": "route"})
+        tool_text, _ = await app_module._execute_gateway_tool(
+            "gateway_search_conversations", {"query": "route"}, {"project_id": None})
+    require(response.status_code == 200 and response.json()["title_matches"][0]["title"] == "route",
+            "the public search route bypassed the shared database search primitive")
+    require("route" in tool_text and len(calls) == 2,
+            "the model search tool bypassed the shared database search primitive")
+    passed("T-C-09 search uses one phase-one snapshot and filters changed sources before both callers return")
+
+    begin("T-C-10")
+    inherited = {
+        "T-S": 34, "T-W1-01-": 4, "T-W1-06-": 4, "T-W1-08-": 6,
+        "T-W2-01-": 12, "T-W2-02-": 22, "T-W2-03-": 25, "T-W2-04-": 40,
+    }
+    for prefix, expected in inherited.items():
+        actual = len([name for name in PASSED if name.startswith(prefix)])
+        require(actual == expected,
+                f"ticket C changed inherited guard count {prefix}: {actual} != {expected}")
+    require(sum(inherited.values()) == 147, "the inherited ticket-C baseline must stay at 147")
+    passed("T-C-10 all 147 inherited permanent guards still ran and pass unchanged")
+
+    begin("T-C-11")
+    builder_source = inspect.getsource(app_module.build_system_prompt_with_memories)
+    require('"sourceId": source["id"]' in builder_source
+            and '"sourceRev": data["source_rev"]' in builder_source,
+            "ev_handoff no longer carries the snapshot sourceId/sourceRev pair")
+    for streamer in (app_module._stream_with_tools, app_module.stream_and_capture):
+        stream_source = inspect.getsource(streamer)
+        require("'ev_handoff': prompt_meta['handoff']" in stream_source,
+                f"{streamer.__name__} no longer emits the frozen handoff payload")
+        require("source_rev" not in stream_source,
+                f"{streamer.__name__} re-reads or guesses a source revision at emission time")
+    passed("T-C-11 both stream paths emit the snapshot-frozen ev_handoff source identity")
+
+    begin("T-C-12")
+    require(await _pool_fetchval(
+        "SELECT EXISTS(SELECT 1 FROM information_schema.columns "
+        "WHERE table_name = 'chat_messages' AND column_name = 'reminder_source_id')"),
+        "chat_messages.reminder_source_id migration is missing")
+    require(len(database._message_content_values({})) == 23,
+            "the shared message serializer did not gain exactly one nullable field")
+    await _w204_reset_tables()
+    migration_sessions = [f"tc12-migration-{index}" for index in range(3)]
+    for index, migration_sid in enumerate(migration_sessions):
+        await _seed_conversation(
+            migration_sid,
+            messages=[(f"{migration_sid}-m", "user", f"legacy-{index}",
+                       f"{migration_sid}-k")],
+        )
+    migration_before = [dict(row) for row in await _pool_fetch(
+        "SELECT id, conversation_id, role, content, turn_key, sort_order "
+        "FROM chat_messages WHERE conversation_id = ANY($1::text[]) ORDER BY id",
+        migration_sessions,
+    )]
+    await _pool_execute("ALTER TABLE chat_messages DROP COLUMN reminder_source_id")
+    await database.init_tables()
+    await database.init_tables()
+    migration_after = [dict(row) for row in await _pool_fetch(
+        "SELECT id, conversation_id, role, content, turn_key, sort_order "
+        "FROM chat_messages WHERE conversation_id = ANY($1::text[]) ORDER BY id",
+        migration_sessions,
+    )]
+    require(migration_after == migration_before and len(migration_after) == 3,
+            f"reminder_source_id migration rewrote legacy message rows: "
+            f"before={migration_before} after={migration_after}")
+    require(await _pool_fetchval(
+        "SELECT COUNT(*) FROM chat_messages WHERE conversation_id = ANY($1::text[]) "
+        "AND reminder_source_id IS NULL", migration_sessions) == 3,
+        "legacy message rows did not receive the nullable reminder_source_id default")
+    await _w204_reset_tables()
+    single, legacy, imported, missing = (
+        "tc12-single", "tc12-legacy", "tc12-import", "tc12-missing")
+    for sid in (single, missing):
+        response = await client.post("/sync/conversations", json={"id": sid, "title": sid})
+        require(response.status_code == 200, f"failed to create ticket-C fixture {sid}")
+    response = await client.put(f"/sync/conversations/{single}/messages/tc12-single-m", json={
+        "role": "assistant", "content": "single", "reminderSourceId": "reminder-single"})
+    require(response.status_code == 200, f"single reminderSourceId write failed: {response.text}")
+    response = await client.put(f"/sync/conversations/{missing}/messages/tc12-missing-m", json={
+        "role": "user", "content": "missing"})
+    require(response.status_code == 200, f"missing-field write failed: {response.text}")
+    await _upsert_config("sync_legacy_write_enabled", "true")
+    response = await client.put(f"/sync/conversations/{legacy}", json={
+        "title": legacy, "messages": [{"id": "tc12-legacy-m", "role": "user",
+        "content": "legacy", "reminder_source_id": "reminder-legacy"}]})
+    require(response.status_code == 200, f"legacy reminder_source_id write failed: {response.text}")
+    response = await client.post("/sync/import", json={"projects": [], "conversations": [{
+        "id": imported, "title": imported, "messages": [{"id": "tc12-import-m",
+        "role": "assistant", "content": "import", "reminderSourceId": "reminder-import"}]}]})
+    require(response.status_code == 200 and imported in response.json()["imported_conversation_ids"],
+            f"import reminderSourceId write failed: {response.text}")
+    expectations = {
+        single: "reminder-single", legacy: "reminder-legacy", imported: "reminder-import",
+        missing: None,
+    }
+    for sid, expected in expectations.items():
+        detail = (await client.get(f"/sync/conversations/{sid}")).json()
+        require(detail["messages"][0].get("reminder_source_id") == expected,
+                f"detail lost reminder_source_id for {sid}: {detail['messages'][0]}")
+
+    exported = await client.get("/sync/export")
+    require(exported.status_code == 200 and zipfile.is_zipfile(io.BytesIO(exported.content)),
+            "sync export did not produce a backup zip")
+    await _w204_reset_tables()
+    response = await client.post("/sync/import-backup", files={"file": (
+        "ticket-c.zip", exported.content, "application/zip")})
+    require(response.status_code == 200 and response.json()["failed_conversations"] == 0,
+            f"backup restore failed reminder round-trip: {response.text}")
+    for sid, expected in expectations.items():
+        detail = (await client.get(f"/sync/conversations/{sid}")).json()
+        require(detail["messages"][0].get("reminder_source_id") == expected,
+                f"backup round-trip lost reminder_source_id for {sid}")
+
+    upstream_sid = "tc12-upstream"
+    response = await client.post(
+        "/sync/conversations", json={"id": upstream_sid, "title": upstream_sid})
+    require(response.status_code == 200,
+            f"failed to create the upstream isolation fixture: {response.text}")
+    response = await client.put(f"/sync/conversations/{upstream_sid}/messages/tc12-upstream-m", json={
+        "role": "assistant", "content": "upstream body", "reminderSourceId": "tc12-rs"})
+    require(response.status_code == 200,
+            f"failed to seed the upstream isolation fixture: {response.text}")
+    pool = await database.get_pool()
+    async with pool.acquire() as conn:
+        handoff_messages = [
+            dict(row) for row in await database._handoff_messages_tx(conn, upstream_sid)
+        ]
+    require(handoff_messages, "the handoff reader did not return its seeded message")
+    for message in handoff_messages:
+        require(not {"reminder_source_id", "reminderSourceId"}.intersection(message),
+                f"handoff upstream row exposed reminder source keys: {sorted(message)}")
+    require("tc12-rs" not in json.dumps(handoff_messages, ensure_ascii=False, default=str),
+            "handoff upstream row exposed the reminder source value")
+    passed("T-C-12 reminder_source_id round-trips all sync channels and stays out of upstream messages")
+
+
 async def run_suite(test_dsn: str) -> None:
     global database, config, app_module, memory_extractor
 
@@ -5751,6 +6376,7 @@ async def run_suite(test_dsn: str) -> None:
         await test_w2_04_entry_message_identity(client)
         await test_w2_04_handoff_copies(client)
         await test_w2_04_restore_stamp_states(client)
+        await test_w2_04_1_ticket_c(client)
 
 
 async def async_main() -> int:
@@ -5768,6 +6394,7 @@ async def async_main() -> int:
         w2_02_passed = [name for name in PASSED if name.startswith("T-W2-02-")]
         w2_03_passed = [name for name in PASSED if name.startswith("T-W2-03-")]
         w2_04_passed = [name for name in PASSED if name.startswith("T-W2-04-")]
+        ticket_c_passed = [name for name in PASSED if name.startswith("T-C-")]
         print(f"\nPASS: {len(legacy_passed)} permanent S1-S6 behavior guards")
         print(f"PASS: {len(w1_01_passed)} W1-01 isolation/permanent guards")
         print(f"PASS: {len(w1_06_passed)} W1-06 calendar-delete atomicity guards")
@@ -5776,6 +6403,7 @@ async def async_main() -> int:
         print(f"PASS: {len(w2_02_passed)} W2-02 message-identity/atomic-import guards")
         print(f"PASS: {len(w2_03_passed)} W2-03 ledger-schema/scope/dark-write guards")
         print(f"PASS: {len(w2_04_passed)} W2-04 session-delete/privacy guards")
+        print(f"PASS: {len(ticket_c_passed)} W2-04.1 ticket-C guards")
         if _MUTES_USED:
             print(f"MUTED: {len(_MUTES_USED)} assertion(s) let through via KIWI_KNIFE_MUTE: "
                   f"{sorted(set(_MUTES_USED))}")

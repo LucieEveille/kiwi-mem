@@ -126,6 +126,7 @@ CONFIG_SCHEMA = {
     #        并把身份回传给客户端；关=沿用旧的首条文本 md5 短 hash。
     #        开启后未采纳回传的第三方客户端会每轮换 session，断 OpenRouter 黏性与抽屉状态。
     "session_identity_v2_enabled": ("",                  "false","会话身份 v2",       "bool"),
+    "sync_delete_privacy_capability_enabled": ("",       "true", "同步删除隐私能力",   "bool"),
 }
 
 

@@ -256,6 +256,100 @@ async def _handoff_source_alive_tx''', ()),
      # 这一条被三层更早的同通道守卫先咬住，静默它们才能看见 T-30 自己咬。
      ("T-W2-04-10-replace-names", "T-W2-04-10-replace-state",
       "T-W2-04-24-replace", "T-W2-04-24-import")),
+
+    ("C-delete-stamps", "整删不盖可见消息与轮次章", "database.py", "T-C-01",
+     "conversation delete failed to stamp visible message id",
+     '''            await _stamp_visible_messages_tx(conn, conv_id)
+            await _stamp_session_tx(conn, conv_id)''',
+     '''            await _stamp_session_tx(conn, conv_id)''', ()),
+
+    ("C-reset-stamps", "reset 不盖可见消息与轮次章", "database.py", "T-C-04",
+     "reset + metadata restore reopened a ledger-only identity",
+     '''            for session_id in session_ids:
+                await _stamp_visible_messages_tx(conn, session_id)
+                await _stamp_session_tx(conn, session_id)''',
+     '''            for session_id in session_ids:
+                await _stamp_session_tx(conn, session_id)''', ()),
+
+    ("C-restore-metadata", "metadata-only 恢复无条件撤消息与轮次章", "database.py", "T-W2-04-39",
+     "a metadata-only backup speaks for no message and must lift no message stamp",
+     '''    await conn.execute("DELETE FROM session_tombstones WHERE session_id = $1", session_id)
+    if messages:''',
+     '''    await conn.execute("DELETE FROM session_tombstones WHERE session_id = $1", session_id)
+    await conn.execute("DELETE FROM message_tombstones WHERE session_id = $1", session_id)
+    await conn.execute("DELETE FROM turn_tombstones WHERE session_id = $1", session_id)
+    if messages:''', ()),
+
+    ("C-restore-unnamed", "非空恢复撤掉未点名消息章", "database.py", "T-W2-04-39",
+     "a backup that never mentions a message must leave its stamp in place",
+     '''                "DELETE FROM message_tombstones WHERE session_id = $1 AND message_id = ANY($2::text[])",
+                session_id, named_ids,''',
+     '''                "DELETE FROM message_tombstones WHERE session_id = $1",
+                session_id,''', ()),
+
+    ("C-restore-handoff", "备份恢复不滤无来源换窗卡", "database.py", "T-C-05",
+     "restore did not report all seven filtered handoffs",
+     '''    if messages is not None:
+        messages, filtered_count = _drop_sourceless_handoffs(messages)''',
+     '''    if messages is not None:
+        filtered_count = 0''', ()),
+
+    ("C-filter-outside-tx", "无来源换窗卡过滤挪到恢复事务外", "database.py", "T-C-05",
+     "restore did not report all seven filtered handoffs",
+     '''    """备份恢复的公开入口：一段对话一个事务，原子完成撤章与重建。"""
+    pool = await get_pool()''',
+     '''    """备份恢复的公开入口：一段对话一个事务，原子完成撤章与重建。"""
+    if messages is not None:
+        messages, _ = _drop_sourceless_handoffs(messages)
+    pool = await get_pool()''', ()),
+
+    ("C-capability-schema", "能力端点忽略 schema readiness", "main.py", "T-C-07",
+     "missing ticket-C schema did not fail closed with a fixed contract",
+     '''            w2_04_initialized()
+            and await probe_w2_04_schema()
+            and await get_config_bool(''',
+     '''            w2_04_initialized()
+            and True
+            and await get_config_bool(''', ()),
+
+    ("C-list-revision", "对话列表漏掉 source_rev 联表", "database.py", "T-C-08",
+     "a never-bumped conversation did not list integer source_rev=0",
+     '''                   c.pinned, c.sort_order, c.created_at, c.updated_at,
+                   COALESCE(r.rev, 0) AS source_rev
+            FROM chat_conversations c
+            LEFT JOIN session_source_rev r ON r.session_id = c.id''',
+     '''                   c.pinned, c.sort_order, c.created_at, c.updated_at
+            FROM chat_conversations c''', ()),
+
+    ("C-search-final", "搜索省略删除与版本终检", "database.py", "T-C-09",
+     "the search final-check seam was never reached",
+     '''        return await _search_final_check(conn, results, initial_state)''',
+     '''        return results''', ()),
+
+    ("C-reminder-source", "消息序列化漏写 reminder_source_id", "database.py", "T-C-12",
+     "detail lost reminder_source_id for tc12-single",
+     '''        (msg.get("reminderSourceId") if isinstance(msg.get("reminderSourceId"), str)
+         else msg.get("reminder_source_id")
+         if isinstance(msg.get("reminder_source_id"), str) else None),''',
+     '''        None,''', ()),
+
+    ("C-gate-gates-stamps", "能力开关误作删除盖章总闸", "database.py", "T-C-07",
+     "gate off stopped delete stamping visible message ids",
+     '''    messages = await conn.execute("""
+        INSERT INTO message_tombstones (session_id, message_id)''',
+     '''    from config import get_config_bool
+    if not await get_config_bool(
+            "sync_delete_privacy_capability_enabled", fallback=True):
+        return {"messages": 0, "turns": 0}
+    messages = await conn.execute("""
+        INSERT INTO message_tombstones (session_id, message_id)''', ()),
+
+    ("C-handoff-select-star", "换窗取材 SELECT * 透传提醒来源", "database.py", "T-C-12",
+     "handoff upstream row exposed reminder source keys",
+     '''        SELECT role, content, summary, sort_order, time
+        FROM chat_messages''',
+     '''        SELECT *
+        FROM chat_messages''', ()),
 ]
 
 
