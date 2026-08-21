@@ -332,6 +332,24 @@ async def _handoff_source_alive_tx''', ()),
          else msg.get("reminder_source_id")
          if isinstance(msg.get("reminder_source_id"), str) else None),''',
      '''        None,''', ()),
+
+    ("C-gate-gates-stamps", "能力开关误作删除盖章总闸", "database.py", "T-C-07",
+     "gate off stopped delete stamping visible message ids",
+     '''    messages = await conn.execute("""
+        INSERT INTO message_tombstones (session_id, message_id)''',
+     '''    from config import get_config_bool
+    if not await get_config_bool(
+            "sync_delete_privacy_capability_enabled", fallback=True):
+        return {"messages": 0, "turns": 0}
+    messages = await conn.execute("""
+        INSERT INTO message_tombstones (session_id, message_id)''', ()),
+
+    ("C-handoff-select-star", "换窗取材 SELECT * 透传提醒来源", "database.py", "T-C-12",
+     "handoff upstream row exposed reminder source keys",
+     '''        SELECT role, content, summary, sort_order, time
+        FROM chat_messages''',
+     '''        SELECT *
+        FROM chat_messages''', ()),
 ]
 
 

@@ -6015,6 +6015,44 @@ async def test_w2_04_1_ticket_c(client: httpx.AsyncClient) -> None:
     require((await client.get("/sync/capabilities")).json()["ready"] is True,
             "direct table update did not reopen the capability gate immediately")
 
+    gate_key = "sync_delete_privacy_capability_enabled"
+    await _w204_reset_tables()
+    require(await config.set_config(gate_key, "false"),
+            "could not close the capability gate through set_config")
+    try:
+        gate_off = await client.get("/sync/capabilities")
+        gate_payload = gate_off.json()
+        require(gate_off.status_code == 200 and gate_payload.get("ready") is False,
+                f"gate off did not advertise ready:false: {gate_off.status_code} {gate_off.text}")
+        require(gate_payload.get("contracts", {}).get("w2_04_delete_privacy") == 1,
+                f"gate off changed the fixed delete-privacy contract: {gate_payload}")
+
+        gate_sid = "tc07-gate-off"
+        await _seed_conversation(
+            gate_sid,
+            messages=[("tc07-m1", "user", "visible", "tc07-k1")],
+            events=[("assistant", "ledger-only", "tc07-k1", "tc07-lm1")],
+        )
+        response = await client.delete(f"/sync/conversations/{gate_sid}")
+        require(response.status_code == 200,
+                f"conversation delete failed while capability gate was off: {response.text}")
+        stamped_ids = {row["message_id"] for row in await _pool_fetch(
+            "SELECT message_id FROM message_tombstones WHERE session_id = $1", gate_sid)}
+        require({"tc07-m1", "tc07-lm1"} <= stamped_ids,
+                f"gate off stopped delete stamping visible message ids: {sorted(stamped_ids)}")
+        require(await _pool_fetchval(
+            "SELECT EXISTS(SELECT 1 FROM turn_tombstones "
+            "WHERE session_id = $1 AND turn_key = 'tc07-k1')", gate_sid),
+            "gate off stopped delete stamping the visible turn key")
+        late = await client.put(f"/sync/conversations/{gate_sid}/messages/tc07-m1", json={
+            "role": "user", "content": "late replay", "turnKey": "tc07-k1"})
+        require(late.status_code == 410,
+                f"gate off let a late PUT resurrect a deleted message: "
+                f"{late.status_code} {late.text}")
+    finally:
+        require(await config.set_config(gate_key, "true"),
+                "could not restore the capability gate after the gate-off guard")
+
     await _pool_execute("ALTER TABLE chat_messages DROP COLUMN reminder_source_id")
     probe_payload = (await client.get("/sync/capabilities")).json()
     require(probe_payload["ready"] is False
@@ -6254,9 +6292,27 @@ async def test_w2_04_1_ticket_c(client: httpx.AsyncClient) -> None:
         detail = (await client.get(f"/sync/conversations/{sid}")).json()
         require(detail["messages"][0].get("reminder_source_id") == expected,
                 f"backup round-trip lost reminder_source_id for {sid}")
-    main_source = (ROOT / "main.py").read_text(encoding="utf-8")
-    require("reminder_source_id" not in main_source and "reminderSourceId" not in main_source,
-            "reminder source identity leaked into an upstream-model assembly path")
+
+    upstream_sid = "tc12-upstream"
+    response = await client.post(
+        "/sync/conversations", json={"id": upstream_sid, "title": upstream_sid})
+    require(response.status_code == 200,
+            f"failed to create the upstream isolation fixture: {response.text}")
+    response = await client.put(f"/sync/conversations/{upstream_sid}/messages/tc12-upstream-m", json={
+        "role": "assistant", "content": "upstream body", "reminderSourceId": "tc12-rs"})
+    require(response.status_code == 200,
+            f"failed to seed the upstream isolation fixture: {response.text}")
+    pool = await database.get_pool()
+    async with pool.acquire() as conn:
+        handoff_messages = [
+            dict(row) for row in await database._handoff_messages_tx(conn, upstream_sid)
+        ]
+    require(handoff_messages, "the handoff reader did not return its seeded message")
+    for message in handoff_messages:
+        require(not {"reminder_source_id", "reminderSourceId"}.intersection(message),
+                f"handoff upstream row exposed reminder source keys: {sorted(message)}")
+    require("tc12-rs" not in json.dumps(handoff_messages, ensure_ascii=False, default=str),
+            "handoff upstream row exposed the reminder source value")
     passed("T-C-12 reminder_source_id round-trips all sync channels and stays out of upstream messages")
 
 
