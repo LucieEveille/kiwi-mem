@@ -271,8 +271,8 @@ async def _handoff_source_alive_tx''', ()),
      '''            for session_id in session_ids:
                 await _stamp_session_tx(conn, session_id)''', ()),
 
-    ("C-restore-metadata", "metadata-only 恢复无条件撤消息与轮次章", "database.py", "T-C-01",
-     "metadata-only restore reopened a ledger-only message",
+    ("C-restore-metadata", "metadata-only 恢复无条件撤消息与轮次章", "database.py", "T-W2-04-39",
+     "a metadata-only backup speaks for no message and must lift no message stamp",
      '''    await conn.execute("DELETE FROM session_tombstones WHERE session_id = $1", session_id)
     if messages:''',
      '''    await conn.execute("DELETE FROM session_tombstones WHERE session_id = $1", session_id)
@@ -280,8 +280,8 @@ async def _handoff_source_alive_tx''', ()),
     await conn.execute("DELETE FROM turn_tombstones WHERE session_id = $1", session_id)
     if messages:''', ()),
 
-    ("C-restore-unnamed", "非空恢复撤掉未点名消息章", "database.py", "T-C-03",
-     "partial restore lifted an unnamed message stamp",
+    ("C-restore-unnamed", "非空恢复撤掉未点名消息章", "database.py", "T-W2-04-39",
+     "a backup that never mentions a message must leave its stamp in place",
      '''                "DELETE FROM message_tombstones WHERE session_id = $1 AND message_id = ANY($2::text[])",
                 session_id, named_ids,''',
      '''                "DELETE FROM message_tombstones WHERE session_id = $1",
@@ -294,8 +294,8 @@ async def _handoff_source_alive_tx''', ()),
      '''    if messages is not None:
         filtered_count = 0''', ()),
 
-    ("C-filter-outside-tx", "无来源换窗卡过滤挪到恢复事务外", "database.py", "T-C-06",
-     "sourceless handoff filtering moved outside the restore transaction",
+    ("C-filter-outside-tx", "无来源换窗卡过滤挪到恢复事务外", "database.py", "T-C-05",
+     "restore did not report all seven filtered handoffs",
      '''    """备份恢复的公开入口：一段对话一个事务，原子完成撤章与重建。"""
     pool = await get_pool()''',
      '''    """备份恢复的公开入口：一段对话一个事务，原子完成撤章与重建。"""
