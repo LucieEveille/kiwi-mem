@@ -74,3 +74,24 @@ jobs:
 
       - name: 运行 S1-S6 永久真库行为守卫
         run: python scripts/test_kiwi_safety_sync.py
+
+      # Ticket C one-shot evidence step. This commit is reverted after the
+      # mutation JSON is downloaded; the final PR does not retain this cost.
+      - name: 票 C 十刀变异账（一次性证据）
+        env:
+          KIWI_KNIFE_DSN: postgresql://postgres:postgres@127.0.0.1:5432/postgres
+          KIWI_KNIFE_SHA: ${{ github.event.pull_request.head.sha }}
+          KIWI_KNIFE_OUT: ${{ runner.temp }}/ticket-c-knife-results.json
+        run: >-
+          python scripts/w2_04_knives.py
+          C-delete-stamps C-reset-stamps C-restore-metadata C-restore-unnamed
+          C-restore-handoff C-filter-outside-tx C-capability-schema
+          C-list-revision C-search-final C-reminder-source
+
+      - name: 上传票 C 十刀 JSON
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ticket-c-knife-results
+          path: ${{ runner.temp }}/ticket-c-knife-results.json
+          if-no-files-found: warn
