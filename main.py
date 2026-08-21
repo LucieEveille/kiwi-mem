@@ -51,6 +51,7 @@ from database import (
     append_legacy_turn_if_not_deleted, reset_all_chat_data, save_compression_summary,
     restore_conversation_from_backup, get_reset_generation,
     snapshot_recent_conversation, save_if_sources_unchanged, _insert_memory_tx,
+    w2_04_initialized, probe_w2_04_schema,
     SessionDeletedError,
     # v4.2 提醒系统
     create_reminder, get_reminders, update_reminder, delete_reminder, get_due_reminders, fire_reminder,
@@ -5495,6 +5496,30 @@ async def api_search_messages(q: str = "", project_id: str = None, limit: int = 
 # 云端同步 API（v4.1）
 # ============================================================
 
+async def _capabilities_payload() -> dict:
+    """Build the additive sync capability document; every failure is fail-closed."""
+    ready = False
+    try:
+        ready = (
+            w2_04_initialized()
+            and await probe_w2_04_schema()
+            and await get_config_bool(
+                "sync_delete_privacy_capability_enabled", fallback=True)
+        )
+    except Exception:
+        ready = False
+    return {
+        "contracts": {"w2_04_delete_privacy": 1},
+        "ready": bool(ready),
+        "revision": os.getenv("KIWI_REVISION", "").strip(),
+    }
+
+
+@app.get("/sync/capabilities")
+async def api_sync_capabilities():
+    """Advertise the shared delete-privacy contract without adding a kiwi-only auth layer."""
+    return await _capabilities_payload()
+
 async def _read_json_object(request: Request):
     """解析 JSON 对象；非法 JSON 或非对象请求统一返回 400。"""
     try:
@@ -5955,7 +5980,8 @@ async def api_sync_import_backup(file: UploadFile = File(...)):
 
         buf.seek(0)
         result = {"conversations": 0, "messages": 0, "projects": 0, "memories": 0,
-                  "settings": 0, "config": 0, "failed_conversations": 0}
+                  "settings": 0, "config": 0, "failed_conversations": 0,
+                  "filtered_sourceless_handoffs": 0}
 
         with zipfile.ZipFile(buf, 'r') as zf:
             names = zf.namelist()
@@ -5976,13 +6002,14 @@ async def api_sync_import_backup(file: UploadFile = File(...)):
                     # 缺键取 None（只恢复元数据），不能取 []——那是「权威空快照」的意思。
                     messages = conv.pop("messages", None)
                     try:
-                        await restore_conversation_from_backup(conv, messages)
+                        filtered = await restore_conversation_from_backup(conv, messages)
                     except Exception as e:
                         result["failed_conversations"] += 1
                         print(f"event=backup_restore_failed "
                               f"exception_type={type(e).__name__} increment=1")
                         continue
                     result["messages"] += len(messages or [])
+                    result["filtered_sourceless_handoffs"] += filtered
                     result["conversations"] += 1
 
             # 导入记忆

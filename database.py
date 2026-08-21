@@ -66,6 +66,11 @@ def _get_embedding_url() -> str:
 
 _pool: Optional[asyncpg.Pool] = None
 
+# W2-04.1 capability readiness is process-local.  A database left over from an
+# earlier successful run can have every table while this process's migration
+# failed halfway through, so schema presence alone must never advertise ready.
+_w2_04_ready = False
+
 
 async def get_pool() -> asyncpg.Pool:
     global _pool
@@ -90,6 +95,8 @@ async def close_pool():
 # ============================================================
 
 async def init_tables():
+    global _w2_04_ready
+    _w2_04_ready = False
     pool = await get_pool()
     async with pool.acquire() as conn:
         await conn.execute("""
@@ -299,6 +306,7 @@ async def init_tables():
                 summary         TEXT,
                 dream_event     JSONB,
                 turn_key        TEXT,
+                reminder_source_id TEXT,
                 sort_order      INTEGER DEFAULT 0
             );
         """)
@@ -541,6 +549,7 @@ async def init_tables():
         for col_name, col_def in [
             ("dream_event", "JSONB"),
             ("turn_key", "TEXT"),
+            ("reminder_source_id", "TEXT"),
         ]:
             has_col = await conn.fetchval("""
                 SELECT EXISTS (
@@ -550,7 +559,7 @@ async def init_tables():
             """, col_name)
             if not has_col:
                 await conn.execute(f"ALTER TABLE chat_messages ADD COLUMN {col_name} {col_def}")
-                print(f"✅ chat_messages 表已添加 {col_name} 列（W2-02 消息身份）")
+                print(f"✅ chat_messages 表已添加 {col_name} 列（消息身份同步）")
 
         # W2-03：事件账本 conversations 扩展 — 项目、轮次、用量三重身份。
         # 三态语义（scope_known 取代空串哨兵，与 memories.project_id IS NULL=全局 对齐）：
@@ -767,7 +776,37 @@ async def init_tables():
             await conn.execute("ALTER TABLE provider_models ADD COLUMN api_format TEXT DEFAULT NULL")
             print("✅ provider_models 表已添加 api_format 列（模型级覆盖）")
 
+    _w2_04_ready = True
     print("✅ 数据库表结构已就绪（v6.2b 模型级 API 格式支持）")
+
+
+def w2_04_initialized() -> bool:
+    """Whether this process completed the full database initialization path."""
+    return _w2_04_ready
+
+
+async def probe_w2_04_schema() -> bool:
+    """Read-only W2-04.1 schema probe used by the capability endpoint."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        return bool(await conn.fetchval("""
+            SELECT
+                to_regclass('session_tombstones') IS NOT NULL
+                AND to_regclass('turn_tombstones') IS NOT NULL
+                AND to_regclass('message_tombstones') IS NOT NULL
+                AND to_regclass('session_source_rev') IS NOT NULL
+                AND to_regclass('deletion_epoch') IS NOT NULL
+                AND EXISTS (
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_name = 'conversations'
+                      AND column_name = 'source_message_id'
+                )
+                AND EXISTS (
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_name = 'chat_messages'
+                      AND column_name = 'reminder_source_id'
+                )
+        """))
 
 
 # ============================================================
@@ -1235,6 +1274,47 @@ async def _stamp_session_tx(conn, session_id: str) -> None:
         "INSERT INTO session_tombstones (session_id) VALUES ($1) ON CONFLICT DO NOTHING",
         session_id,
     )
+
+
+async def _stamp_visible_messages_tx(conn, session_id: str) -> dict:
+    """Stamp every currently visible message id and turn key for one session.
+
+    The front-end snapshot and the immutable event ledger are separate copies.
+    A ledger row may already exist before Chat has uploaded the matching
+    ``chat_messages`` row, so deletion must take the non-empty union of both.
+    The two set-based statements keep the lock window independent of message
+    count and run inside the caller's existing transaction.
+    """
+    messages = await conn.execute("""
+        INSERT INTO message_tombstones (session_id, message_id)
+        SELECT $1, visible.message_id
+        FROM (
+            SELECT id AS message_id
+            FROM chat_messages
+            WHERE conversation_id = $1 AND NULLIF(BTRIM(id), '') IS NOT NULL
+            UNION
+            SELECT source_message_id AS message_id
+            FROM conversations
+            WHERE session_id = $1
+              AND NULLIF(BTRIM(source_message_id), '') IS NOT NULL
+        ) AS visible
+        ON CONFLICT DO NOTHING
+    """, session_id)
+    turns = await conn.execute("""
+        INSERT INTO turn_tombstones (session_id, turn_key)
+        SELECT $1, visible.turn_key
+        FROM (
+            SELECT turn_key
+            FROM chat_messages
+            WHERE conversation_id = $1 AND NULLIF(BTRIM(turn_key), '') IS NOT NULL
+            UNION
+            SELECT turn_key
+            FROM conversations
+            WHERE session_id = $1 AND NULLIF(BTRIM(turn_key), '') IS NOT NULL
+        ) AS visible
+        ON CONFLICT DO NOTHING
+    """, session_id)
+    return {"messages": _rowcount(messages), "turns": _rowcount(turns)}
 
 
 def _rowcount(status) -> int:
@@ -1795,6 +1875,7 @@ async def reset_all_chat_data(sync_setting_keys=()) -> dict:
             )
             session_ids = [r["session_id"] for r in rows if r["session_id"]]
             for session_id in session_ids:
+                await _stamp_visible_messages_tx(conn, session_id)
                 await _stamp_session_tx(conn, session_id)
                 await _bump_source_rev_tx(conn, session_id)
             generation = await conn.fetchval(
@@ -3537,9 +3618,12 @@ async def sync_get_conversations():
     pool = await get_pool()
     async with pool.acquire() as conn:
         rows = await conn.fetch("""
-            SELECT id, title, model, provider_model_id, project_id, pinned, sort_order, created_at, updated_at
-            FROM chat_conversations
-            ORDER BY pinned DESC, updated_at DESC
+            SELECT c.id, c.title, c.model, c.provider_model_id, c.project_id,
+                   c.pinned, c.sort_order, c.created_at, c.updated_at,
+                   COALESCE(r.rev, 0) AS source_rev
+            FROM chat_conversations c
+            LEFT JOIN session_source_rev r ON r.session_id = c.id
+            ORDER BY c.pinned DESC, c.updated_at DESC
         """)
         return [dict(r) for r in rows]
 
@@ -3721,6 +3805,7 @@ async def sync_delete_conversation(conv_id: str):
             # 换窗副本散在别的会话里；持 S 锁前先问候选目标，再按 ID 排序一起取锁。
             targets = await _handoff_target_sessions_tx(conn, conv_id)
             await _lock_sessions_exclusive(conn, [conv_id, *targets])
+            await _stamp_visible_messages_tx(conn, conv_id)
             await _stamp_session_tx(conn, conv_id)
             await _bump_source_rev_tx(conn, conv_id)
             handoff_purged = await _purge_handoff_copies_tx(conn, conv_id)
@@ -3752,7 +3837,7 @@ async def sync_delete_conversation(conv_id: str):
 
 
 def _message_content_values(msg: dict) -> list:
-    """装配 chat_messages 中 role..turn_key 的 22 个内容字段。
+    """装配 chat_messages 中 role..reminder_source_id 的 23 个内容字段。
 
     全量 import、legacy 全量替换与 W2-01 单消息 upsert 三条通道共用本函数，
     新增字段只在这里追加一次，避免通道之间出现字段分叉或默认值分叉。
@@ -3782,6 +3867,9 @@ def _message_content_values(msg: dict) -> list:
         _to_json(msg.get("dreamEvent") or msg.get("dream_event")),
         (msg.get("turnKey") if isinstance(msg.get("turnKey"), str)
          else msg.get("turn_key") if isinstance(msg.get("turn_key"), str) else None),
+        (msg.get("reminderSourceId") if isinstance(msg.get("reminderSourceId"), str)
+         else msg.get("reminder_source_id")
+         if isinstance(msg.get("reminder_source_id"), str) else None),
     ]
 
 
@@ -3790,12 +3878,12 @@ _MESSAGE_INSERT_SQL = """
         id, conversation_id, role, content, time, model,
         streaming, error, token_info, thinking, status_events, tool_events,
         memory_result, memory_event, handoff_info, web_search_results, versions, version_index,
-        images, attachments, usage, summary, dream_event, turn_key, sort_order
+        images, attachments, usage, summary, dream_event, turn_key, reminder_source_id, sort_order
     ) VALUES (
         $1, $2, $3, $4, $5, $6,
         $7, $8, $9, $10, $11, $12,
         $13, $14, $15, $16, $17, $18,
-        $19, $20, $21, $22, $23, $24, $25
+        $19, $20, $21, $22, $23, $24, $25, $26
     )
 """
 
@@ -3916,7 +4004,46 @@ async def _filter_stamped_messages_tx(conn, conv_id: str, messages: list):
     return kept, skipped
 
 
-async def _restore_conversation_tx(conn, conv: dict, messages: list) -> None:
+def _is_sourceless_handoff_divider(msg: dict) -> bool:
+    """Match the startup SQL's definition of an untraceable handoff card."""
+    if not isinstance(msg, dict) or (msg.get("role") or "") != "divider":
+        return False
+    if "handoffInfo" in msg:
+        raw = msg.get("handoffInfo")
+    elif "handoff_info" in msg:
+        raw = msg.get("handoff_info")
+    else:
+        return False
+    if raw is None:
+        return False
+    decoded = raw
+    if isinstance(raw, str):
+        try:
+            decoded = json.loads(raw)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return True
+    if not isinstance(decoded, dict):
+        return True
+    source_id = decoded.get("sourceId")
+    if source_id is None:
+        return True
+    if isinstance(source_id, str):
+        return not source_id.strip()
+    # PostgreSQL JSONB ->> renders every non-null value as non-empty text.
+    return not str(source_id).strip()
+
+
+def _drop_sourceless_handoffs(messages: list) -> tuple:
+    kept, dropped = [], 0
+    for message in messages:
+        if _is_sourceless_handoff_divider(message):
+            dropped += 1
+        else:
+            kept.append(message)
+    return kept, dropped
+
+
+async def _restore_conversation_tx(conn, conv: dict, messages: list) -> int:
     """从用户明确选择的备份文件恢复一段对话——**全仓唯一撤章处**。
 
     理念：恢复备份是用户明确的「把它带回来」；对话 POST、legacy PUT、/sync/import
@@ -3937,6 +4064,9 @@ async def _restore_conversation_tx(conn, conv: dict, messages: list) -> None:
     session_id = str(conv.get("id", ""))
     await _lock_global_shared(conn)
     await _lock_session(conn, session_id)
+    filtered_count = 0
+    if messages is not None:
+        messages, filtered_count = _drop_sourceless_handoffs(messages)
     await conn.execute("DELETE FROM session_tombstones WHERE session_id = $1", session_id)
     if messages:
         named_ids = [str(m.get("id")) for m in messages if m.get("id")]
@@ -3958,14 +4088,15 @@ async def _restore_conversation_tx(conn, conv: dict, messages: list) -> None:
     # 旧正文就留在库里了。
     if messages is not None:
         await _replace_messages_tx(conn, session_id, messages)
+    return filtered_count
 
 
-async def restore_conversation_from_backup(conv: dict, messages: list) -> None:
+async def restore_conversation_from_backup(conv: dict, messages: list) -> int:
     """备份恢复的公开入口：一段对话一个事务，原子完成撤章与重建。"""
     pool = await get_pool()
     async with pool.acquire() as conn:
         async with conn.transaction():
-            await _restore_conversation_tx(conn, conv, messages)
+            return await _restore_conversation_tx(conn, conv, messages)
 
 
 def _handoff_divider_source(msg: dict):
@@ -4058,12 +4189,13 @@ async def sync_upsert_single_message(conv_id: str, msg_id: str, msg: dict):
                     id, conversation_id, role, content, time, model,
                     streaming, error, token_info, thinking, status_events, tool_events,
                     memory_result, memory_event, handoff_info, web_search_results, versions, version_index,
-                    images, attachments, usage, summary, dream_event, turn_key, sort_order
+                    images, attachments, usage, summary, dream_event, turn_key,
+                    reminder_source_id, sort_order
                 ) VALUES (
                     $1, $2, $3, $4, $5, $6,
                     $7, $8, $9, $10, $11, $12,
                     $13, $14, $15, $16, $17, $18,
-                    $19, $20, $21, $22, $23, $24, COALESCE($25, 0)
+                    $19, $20, $21, $22, $23, $24, $25, COALESCE($26, 0)
                 )
                 ON CONFLICT (id) DO UPDATE SET
                     role = EXCLUDED.role,
@@ -4088,7 +4220,8 @@ async def sync_upsert_single_message(conv_id: str, msg_id: str, msg: dict):
                     summary = EXCLUDED.summary,
                     dream_event = EXCLUDED.dream_event,
                     turn_key = EXCLUDED.turn_key,
-                    sort_order = COALESCE($25, chat_messages.sort_order)
+                    reminder_source_id = EXCLUDED.reminder_source_id,
+                    sort_order = COALESCE($26, chat_messages.sort_order)
                 WHERE chat_messages.conversation_id = EXCLUDED.conversation_id
                 RETURNING id
             """, msg_id, conv_id, *content_values, sort_order)
@@ -6050,129 +6183,154 @@ async def delete_all_file_chunks(project_id: str) -> int:
 # v5.8：对话搜索
 # ============================================================
 
-async def search_chat_messages(query: str, project_id: str = None, limit: int = 20, context_size: int = 2):
-    """
-    搜索对话消息内容 + 对话标题。
-    
-    参数：
-        query: 搜索关键词
-        project_id: 项目ID（提供时只搜该项目内的对话，'none' 表示只搜无项目的对话）
-        limit: 最多返回多少条匹配
-        context_size: 每条匹配上下各取几条消息作为上下文
-    
-    返回按对话分组的结果，每组包含对话信息和匹配消息（含上下文）。
-    """
+async def _search_initial_state_tx(conn, session_ids: list) -> dict:
+    """Read tombstone/revision state in the caller's phase-one snapshot."""
+    if not session_ids:
+        return {}
+    rows = await conn.fetch("""
+        SELECT ids.session_id,
+               EXISTS(
+                   SELECT 1 FROM session_tombstones t
+                   WHERE t.session_id = ids.session_id
+               ) AS tombstoned,
+               COALESCE(r.rev, 0) AS source_rev
+        FROM UNNEST($1::text[]) AS ids(session_id)
+        LEFT JOIN session_source_rev r ON r.session_id = ids.session_id
+    """, sorted(set(session_ids)))
+    return {
+        row["session_id"]: {
+            "tombstoned": bool(row["tombstoned"]),
+            "source_rev": int(row["source_rev"]),
+        }
+        for row in rows
+    }
+
+
+async def _search_final_check(conn, results: dict, initial_state: dict) -> dict:
+    """Drop every source deleted or revision-changed after phase one."""
+    current_state = await _search_initial_state_tx(conn, list(initial_state))
+    allowed = {
+        session_id
+        for session_id, initial in initial_state.items()
+        if not initial["tombstoned"]
+        and session_id in current_state
+        and not current_state[session_id]["tombstoned"]
+        and current_state[session_id]["source_rev"] == initial["source_rev"]
+    }
+    return {
+        "title_matches": [
+            row for row in results["title_matches"]
+            if row["conversation_id"] in allowed
+        ],
+        "message_matches": [
+            row for row in results["message_matches"]
+            if row["conversation_id"] in allowed
+        ],
+    }
+
+
+async def search_chat_messages(query: str, project_id: str = None, limit: int = 20,
+                               context_size: int = 2):
+    """Search message bodies and titles, then reject sources that changed mid-read."""
     if not query or not query.strip():
         return {"title_matches": [], "message_matches": []}
-    
+
     pool = await get_pool()
     async with pool.acquire() as conn:
-        # 构建项目过滤
-        params = [f"%{query.strip()}%"]
-        
-        if project_id == 'none':
-            proj_filter = "AND c.project_id IS NULL"
-        elif project_id:
-            proj_filter = f"AND c.project_id = ${len(params) + 1}"
-            params.append(project_id)
-        else:
-            proj_filter = ""
-        
-        # 搜索消息内容（只搜 user 和 assistant 的消息）
-        params.append(limit)
-        limit_idx = len(params)
-        
-        msg_sql = f"""
-            SELECT m.id, m.conversation_id, m.role, m.content, m.time, m.sort_order,
-                   c.title as conv_title, c.project_id, c.created_at as conv_created_at
-            FROM chat_messages m
-            JOIN chat_conversations c ON c.id = m.conversation_id
-            WHERE m.content ILIKE $1
-              AND m.role IN ('user', 'assistant')
-              AND m.error = false
-              {proj_filter}
-            ORDER BY m.time DESC
-            LIMIT ${limit_idx}
-        """
-        
-        msg_rows = await conn.fetch(msg_sql, *params)
-        
-        # 搜索对话标题
-        title_params = [f"%{query.strip()}%"]
-        if project_id == 'none':
-            title_proj_filter = "AND project_id IS NULL"
-        elif project_id:
-            title_proj_filter = f"AND project_id = $2"
-            title_params.append(project_id)
-        else:
-            title_proj_filter = ""
-        
-        title_sql = f"""
-            SELECT id, title, project_id, created_at, updated_at
-            FROM chat_conversations
-            WHERE title ILIKE $1
-              {title_proj_filter}
-            ORDER BY updated_at DESC
-            LIMIT 10
-        """
-        title_rows = await conn.fetch(title_sql, *title_params)
-        
-        # 为每条匹配消息获取上下文
-        results_by_conv = {}
-        
-        for row in msg_rows:
-            conv_id = row["conversation_id"]
-            
-            if conv_id not in results_by_conv:
-                results_by_conv[conv_id] = {
-                    "conversation_id": conv_id,
-                    "title": row["conv_title"] or "新对话",
-                    "project_id": row["project_id"],
-                    "date": row["conv_created_at"].isoformat() if row["conv_created_at"] else None,
-                    "matches": [],
-                }
-            
-            # 获取该消息前后 context_size 条消息
-            ctx_rows = await conn.fetch("""
-                SELECT id, role, content, time, sort_order
-                FROM chat_messages
-                WHERE conversation_id = $1
-                  AND sort_order BETWEEN $2 AND $3
-                  AND role IN ('user', 'assistant')
-                ORDER BY sort_order ASC
-            """, conv_id, row["sort_order"] - context_size, row["sort_order"] + context_size)
-            
-            context_msgs = []
-            for cr in ctx_rows:
-                content = cr["content"] or ""
-                # 截断过长的消息
-                if len(content) > 300:
-                    content = content[:300] + "…"
-                context_msgs.append({
-                    "id": cr["id"],
-                    "role": cr["role"],
-                    "content": content,
-                    "time": cr["time"].isoformat() if cr["time"] else None,
-                    "is_match": cr["id"] == row["id"],
+        async with conn.transaction(isolation="repeatable_read", readonly=True):
+            params = [f"%{query.strip()}%"]
+            if project_id == "none":
+                proj_filter = "AND c.project_id IS NULL"
+            elif project_id:
+                proj_filter = f"AND c.project_id = ${len(params) + 1}"
+                params.append(project_id)
+            else:
+                proj_filter = ""
+            params.append(limit)
+            limit_idx = len(params)
+            msg_rows = await conn.fetch(f"""
+                SELECT m.id, m.conversation_id, m.role, m.content, m.time, m.sort_order,
+                       c.title AS conv_title, c.project_id,
+                       c.created_at AS conv_created_at
+                FROM chat_messages m
+                JOIN chat_conversations c ON c.id = m.conversation_id
+                WHERE m.content ILIKE $1
+                  AND m.role IN ('user', 'assistant')
+                  AND m.error = false
+                  {proj_filter}
+                ORDER BY m.time DESC
+                LIMIT ${limit_idx}
+            """, *params)
+
+            title_params = [f"%{query.strip()}%"]
+            if project_id == "none":
+                title_proj_filter = "AND project_id IS NULL"
+            elif project_id:
+                title_proj_filter = "AND project_id = $2"
+                title_params.append(project_id)
+            else:
+                title_proj_filter = ""
+            title_rows = await conn.fetch(f"""
+                SELECT id, title, project_id, created_at, updated_at
+                FROM chat_conversations
+                WHERE title ILIKE $1
+                  {title_proj_filter}
+                ORDER BY updated_at DESC
+                LIMIT 10
+            """, *title_params)
+
+            results_by_conv = {}
+            for row in msg_rows:
+                conv_id = row["conversation_id"]
+                if conv_id not in results_by_conv:
+                    results_by_conv[conv_id] = {
+                        "conversation_id": conv_id,
+                        "title": row["conv_title"] or "新对话",
+                        "project_id": row["project_id"],
+                        "date": (row["conv_created_at"].isoformat()
+                                 if row["conv_created_at"] else None),
+                        "matches": [],
+                    }
+                ctx_rows = await conn.fetch("""
+                    SELECT id, role, content, time, sort_order
+                    FROM chat_messages
+                    WHERE conversation_id = $1
+                      AND sort_order BETWEEN $2 AND $3
+                      AND role IN ('user', 'assistant')
+                    ORDER BY sort_order ASC
+                """, conv_id, row["sort_order"] - context_size,
+                     row["sort_order"] + context_size)
+                context_msgs = []
+                for context_row in ctx_rows:
+                    content = context_row["content"] or ""
+                    if len(content) > 300:
+                        content = content[:300] + "…"
+                    context_msgs.append({
+                        "id": context_row["id"],
+                        "role": context_row["role"],
+                        "content": content,
+                        "time": (context_row["time"].isoformat()
+                                 if context_row["time"] else None),
+                        "is_match": context_row["id"] == row["id"],
+                    })
+                results_by_conv[conv_id]["matches"].append({
+                    "message_id": row["id"],
+                    "sort_order": row["sort_order"],
+                    "context": context_msgs,
                 })
-            
-            results_by_conv[conv_id]["matches"].append({
-                "message_id": row["id"],
-                "sort_order": row["sort_order"],
-                "context": context_msgs,
-            })
-        
-        # 组装标题匹配结果
-        title_matches = []
-        for tr in title_rows:
-            title_matches.append({
-                "conversation_id": tr["id"],
-                "title": tr["title"],
-                "project_id": tr["project_id"],
-                "date": tr["created_at"].isoformat() if tr["created_at"] else None,
-            })
-        
-        return {
-            "title_matches": title_matches,
-            "message_matches": list(results_by_conv.values()),
-        }
+
+            title_matches = [{
+                "conversation_id": row["id"],
+                "title": row["title"],
+                "project_id": row["project_id"],
+                "date": row["created_at"].isoformat() if row["created_at"] else None,
+            } for row in title_rows]
+            results = {
+                "title_matches": title_matches,
+                "message_matches": list(results_by_conv.values()),
+            }
+            session_ids = [row["conversation_id"] for row in title_matches]
+            session_ids.extend(results_by_conv)
+            initial_state = await _search_initial_state_tx(conn, session_ids)
+
+        return await _search_final_check(conn, results, initial_state)
