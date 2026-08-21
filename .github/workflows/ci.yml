@@ -74,22 +74,3 @@ jobs:
 
       - name: 运行 S1-S6 永久真库行为守卫
         run: python scripts/test_kiwi_safety_sync.py
-
-      - name: 票 C 十二刀变异账（r1 返工一次性证据）
-        env:
-          KIWI_KNIFE_DSN: postgresql://postgres:postgres@127.0.0.1:5432/postgres
-          KIWI_KNIFE_SHA: ${{ github.sha }}
-          KIWI_KNIFE_OUT: ${{ runner.temp }}/ticket-c-r1-knife-results.json
-        run: >-
-          python scripts/w2_04_knives.py
-          C-delete-stamps C-reset-stamps C-restore-metadata C-restore-unnamed
-          C-restore-handoff C-filter-outside-tx C-capability-schema C-list-revision
-          C-search-final C-reminder-source C-gate-gates-stamps C-handoff-select-star
-
-      - name: 上传票 C 十二刀变异账
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: ticket-c-r1-knife-results
-          path: ${{ runner.temp }}/ticket-c-r1-knife-results.json
-          if-no-files-found: error
