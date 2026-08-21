@@ -5923,6 +5923,11 @@ async def test_w2_04_1_ticket_c(client: httpx.AsyncClient) -> None:
     passed("T-C-05 backup restore filters seven SQL-equivalent sourceless handoff faces and reconciles counts")
 
     begin("T-C-06")
+    restore_tx_source = inspect.getsource(database._restore_conversation_tx)
+    restore_public_source = inspect.getsource(database.restore_conversation_from_backup)
+    require("_drop_sourceless_handoffs" in restore_tx_source
+            and "_drop_sourceless_handoffs" not in restore_public_source,
+            "sourceless handoff filtering moved outside the restore transaction")
     await _w204_reset_tables()
     sid = "tc06-rollback"
     await _seed_conversation(
@@ -6178,6 +6183,34 @@ async def test_w2_04_1_ticket_c(client: httpx.AsyncClient) -> None:
         "chat_messages.reminder_source_id migration is missing")
     require(len(database._message_content_values({})) == 23,
             "the shared message serializer did not gain exactly one nullable field")
+    await _w204_reset_tables()
+    migration_sessions = [f"tc12-migration-{index}" for index in range(3)]
+    for index, migration_sid in enumerate(migration_sessions):
+        await _seed_conversation(
+            migration_sid,
+            messages=[(f"{migration_sid}-m", "user", f"legacy-{index}",
+                       f"{migration_sid}-k")],
+        )
+    migration_before = [dict(row) for row in await _pool_fetch(
+        "SELECT id, conversation_id, role, content, turn_key, sort_order "
+        "FROM chat_messages WHERE conversation_id = ANY($1::text[]) ORDER BY id",
+        migration_sessions,
+    )]
+    await _pool_execute("ALTER TABLE chat_messages DROP COLUMN reminder_source_id")
+    await database.init_tables()
+    await database.init_tables()
+    migration_after = [dict(row) for row in await _pool_fetch(
+        "SELECT id, conversation_id, role, content, turn_key, sort_order "
+        "FROM chat_messages WHERE conversation_id = ANY($1::text[]) ORDER BY id",
+        migration_sessions,
+    )]
+    require(migration_after == migration_before and len(migration_after) == 3,
+            f"reminder_source_id migration rewrote legacy message rows: "
+            f"before={migration_before} after={migration_after}")
+    require(await _pool_fetchval(
+        "SELECT COUNT(*) FROM chat_messages WHERE conversation_id = ANY($1::text[]) "
+        "AND reminder_source_id IS NULL", migration_sessions) == 3,
+        "legacy message rows did not receive the nullable reminder_source_id default")
     await _w204_reset_tables()
     single, legacy, imported, missing = (
         "tc12-single", "tc12-legacy", "tc12-import", "tc12-missing")
