@@ -13,6 +13,7 @@ Anthropic format: POST /v1/messages
 """
 
 import json
+import re
 import uuid
 from typing import AsyncGenerator
 
@@ -285,6 +286,58 @@ def prepare_background_request(api_key: str, api_format: str, openai_body: dict,
 def parse_background_response(data: dict, api_format: str) -> dict:
     """把后台任务的响应统一成 OpenAI chat.completion 结构。"""
     return from_anthropic_response(data) if api_format == "anthropic" else data
+
+
+_DIAGNOSTIC_WORD_RE = re.compile(r"^[A-Za-z_]+$")
+
+
+def describe_background_response(data: object) -> dict:
+    """Return body-free metadata for one normalized background response."""
+    root = data if isinstance(data, dict) else {}
+    choices = root.get("choices")
+    choices_count = len(choices) if isinstance(choices, list) else 0
+    choice = choices[0] if choices_count and isinstance(choices[0], dict) else {}
+    message_value = choice.get("message")
+    message = message_value if isinstance(message_value, dict) else {}
+    content = message.get("content")
+    content_type = type(content).__name__
+    if not _DIAGNOSTIC_WORD_RE.fullmatch(content_type):
+        content_type = "?"
+
+    if "finish_reason" not in choice:
+        finish_reason = "-"
+    else:
+        raw_finish = choice.get("finish_reason")
+        finish_reason = (
+            raw_finish
+            if isinstance(raw_finish, str) and _DIAGNOSTIC_WORD_RE.fullmatch(raw_finish)
+            else "?"
+        )
+
+    reasoning = message.get("reasoning_content")
+    reasoning_alt = message.get("reasoning")
+    tool_calls = message.get("tool_calls")
+    usage_value = root.get("usage")
+    usage = usage_value if isinstance(usage_value, dict) else {}
+    completion_value = usage.get("completion_tokens")
+    completion_tokens = (
+        completion_value
+        if isinstance(completion_value, int) and not isinstance(completion_value, bool)
+        else -1
+    )
+    return {
+        "choices": choices_count,
+        "content_present": "content" in message,
+        "content_type": content_type,
+        "content_len": len(content) if isinstance(content, str) else 0,
+        "stripped_len": len(content.strip()) if isinstance(content, str) else 0,
+        "finish_reason": finish_reason,
+        "reasoning_len": len(reasoning) if isinstance(reasoning, str) else 0,
+        "reasoning_alt_len": len(reasoning_alt) if isinstance(reasoning_alt, str) else 0,
+        "tool_calls": len(tool_calls) if isinstance(tool_calls, list) else 0,
+        "refusal_present": bool(message.get("refusal")),
+        "completion_tokens": completion_tokens,
+    }
 
 
 # ============================================================

@@ -6608,7 +6608,7 @@ async def test_empty_response_resilience_contracts() -> None:
     dsn = "postgresql://user:pw@host/db"
     api_key = "sk-secret-should-never-log"
     chinese = "绝密中文正文"
-    secret_text = f"{dsn} {api_key} {chinese}"
+    secret_text = f"{chinese} {dsn} {api_key}"
     empty_log = io.StringIO()
     with redirect_stdout(empty_log):
         empty_result = await _er_trace([
