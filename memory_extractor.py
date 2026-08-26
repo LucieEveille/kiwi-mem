@@ -88,9 +88,11 @@ EMOTION_HIGH_INSTRUCTION = """# 🩷 情绪锚点提取【本轮对话情绪浓�
 EMOTION_NORMAL_INSTRUCTION = ""
 
 
-async def extract_memories(messages: List[Dict[str, str]], existing_memories: List[str] = None, categories: List[str] = None, model_override: str = None, prompt_override: str = None, emotion_level: str = "normal") -> List[Dict]:
+async def extract_memories(messages: List[Dict[str, str]], existing_memories: List[str] = None, categories: List[str] = None, model_override: str = None, prompt_override: str = None, emotion_level: str = "normal"):
     """
-    从对话消息中提取记忆
+    从对话消息中提取记忆。
+
+    list（含合法空数组）表示成功；{"ok": False, "reason": code} 表示失败。
 
     参数：
         messages: 对话消息列表，格式 [{"role": "user", "content": "..."}, ...]
@@ -157,7 +159,7 @@ async def extract_memories(messages: List[Dict[str, str]], existing_memories: Li
 
     if not use_api_key:
         print("⚠️  无可用 API Key（供应商和环境变量均未配置），跳过记忆提取")
-        return []
+        return {"ok": False, "reason": "no_api_key"}
 
     # 调用 LLM 提取记忆
     try:
@@ -180,7 +182,7 @@ async def extract_memories(messages: List[Dict[str, str]], existing_memories: Li
 
             if response.status_code != 200:
                 print(f"⚠️  记忆提取请求失败: {response.status_code}")
-                return []
+                return {"ok": False, "reason": f"http_{response.status_code}"}
 
             data = parse_background_response(response.json(), use_api_format)
             text = data.get("choices", [{}])[0].get("message", {}).get("content", "")
@@ -223,9 +225,9 @@ async def extract_memories(messages: List[Dict[str, str]], existing_memories: Li
                     if "content" in memories:
                         memories = [memories]
             
-            if not memories or not isinstance(memories, list):
+            if memories is None or not isinstance(memories, list):
                 print(f"⚠️  记忆提取返回非数组格式，跳过")
-                return []
+                return {"ok": False, "reason": "parse_failed"}
 
             # 验证格式
             valid_memories = []
@@ -254,9 +256,17 @@ async def extract_memories(messages: List[Dict[str, str]], existing_memories: Li
             print(f"📝 从对话中提取了 {len(valid_memories)} 条新记忆（已对比 {len(existing_memories or [])} 条已有记忆）")
             return valid_memories
 
+    except httpx.TimeoutException as e:
+        print(f"⚠️  记忆提取超时: {type(e).__name__}")
+        return {"ok": False, "reason": "timeout"}
+    except httpx.TransportError as e:
+        name = type(e).__name__
+        print(f"⚠️  记忆提取网络失败: {name}")
+        return {"ok": False, "reason": f"network:{name}"}
     except json.JSONDecodeError as e:
-        print(f"⚠️  记忆提取结果解析失败: {e}")
-        return []
+        print(f"⚠️  记忆提取结果解析失败: {type(e).__name__}")
+        return {"ok": False, "reason": "parse_failed"}
     except Exception as e:
-        print(f"⚠️  记忆提取出错: {e}")
-        return []
+        name = type(e).__name__
+        print(f"⚠️  记忆提取出错: {name}")
+        return {"ok": False, "reason": f"exception:{name}"}

@@ -1320,7 +1320,7 @@ async def _extract_and_save_batch(*, session_id, limit,
     for attempt in (1, 2):
         snapshot, messages = await _snapshot_extraction_material(session_id, limit=limit)
         if not messages:
-            return "abandoned", [], 0, 0
+            return "abandoned", [], 0, 0, None
 
         new_memories = await extract_memories(
             messages,
@@ -1330,6 +1330,8 @@ async def _extract_and_save_batch(*, session_id, limit,
             prompt_override=prompt_override,
             emotion_level=emotion_level,
         )
+        if isinstance(new_memories, dict) and new_memories.get("ok") is False:
+            return "extract_failed", [], 0, 0, new_memories.get("reason") or "unknown"
         plans, skipped = await _prepare_memory_batch(
             _filter_meta_memories(new_memories), project_id=project_id,
             emotion_level=emotion_level)
@@ -1344,9 +1346,18 @@ async def _extract_and_save_batch(*, session_id, limit,
                 )
         if outcome == "saved":
             saved_items, contradictions = result
-            return "extract", saved_items, skipped, contradictions
+            return "extract", saved_items, skipped, contradictions, None
         print(f"event=extraction_sources_changed attempt={attempt} increment=1")
-    return "abandoned", [], 0, 0
+    return "abandoned", [], 0, 0, None
+
+
+def _should_push_memory_event(result) -> bool:
+    """Publish only actionable failures or an actual memory save."""
+    if not isinstance(result, dict):
+        return False
+    saved = result.get("saved", 0)
+    has_saved = isinstance(saved, (int, float)) and not isinstance(saved, bool) and saved > 0
+    return has_saved or result.get("action") in ("extract_failed", "error")
 
 
 async def process_memories_background(session_id: str, user_msg: str, assistant_msg: str, model: str, emotion_level: str = "normal", project_id: str = None, is_regenerate: bool = False, *, extract_enabled: bool = True, usage: dict = None, turn_key: str = None, client_gave_conv_id: bool = False, project_id_present: bool = False, payload_project_id=None, user_message_id: str = None,
@@ -1473,7 +1484,7 @@ async def process_memories_background(session_id: str, user_msg: str, assistant_
 
         # ===== v3.7 改进：攒 N 轮完整对话一起提取 =====
         # 从数据库捞最近 N*2 条消息（N轮 = N条user + N条assistant）
-        action, saved_items, skipped_count, contradiction_count = await _extract_and_save_batch(
+        action, saved_items, skipped_count, contradiction_count, failure_reason = await _extract_and_save_batch(
             session_id=session_id, limit=extract_interval * 2,
             existing_contents=existing_contents, cat_names=cat_names,
             emotion_level=emotion_level, project_id=project_id,
@@ -1483,6 +1494,14 @@ async def process_memories_background(session_id: str, user_msg: str, assistant_
         if action == "abandoned":
             print("💭 提取素材在生成期间被删改，本轮放弃保存")
             return {"action": "abandoned", "reason": "sources_changed"}
+        if action == "extract_failed":
+            # The global counter is the current extraction trigger carrier. Restore it so
+            # the next eligible turn retries instead of treating this batch as processed.
+            async with _counter_lock:
+                _conversation_counter = max(_conversation_counter, extract_interval)
+            reason = failure_reason or "unknown"
+            print(f"⚠️  本批提取失败，恢复重试触发（reason={reason}）")
+            return {"action": "extract_failed", "saved": 0, "reason": reason}
         saved_count = len(saved_items)
 
         if saved_count > 0 or skipped_count > 0:
@@ -1495,8 +1514,9 @@ async def process_memories_background(session_id: str, user_msg: str, assistant_
             return {"action": "extract", "saved": 0, "skipped": 0, "contradictions": 0, "total": await get_all_memories_count(), "items": []}
             
     except Exception as e:
-        print(f"⚠️  后台记忆处理失败: {e}")
-        return {"action": "error", "error": str(e)}
+        error_code = f"exception:{type(e).__name__}"
+        print(f"⚠️  后台记忆处理失败: {type(e).__name__}")
+        return {"action": "error", "error_code": error_code, "error": error_code}
 
 
 # ============================================================
@@ -3054,7 +3074,7 @@ async def _stream_with_tools(messages, tools, tool_map, model, temperature, tool
                 except Exception as e:
                     print(f"⚠️ 收尾记忆 task 出错（不影响流收尾）: {e}")
                     mem_result = None
-                if mem_result and mem_result.get("action") != "skip":
+                if _should_push_memory_event(mem_result):
                     yield f"data: {json.dumps({'ev_memory': mem_result}, ensure_ascii=False)}\n\n"
             # Dream 事件必须在 [DONE] 之前
             if dream_triggered:
@@ -3611,7 +3631,7 @@ async def stream_and_capture(headers: dict, body: dict, session_id: str, user_me
         except Exception as e:
             print(f"⚠️ 收尾记忆 task 出错（不影响流收尾）: {e}")
             mem_result = None
-        if mem_result and mem_result.get("action") != "skip":
+        if _should_push_memory_event(mem_result):
             yield f"data: {json.dumps({'ev_memory': mem_result}, ensure_ascii=False)}\n\n".encode("utf-8")
 
     # Dream 触发：在 [DONE] 之前推送，前端据此启动 Dream 并展示进度（既有"陪看"体验不动）

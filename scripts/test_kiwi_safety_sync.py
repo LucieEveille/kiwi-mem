@@ -6316,6 +6316,156 @@ async def test_w2_04_1_ticket_c(client: httpx.AsyncClient) -> None:
     passed("T-C-12 reminder_source_id round-trips all sync channels and stays out of upstream messages")
 
 
+class _MNResponse:
+    def __init__(self, status_code: int = 200, payload: Any = None) -> None:
+        self.status_code = status_code
+        self._payload = payload
+
+    def json(self) -> Any:
+        return self._payload
+
+
+class _MNClient:
+    response: Any = None
+    error: BaseException | None = None
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        pass
+
+    async def __aenter__(self) -> "_MNClient":
+        return self
+
+    async def __aexit__(self, *args: Any) -> bool:
+        return False
+
+    async def post(self, *args: Any, **kwargs: Any) -> Any:
+        if self.error:
+            raise self.error
+        return self.response
+
+
+async def _mn_extractor_case(*, key: str = "key", response: Any = None,
+                             error: BaseException | None = None) -> Any:
+    async def _resolver(_model: str) -> tuple[str, str, str]:
+        return "http://memory.test/chat/completions", key, "openai"
+
+    _MNClient.response = response
+    _MNClient.error = error
+    try:
+        with patch.object(database, "resolve_model_endpoint", _resolver), patch.object(
+            memory_extractor.httpx, "AsyncClient", _MNClient
+        ):
+            return await memory_extractor.extract_memories([
+                {"role": "user", "content": "remember this public contract"},
+            ])
+    finally:
+        _MNClient.response = None
+        _MNClient.error = None
+
+
+async def test_memory_notice_contracts() -> None:
+    begin("T-MN-K-01")
+    failure_results = {
+        "no_api_key": await _mn_extractor_case(key=""),
+        "http_401": await _mn_extractor_case(response=_MNResponse(401, {})),
+        "http_429": await _mn_extractor_case(response=_MNResponse(429, {})),
+        "timeout": await _mn_extractor_case(
+            error=httpx.TimeoutException("secret timeout body")
+        ),
+        "network:ConnectError": await _mn_extractor_case(
+            error=httpx.ConnectError("postgresql://user:pw@host/db")
+        ),
+        "parse_failed": await _mn_extractor_case(response=_MNResponse(200, {
+            "choices": [{"message": {"content": "not-json"}}],
+        })),
+    }
+    for expected_reason, result in failure_results.items():
+        require(result == {"ok": False, "reason": expected_reason},
+                f"extractor failure reason drifted for {expected_reason}: {result!r}")
+    passed("T-MN-K-01 extractor exposes six stable failure reasons")
+
+    begin("T-MN-K-02")
+    prepare_called = False
+    save_called = False
+
+    async def _snapshot(*args: Any, **kwargs: Any) -> tuple[dict[str, Any], list[dict[str, str]]]:
+        return {"conversation": 1}, [{"role": "user", "content": "failed batch"}]
+
+    async def _failed_extract(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        return {"ok": False, "reason": "timeout"}
+
+    async def _must_not_prepare(*args: Any, **kwargs: Any) -> Any:
+        nonlocal prepare_called
+        prepare_called = True
+        raise AssertionError("failed extraction reached memory preparation")
+
+    async def _must_not_save(*args: Any, **kwargs: Any) -> Any:
+        nonlocal save_called
+        save_called = True
+        raise AssertionError("failed extraction reached source marking/save")
+
+    with patch.object(app_module, "_snapshot_extraction_material", _snapshot), patch.object(
+        app_module, "extract_memories", _failed_extract
+    ), patch.object(app_module, "_prepare_memory_batch", _must_not_prepare), patch.object(
+        app_module, "save_if_sources_unchanged", _must_not_save
+    ):
+        failed_batch = await app_module._extract_and_save_batch(
+            session_id="mn-k-retry", limit=4, existing_contents=[], cat_names=[],
+            emotion_level="normal", project_id=None, model_override=None,
+            prompt_override=None,
+        )
+    require(failed_batch == ("extract_failed", [], 0, 0, "timeout"),
+            f"failed batch was not propagated distinctly: {failed_batch!r}")
+    require(not prepare_called and not save_called,
+            "failed batch was incorrectly marked processed or prepared for save")
+    process_source = inspect.getsource(app_module.process_memories_background)
+    require('if action == "extract_failed":' in process_source
+            and '_conversation_counter = max(_conversation_counter, extract_interval)' in process_source,
+            "failed batch does not restore an immediate retry trigger")
+    passed("T-MN-K-02 failed batches stay unsaved and restore the retry trigger")
+
+    begin("T-MN-K-03")
+    push = getattr(app_module, "_should_push_memory_event", None)
+    cases = [
+        ({"action": "skip", "saved": 0}, False),
+        ({"action": "skip_tombstoned", "saved": 0}, False),
+        ({"action": "skip_extract_disabled", "saved": 0}, False),
+        ({"action": "skip_project", "saved": 0}, False),
+        ({"action": "abandoned", "saved": 0}, False),
+        ({"action": "extract", "saved": 0}, False),
+        ({"action": "extract", "saved": 2}, True),
+        ({"action": "extract_failed", "saved": 0}, True),
+        ({"action": "extract_failed", "saved": 2}, True),
+        ({"action": "error", "saved": 0}, True),
+    ]
+    require(callable(push) and all(push(event) is expected for event, expected in cases),
+            "memory event push truth table drifted")
+    source = inspect.getsource(app_module)
+    require(source.count("_should_push_memory_event(mem_result)") == 2,
+            "both streaming paths must call the shared push predicate exactly once")
+    passed("T-MN-K-03 both streamers share the frozen memory push predicate")
+
+    begin("T-MN-K-04")
+    secret = "postgresql://user:pw@host/db secret-payload"
+
+    async def _explode(*args: Any, **kwargs: Any) -> Any:
+        raise RuntimeError(secret)
+
+    output = io.StringIO()
+    with patch.object(app_module, "append_turn_events_atomic", _explode), redirect_stdout(output):
+        result = await app_module.process_memories_background(
+            "mn-k-error", "u", "a", "model", extract_enabled=False,
+            reset_generation=0,
+        )
+    require(result == {
+        "action": "error", "error_code": "exception:RuntimeError",
+        "error": "exception:RuntimeError",
+    }, f"unsafe error event shape: {result!r}")
+    require(secret not in json.dumps(result, ensure_ascii=False) and secret not in output.getvalue(),
+            "exception body leaked to the event or server log")
+    passed("T-MN-K-04 error events and logs expose class codes only")
+
+
 async def run_suite(test_dsn: str) -> None:
     global database, config, app_module, memory_extractor
 
@@ -6377,6 +6527,7 @@ async def run_suite(test_dsn: str) -> None:
         await test_w2_04_handoff_copies(client)
         await test_w2_04_restore_stamp_states(client)
         await test_w2_04_1_ticket_c(client)
+        await test_memory_notice_contracts()
 
 
 async def async_main() -> int:
@@ -6395,6 +6546,7 @@ async def async_main() -> int:
         w2_03_passed = [name for name in PASSED if name.startswith("T-W2-03-")]
         w2_04_passed = [name for name in PASSED if name.startswith("T-W2-04-")]
         ticket_c_passed = [name for name in PASSED if name.startswith("T-C-")]
+        memory_notice_passed = [name for name in PASSED if name.startswith("T-MN-K-")]
         print(f"\nPASS: {len(legacy_passed)} permanent S1-S6 behavior guards")
         print(f"PASS: {len(w1_01_passed)} W1-01 isolation/permanent guards")
         print(f"PASS: {len(w1_06_passed)} W1-06 calendar-delete atomicity guards")
@@ -6404,6 +6556,7 @@ async def async_main() -> int:
         print(f"PASS: {len(w2_03_passed)} W2-03 ledger-schema/scope/dark-write guards")
         print(f"PASS: {len(w2_04_passed)} W2-04 session-delete/privacy guards")
         print(f"PASS: {len(ticket_c_passed)} W2-04.1 ticket-C guards")
+        print(f"PASS: {len(memory_notice_passed)} memory-notice/failure-propagation guards")
         if _MUTES_USED:
             print(f"MUTED: {len(_MUTES_USED)} assertion(s) let through via KIWI_KNIFE_MUTE: "
                   f"{sorted(set(_MUTES_USED))}")
