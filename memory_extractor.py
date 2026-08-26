@@ -10,7 +10,7 @@ v2.3 改进：提取时注入已有记忆，让模型对比后只提取全新信
 import os
 import json
 import httpx
-from typing import List, Dict
+from typing import List, Dict, Optional
 
 API_KEY = os.getenv("MEMORY_API_KEY", "") or os.getenv("API_KEY", "")
 _RAW_BASE_URL = os.getenv("MEMORY_API_BASE_URL", "") or os.getenv("API_BASE_URL", "https://openrouter.ai/api/v1/chat/completions")
@@ -20,6 +20,7 @@ API_BASE_URL = _RAW_BASE_URL if _RAW_BASE_URL.rstrip("/").endswith("/chat/comple
 
 # 用来提取记忆的模型（便宜的就行）
 MEMORY_MODEL = os.getenv("MEMORY_MODEL", "anthropic/claude-haiku-4")
+EXTRACT_EMPTY_RETRY = 1
 
 
 EXTRACTION_PROMPT = """你是信息提取专家，负责从对话中识别并提取值得长期记住的关键信息。
@@ -86,6 +87,26 @@ EMOTION_HIGH_INSTRUCTION = """# 🩷 情绪锚点提取【本轮对话情绪浓�
 - 这类记忆的 emotional_weight 应为 6-10"""
 
 EMOTION_NORMAL_INSTRUCTION = ""
+
+
+def _read_extract_text(data: object) -> tuple[Optional[str], str]:
+    """Read normalized completion text without trusting any response shape."""
+    if not isinstance(data, dict):
+        return None, "missing"
+    choices = data.get("choices")
+    if not isinstance(choices, list) or not choices or not isinstance(choices[0], dict):
+        return None, "missing"
+    message = choices[0].get("message")
+    if not isinstance(message, dict) or "content" not in message:
+        return None, "missing"
+    content = message.get("content")
+    if content is None:
+        return None, "none"
+    if not isinstance(content, str):
+        return None, "unsupported"
+    if not content.strip():
+        return "", "empty"
+    return content, "str"
 
 
 async def extract_memories(messages: List[Dict[str, str]], existing_memories: List[str] = None, categories: List[str] = None, model_override: str = None, prompt_override: str = None, emotion_level: str = "normal"):
@@ -163,7 +184,11 @@ async def extract_memories(messages: List[Dict[str, str]], existing_memories: Li
 
     # 调用 LLM 提取记忆
     try:
-        from anthropic_adapter import prepare_background_request, parse_background_response
+        from anthropic_adapter import (
+            describe_background_response,
+            parse_background_response,
+            prepare_background_request,
+        )
         _body = {
             "model": use_model,
             "max_tokens": 1000,
@@ -178,16 +203,40 @@ async def extract_memories(messages: List[Dict[str, str]], existing_memories: Li
             title="AI Memory Gateway - Memory Extraction",
         )
         async with httpx.AsyncClient(timeout=60) as client:
-            response = await client.post(use_api_url, headers=_headers, json=_send_body)
+            retry_count = 0
+            while True:
+                response = await client.post(use_api_url, headers=_headers, json=_send_body)
 
-            if response.status_code != 200:
-                print(f"⚠️  记忆提取请求失败: {response.status_code}")
-                return {"ok": False, "reason": f"http_{response.status_code}"}
+                if response.status_code != 200:
+                    print(f"⚠️  记忆提取请求失败: {response.status_code}")
+                    return {"ok": False, "reason": f"http_{response.status_code}"}
 
-            data = parse_background_response(response.json(), use_api_format)
-            text = data.get("choices", [{}])[0].get("message", {}).get("content", "")
-            
-            print(f"🔍 记忆提取模型返回：{len(text)} 字符，待解析")
+                data = parse_background_response(response.json(), use_api_format)
+                text, shape = _read_extract_text(data)
+                if shape in ("missing", "none", "empty"):
+                    diagnostic = describe_background_response(data)
+                    print("🩺 记忆提取响应诊断: " + json.dumps(
+                        diagnostic, sort_keys=True, ensure_ascii=True,
+                    ))
+                    if retry_count < EXTRACT_EMPTY_RETRY:
+                        retry_count += 1
+                        print("🔁 记忆提取空正文，当场重试 1 次")
+                        continue
+                    print("⚠️ 记忆提取空正文（重试后仍空），跳过")
+                    return {"ok": False, "reason": "parse_failed"}
+                if shape == "unsupported":
+                    diagnostic = describe_background_response(data)
+                    print("🩺 记忆提取响应诊断: " + json.dumps(
+                        diagnostic, sort_keys=True, ensure_ascii=True,
+                    ))
+                    print("⚠️  记忆提取返回不支持的正文形状（解析失败），跳过")
+                    return {"ok": False, "reason": "parse_failed"}
+
+                if retry_count:
+                    print(f"🔁 重试后取得 {len(text)} 字符")
+                else:
+                    print(f"🔍 记忆提取模型返回：{len(text)} 字符，待解析")
+                break
 
             # 清理可能的 markdown 格式
             text = text.strip()
@@ -226,6 +275,10 @@ async def extract_memories(messages: List[Dict[str, str]], existing_memories: Li
                         memories = [memories]
             
             if memories is None or not isinstance(memories, list):
+                diagnostic = describe_background_response(data)
+                print("🩺 记忆提取响应诊断: " + json.dumps(
+                    diagnostic, sort_keys=True, ensure_ascii=True,
+                ))
                 print(f"⚠️  记忆提取返回非数组格式，跳过")
                 return {"ok": False, "reason": "parse_failed"}
 
