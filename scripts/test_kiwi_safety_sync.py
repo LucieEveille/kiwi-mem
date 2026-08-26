@@ -6605,6 +6605,39 @@ async def test_empty_response_resilience_contracts() -> None:
     passed("T-ER-K-03 non-JSON and empty fenced output never retry")
 
     begin("T-ER-K-04")
+    diagnostic_prefix = "🩺 记忆提取响应诊断: "
+    diagnostic_keys = {
+        "choices", "content_present", "content_type", "content_len", "stripped_len",
+        "finish_reason", "reasoning_len", "reasoning_alt_len", "tool_calls",
+        "refusal_present", "completion_tokens",
+    }
+    diagnostic_word = re.compile(r"^[A-Za-z_?\-]+$")
+
+    def diagnostics_are_canonical(output: str) -> bool:
+        payloads = [
+            line[len(diagnostic_prefix):]
+            for line in output.splitlines()
+            if line.startswith(diagnostic_prefix)
+        ]
+        if not payloads:
+            return False
+        for raw in payloads:
+            try:
+                diagnostic = json.loads(raw)
+            except (json.JSONDecodeError, TypeError):
+                return False
+            if json.dumps(diagnostic, sort_keys=True, ensure_ascii=True) != raw:
+                return False
+            if not isinstance(diagnostic, dict) or set(diagnostic) != diagnostic_keys:
+                return False
+            if not all(
+                isinstance(value, (int, bool))
+                or (isinstance(value, str) and diagnostic_word.fullmatch(value))
+                for value in diagnostic.values()
+            ):
+                return False
+        return True
+
     dsn = "postgresql://user:pw@host/db"
     api_key = "sk-secret-should-never-log"
     chinese = "绝密中文正文"
@@ -6629,6 +6662,9 @@ async def test_empty_response_resilience_contracts() -> None:
     require(nonjson_result == ({"ok": False, "reason": "parse_failed"}, 1, 0)
             and nonjson_log.getvalue().count("记忆提取响应诊断") == 1,
             "non-JSON diagnostic count drifted")
+    require(diagnostics_are_canonical(empty_log.getvalue())
+            and diagnostics_are_canonical(nonjson_log.getvalue()),
+            "diagnostic lines are not canonical fixed-shape JSON")
     require("记忆提取响应诊断" not in timeout_log.getvalue(),
             "timeout unexpectedly emitted a response diagnostic")
     require(all(value not in combined for value in (dsn, api_key, chinese)),
