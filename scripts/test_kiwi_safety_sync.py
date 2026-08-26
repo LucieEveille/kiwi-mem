@@ -6327,7 +6327,9 @@ class _MNResponse:
 
 class _MNClient:
     response: Any = None
+    responses: list[Any] | None = None
     error: BaseException | None = None
+    calls: int = 0
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         pass
@@ -6339,28 +6341,46 @@ class _MNClient:
         return False
 
     async def post(self, *args: Any, **kwargs: Any) -> Any:
+        index = self.calls
+        type(self).calls += 1
         if self.error:
             raise self.error
-        return self.response
+        if self.responses is None:
+            return self.response
+        if index >= len(self.responses):
+            raise AssertionError("extractor posted more than fixture allows")
+        item = self.responses[index]
+        if isinstance(item, BaseException):
+            raise item
+        return item
 
 
 async def _mn_extractor_case(*, key: str = "key", response: Any = None,
-                             error: BaseException | None = None) -> Any:
+                             responses: list[Any] | None = None,
+                             error: BaseException | None = None,
+                             trace: bool = False) -> Any:
     async def _resolver(_model: str) -> tuple[str, str, str]:
         return "http://memory.test/chat/completions", key, "openai"
 
     _MNClient.response = response
+    _MNClient.responses = responses
     _MNClient.error = error
+    _MNClient.calls = 0
     try:
         with patch.object(database, "resolve_model_endpoint", _resolver), patch.object(
             memory_extractor.httpx, "AsyncClient", _MNClient
         ):
-            return await memory_extractor.extract_memories([
+            result = await memory_extractor.extract_memories([
                 {"role": "user", "content": "remember this public contract"},
             ])
+            calls = _MNClient.calls
+            remaining = None if responses is None else max(0, len(responses) - calls)
+            return (result, calls, remaining) if trace else result
     finally:
         _MNClient.response = None
+        _MNClient.responses = None
         _MNClient.error = None
+        _MNClient.calls = 0
 
 
 async def test_memory_notice_contracts() -> None:
@@ -6466,6 +6486,156 @@ async def test_memory_notice_contracts() -> None:
     passed("T-MN-K-04 error events and logs expose class codes only")
 
 
+def _er_payload(content: Any, *, reasoning: str = "", reasoning_alt: str = "",
+                refusal: Any = None, finish_reason: str = "stop",
+                completion_tokens: int = 57, tool_calls: Any = None) -> dict[str, Any]:
+    message: dict[str, Any] = {"content": content}
+    if reasoning:
+        message["reasoning_content"] = reasoning
+    if reasoning_alt:
+        message["reasoning"] = reasoning_alt
+    if refusal is not None:
+        message["refusal"] = refusal
+    if tool_calls is not None:
+        message["tool_calls"] = tool_calls
+    return {
+        "choices": [{"message": message, "finish_reason": finish_reason}],
+        "usage": {"completion_tokens": completion_tokens},
+    }
+
+
+async def _er_trace(payloads: list[Any]) -> tuple[Any, int, int | None]:
+    responses = [
+        item if isinstance(item, (_MNResponse, BaseException)) else _MNResponse(200, item)
+        for item in payloads
+    ]
+    return await _mn_extractor_case(responses=responses, trace=True)
+
+
+async def test_empty_response_resilience_contracts() -> None:
+    import importlib
+
+    adapter = importlib.import_module("anthropic_adapter")
+    describe = getattr(adapter, "describe_background_response", None)
+    read_extract = getattr(memory_extractor, "_read_extract_text", None)
+
+    begin("T-ER-K-01")
+    require(callable(describe) and callable(read_extract),
+            "empty-response diagnostic/read helpers are missing")
+    secret = "postgresql://user:pw@host/db 中文正文"
+    expected = {
+        "choices": 1,
+        "content_present": True,
+        "content_type": "str",
+        "content_len": 0,
+        "stripped_len": 0,
+        "finish_reason": "stop",
+        "reasoning_len": len(secret),
+        "reasoning_alt_len": 0,
+        "tool_calls": 2,
+        "refusal_present": False,
+        "completion_tokens": 57,
+    }
+    diagnostic = describe(_er_payload(
+        "", reasoning=secret, tool_calls=[{"id": "a"}, {"id": "b"}],
+    ))
+    dump = json.dumps(diagnostic, ensure_ascii=True, sort_keys=True)
+    require(diagnostic == expected and secret not in dump,
+            f"diagnostic contract drifted: {diagnostic!r}")
+    require(describe(_er_payload("", finish_reason="stop; DROP"))["finish_reason"] == "?",
+            "unsafe finish_reason was not reduced to the sentinel")
+    require(describe(_er_payload(None))["content_type"] == "NoneType",
+            "None content type/count contract drifted")
+    require(all(isinstance(describe(value), dict) for value in ({}, None, [], "unexpected")),
+            "diagnostic helper raised or returned a non-dict for malformed top-level data")
+    expected_shapes = [
+        (None, (None, "missing")),
+        ([], (None, "missing")),
+        ("unexpected", (None, "missing")),
+        ({}, (None, "missing")),
+        ({"choices": []}, (None, "missing")),
+        ({"choices": [{"message": None}]}, (None, "missing")),
+        ({"choices": [{"message": {}}]}, (None, "missing")),
+        (_er_payload(None), (None, "none")),
+        (_er_payload("  \n"), ("", "empty")),
+        (_er_payload("[]"), ("[]", "str")),
+        (_er_payload({"a": 1}), (None, "unsupported")),
+    ]
+    require(all(read_extract(value) == expected_shape
+                for value, expected_shape in expected_shapes),
+            "safe extraction shape table drifted")
+    passed("T-ER-K-01 diagnostics expose fixed metadata and all payload shapes are safe")
+
+    begin("T-ER-K-02")
+    valid = _er_payload(json.dumps([{"content": "remembered"}]))
+    empty = _er_payload("")
+    retry_cases = [
+        [empty, valid],
+        [None, valid],
+        [[], valid],
+        [{"choices": []}, valid],
+        [{"choices": [{"message": None}]}, valid],
+        [_er_payload(None), valid],
+    ]
+    retry_results = [await _er_trace(case) for case in retry_cases]
+    twice = await _er_trace([empty, empty, valid])
+    http_error = await _er_trace([empty, _MNResponse(429, {})])
+    unsupported = [
+        await _er_trace([_er_payload({"a": 1})]),
+        await _er_trace([_er_payload(["x"])]),
+    ]
+    require(all(isinstance(result, list) and len(result) == 1 and calls == 2
+                for result, calls, _remaining in retry_results),
+            f"empty-like payloads did not recover in exactly two posts: {retry_results!r}")
+    require(twice == ({"ok": False, "reason": "parse_failed"}, 2, 1),
+            f"retry limit or permanent third-response fixture drifted: {twice!r}")
+    require(http_error == ({"ok": False, "reason": "http_429"}, 2, 0),
+            f"retry HTTP reason drifted: {http_error!r}")
+    require(all(result == {"ok": False, "reason": "parse_failed"} and calls == 1
+                for result, calls, _remaining in unsupported),
+            f"unsupported content shape was retried: {unsupported!r}")
+    passed("T-ER-K-02 empty responses retry once and leave the third fixture unused")
+
+    begin("T-ER-K-03")
+    nonjson = await _er_trace([_er_payload("not-json")])
+    empty_fence = await _er_trace([_er_payload("```json\n```")])
+    require(nonjson == ({"ok": False, "reason": "parse_failed"}, 1, 0)
+            and empty_fence == ({"ok": False, "reason": "parse_failed"}, 1, 0),
+            f"non-JSON response was retried: {nonjson!r} / {empty_fence!r}")
+    passed("T-ER-K-03 non-JSON and empty fenced output never retry")
+
+    begin("T-ER-K-04")
+    dsn = "postgresql://user:pw@host/db"
+    api_key = "sk-secret-should-never-log"
+    chinese = "绝密中文正文"
+    secret_text = f"{dsn} {api_key} {chinese}"
+    empty_log = io.StringIO()
+    with redirect_stdout(empty_log):
+        empty_result = await _er_trace([
+            _er_payload("", reasoning=secret_text, refusal=secret_text),
+            _er_payload("", reasoning_alt=secret_text, refusal=secret_text),
+        ])
+    nonjson_log = io.StringIO()
+    with redirect_stdout(nonjson_log):
+        nonjson_result = await _er_trace([_er_payload(secret_text)])
+    timeout_log = io.StringIO()
+    with redirect_stdout(timeout_log):
+        await _mn_extractor_case(error=httpx.TimeoutException(secret_text))
+    combined = empty_log.getvalue() + nonjson_log.getvalue() + timeout_log.getvalue()
+    require(empty_result == ({"ok": False, "reason": "parse_failed"}, 2, 0)
+            and empty_log.getvalue().count("记忆提取响应诊断") == 2
+            and empty_log.getvalue().count("当场重试 1 次") == 1,
+            "empty response diagnostics/retry log contract drifted")
+    require(nonjson_result == ({"ok": False, "reason": "parse_failed"}, 1, 0)
+            and nonjson_log.getvalue().count("记忆提取响应诊断") == 1,
+            "non-JSON diagnostic count drifted")
+    require("记忆提取响应诊断" not in timeout_log.getvalue(),
+            "timeout unexpectedly emitted a response diagnostic")
+    require(all(value not in combined for value in (dsn, api_key, chinese)),
+            "diagnostic logs leaked a DSN, API key, or response body")
+    passed("T-ER-K-04 both diagnostic arms are body-free and timeout stays separate")
+
+
 async def run_suite(test_dsn: str) -> None:
     global database, config, app_module, memory_extractor
 
@@ -6528,6 +6698,7 @@ async def run_suite(test_dsn: str) -> None:
         await test_w2_04_restore_stamp_states(client)
         await test_w2_04_1_ticket_c(client)
         await test_memory_notice_contracts()
+        await test_empty_response_resilience_contracts()
 
 
 async def async_main() -> int:
@@ -6547,6 +6718,7 @@ async def async_main() -> int:
         w2_04_passed = [name for name in PASSED if name.startswith("T-W2-04-")]
         ticket_c_passed = [name for name in PASSED if name.startswith("T-C-")]
         memory_notice_passed = [name for name in PASSED if name.startswith("T-MN-K-")]
+        empty_response_passed = [name for name in PASSED if name.startswith("T-ER-K-")]
         print(f"\nPASS: {len(legacy_passed)} permanent S1-S6 behavior guards")
         print(f"PASS: {len(w1_01_passed)} W1-01 isolation/permanent guards")
         print(f"PASS: {len(w1_06_passed)} W1-06 calendar-delete atomicity guards")
@@ -6557,6 +6729,7 @@ async def async_main() -> int:
         print(f"PASS: {len(w2_04_passed)} W2-04 session-delete/privacy guards")
         print(f"PASS: {len(ticket_c_passed)} W2-04.1 ticket-C guards")
         print(f"PASS: {len(memory_notice_passed)} memory-notice/failure-propagation guards")
+        print(f"PASS: {len(empty_response_passed)} empty-response diagnostic/resilience guards")
         if _MUTES_USED:
             print(f"MUTED: {len(_MUTES_USED)} assertion(s) let through via KIWI_KNIFE_MUTE: "
                   f"{sorted(set(_MUTES_USED))}")
