@@ -15,7 +15,11 @@ const PAGE_ALIAS = { reminderTools: 'tools' };
 const TAB_PAGES = { memories: 'settings', dream: 'settings', calendar: 'settings' };
 
 let INDEX = null;
-onNavVisibilityChange(_event => { INDEX = null; });
+let ACTIVE_SEARCH_REFRESH = null;
+onNavVisibilityChange(_event => {
+  INDEX = null;
+  ACTIVE_SEARCH_REFRESH?.();
+});
 
 function keyPos(key) {
   for (const [pk, def] of Object.entries(CONFIG_PAGES)) {
@@ -133,7 +137,14 @@ export function initSearch(container) {
       </div>`).join('');
   };
 
-  input.addEventListener('input', () => { results = search(input.value); cursor = -1; render(); });
+  const refreshForVisibility = () => {
+    results = search(input.value);
+    cursor = -1;
+    render();
+  };
+  ACTIVE_SEARCH_REFRESH = refreshForVisibility;
+
+  input.addEventListener('input', refreshForVisibility);
   input.addEventListener('keydown', (e) => {
     if (e.key === 'ArrowDown') { e.preventDefault(); cursor = Math.min(cursor + 1, results.length - 1); render(); }
     else if (e.key === 'ArrowUp') { e.preventDefault(); cursor = Math.max(cursor - 1, 0); render(); }
