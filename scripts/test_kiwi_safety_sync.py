@@ -6868,7 +6868,10 @@ async def test_w2_05_reconcile_evidence(client: httpx.AsyncClient) -> None:
                 f"{expected_bucket} did not sample offending id {expected_id}")
         require(all(
             _w205_bucket_count(outcome, "unexplained", name) == (1 if name == expected_bucket else 0)
-            for name in _W205_UNEXPLAINED[:6]
+            for name in (
+                "turn_orphan", "turn_cross_session", "order_break",
+                "scope_split", "duplicate_user_in_turn", "turn_key_conflict",
+            )
         ), f"{expected_bucket} overlapped another primary unexplained bucket: {outcome['unexplained']!r}")
         require(all(
             expected_id not in payload["ids"]
