@@ -137,14 +137,21 @@ export function initSearch(container) {
       </div>`).join('');
   };
 
-  const refreshForVisibility = () => {
+  const refreshResults = () => {
     results = search(input.value);
     cursor = -1;
-    render();
+  };
+  const refreshForVisibility = () => {
+    const wasOpen = !drop.hidden;
+    refreshResults();
+    if (wasOpen) render();
   };
   ACTIVE_SEARCH_REFRESH = refreshForVisibility;
 
-  input.addEventListener('input', refreshForVisibility);
+  input.addEventListener('input', () => {
+    refreshResults();
+    render();
+  });
   input.addEventListener('keydown', (e) => {
     if (e.key === 'ArrowDown') { e.preventDefault(); cursor = Math.min(cursor + 1, results.length - 1); render(); }
     else if (e.key === 'ArrowUp') { e.preventDefault(); cursor = Math.max(cursor - 1, 0); render(); }
