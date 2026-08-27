@@ -6733,12 +6733,17 @@ async def test_w2_05_reconcile_matrix_and_happy_paths(client: httpx.AsyncClient)
     await post_turn("w205-happy-regen", "regen-1", is_regenerate=True)
     await post_turn("w205-happy-project-session", "project-1",
                     project_id="w205-happy-project")
+    # The response-header identity is the opt-in v2 contract.  Keep the product
+    # default unchanged and scope the fixture to the one lifecycle case that
+    # needs to observe the server-generated ID.
+    await _upsert_config("session_identity_v2_enabled", "true")
     response = await _chat(client, {
         "model": "mock-model", "stream": False,
         "messages": [{"role": "user", "content": "server generated"}],
         "turn_key": "generated-1",
     })
     generated_sid = response.headers.get("x-kiwi-session-id")
+    await _upsert_config("session_identity_v2_enabled", "false")
     require(response.status_code == 200 and generated_sid,
             "missing-conversation-id case did not return a generated identity")
     await _pool_execute(
