@@ -2998,9 +2998,14 @@ _USAGE_TAIL = _sse({"choices": [], "usage": {"prompt_tokens": 11, "completion_to
                                              "prompt_tokens_details": {"cached_tokens": 2}}})
 
 
-async def _chat(client, body, *, sse_events=None, json_body=None, status_code=200, captured=None):
+async def _chat(client, body, *, sse_events=None, json_body=None, status_code=200,
+                captured=None, on_provider=None):
     """POST /v1/chat/completions against a canned upstream; returns the response."""
     async def fake_provider(_model, provider_model_id=None):
+        if on_provider is not None:
+            outcome = on_provider()
+            if inspect.isawaitable(outcome):
+                await outcome
         return {
             "model_id": "mock-model",
             "api_key": "mock-key",
@@ -6451,6 +6456,76 @@ def _w205_unexplained_total(result: dict) -> int:
     return sum(_w205_bucket_count(result, "unexplained", name) for name in _W205_UNEXPLAINED)
 
 
+def _w205_scope(*, known: bool, ledger_project_id=None, mode: str,
+                 context_project_id=None, event_code=None) -> dict:
+    return {
+        "scope_known": known,
+        "ledger_project_id": ledger_project_id,
+        "context_mode": mode,
+        "context_project_id": context_project_id,
+        "event_code": event_code,
+    }
+
+
+async def _w205_scope_chat(
+    client: httpx.AsyncClient,
+    *,
+    session_id: str,
+    payload: dict,
+    expected_known: bool,
+    expected_project_id,
+    must_contain=(),
+    must_not_contain=(),
+    event_code=None,
+    stream: bool = False,
+    on_provider=None,
+) -> tuple[str, str]:
+    """Run one real chat path and return its captured upstream request and stdout."""
+    sent = []
+    output = io.StringIO()
+    body = {
+        "model": "mock-model",
+        "stream": stream,
+        "conversation_id": session_id,
+        "turn_key": f"{session_id}-turn",
+        "messages": [{"role": "user", "content": "W205SENT scope probe"}],
+        **payload,
+    }
+    kwargs = {
+        "captured": sent,
+        "on_provider": on_provider,
+    }
+    if stream:
+        kwargs["sse_events"] = [_DELTA, _USAGE_TAIL, "data: [DONE]\n\n"]
+    else:
+        kwargs["json_body"] = {
+            "choices": [{"message": {"content": "w205 response"}}],
+            "model": "mock-model",
+        }
+    with patch.object(database, "get_embedding", _none_embedding), redirect_stdout(output):
+        response = await _chat(client, body, **kwargs)
+        require(response.status_code == 200,
+                f"scope chat failed: {session_id} -> {response.status_code} {response.text[:200]}")
+        rows = await _await_ledger(session_id, 2)
+        await _settle_background()
+    require(len(rows) == 2 and all(
+        row["scope_known"] is expected_known
+        and row["project_id"] == expected_project_id
+        for row in rows
+    ), f"endpoint wrote wrong scope for {session_id}: "
+       f"{[(r['scope_known'], r['project_id']) for r in rows]}")
+    require(bool(sent), f"scope chat never reached the captured upstream: {session_id}")
+    joined = json.dumps(sent[-1], ensure_ascii=False)
+    for marker in must_contain:
+        require(marker in joined, f"scope chat hid required marker {marker}: {session_id}")
+    for marker in must_not_contain:
+        require(marker not in joined, f"scope chat leaked forbidden marker {marker}: {session_id}")
+    if event_code is not None:
+        require(f"event={event_code}" in output.getvalue(),
+                f"scope chat lost event={event_code}: {session_id}")
+    return joined, output.getvalue()
+
+
 async def test_w2_05_scope_contract(client: httpx.AsyncClient) -> None:
     begin("T-W2-05-01")
     await _truncate("conversations", "chat_conversations", "chat_projects")
@@ -6520,33 +6595,427 @@ async def test_w2_05_scope_contract(client: httpx.AsyncClient) -> None:
     passed("T-W2-05-01 the eight-row five-field scope authority contract holds against PostgreSQL")
 
     begin("T-W2-05-02")
-    await _truncate("conversations", "chat_conversations", "chat_projects")
-    await _pool_execute("INSERT INTO chat_projects (id, name) VALUES ('w205-e2e-project', 'p')")
-    await _upsert_config("memory_enabled", "false")
-    await _set_ledger_gate(True)
-
-    valid_cases = (
-        ("w205-e2e-absent", {}, True, None),
-        ("w205-e2e-null", {"project_id": None}, True, None),
-        ("w205-e2e-missing", {"project_id": "w205-no-such-project"}, False, None),
-        ("w205-e2e-project", {"project_id": "w205-e2e-project"}, True, "w205-e2e-project"),
+    await _truncate(
+        "conversations", "memories", "chat_messages", "chat_conversations",
+        "chat_projects", "project_file_chunks", "compression_summaries",
     )
-    for sid, extra, expected_known, expected_pid in valid_cases:
-        body = {
-            "model": "mock-model", "stream": False, "conversation_id": sid,
-            "turn_key": f"{sid}-turn",
-            "messages": [{"role": "user", "content": "w205 body"}],
-            **extra,
-        }
-        response = await _chat(client, body)
-        require(response.status_code == 200,
-                f"valid project scope case failed: {sid} -> {response.status_code}")
-        rows = await _await_ledger(sid, 2)
-        require(len(rows) == 2 and all(
-            row["scope_known"] is expected_known and row["project_id"] == expected_pid
-            for row in rows
-        ), f"endpoint wrote wrong scope for {sid}: {[(r['scope_known'], r['project_id']) for r in rows]}")
+    w205_config_keys = (
+        "memory_enabled", "max_inject", "extract_interval",
+        "calendar_inject_enabled", "scene_inject_enabled", "handoff_enabled",
+        "tool_drawer_enabled", "memory_event_ledger_write_enabled",
+    )
+    w205_config_before = {
+        key: await _config_row(key)
+        for key in w205_config_keys
+    }
+    w205_counter_before = app_module._conversation_counter
+    await _upsert_config("memory_enabled", "true")
+    await _upsert_config("max_inject", "15")
+    await _upsert_config("extract_interval", "999999")
+    await _upsert_config("calendar_inject_enabled", "false")
+    await _upsert_config("scene_inject_enabled", "false")
+    await _upsert_config("handoff_enabled", "false")
+    await _upsert_config("tool_drawer_enabled", "false")
+    await _set_ledger_gate(True)
+    app_module._conversation_counter = 0
 
+    project_a = "w205-project-a"
+    project_b = "w205-project-b"
+    orphan_project = "w205-project-orphan"
+    unknown_project = "w205-project-x"
+    await _pool_execute(
+        "INSERT INTO chat_projects (id, name, instructions) VALUES "
+        "($1, 'A', 'W205SENT_INS_A'), ($2, 'B', 'W205SENT_INS_B'), "
+        "($3, 'orphan', 'W205SENT_INS_ORPHAN')",
+        project_a, project_b, orphan_project,
+    )
+    for content, pid in (
+        ("W205SENT_MEM_G", None),
+        ("W205SENT_MEM_A", project_a),
+        ("W205SENT_MEM_B", project_b),
+        ("W205SENT_MEM_ORPHAN", orphan_project),
+        ("W205SENT_MEM_X", unknown_project),
+    ):
+        await _seed_memory(content, locked=True, project_id=pid)
+
+    conversation_rows = (
+        ("w205-conv-global", "W205SENT_CONV_G", None),
+        ("w205-conv-a", "W205SENT_CONV_A", project_a),
+        ("w205-conv-b", "W205SENT_CONV_B", project_b),
+        ("w205-conv-orphan", "W205SENT_CONV_ORPHAN", orphan_project),
+        ("w205-conv-x", "W205SENT_CONV_X", unknown_project),
+    )
+    for sid, title, pid in conversation_rows:
+        await _pool_execute(
+            "INSERT INTO chat_conversations (id, title, project_id) VALUES ($1, $2, $3)",
+            sid, title, pid,
+        )
+    for index in range(4):
+        await _pool_execute(
+            "INSERT INTO chat_messages "
+            "(id, conversation_id, role, content, sort_order) VALUES ($1,$2,$3,$4,$5)",
+            f"w205-orphan-message-{index}", "w205-conv-orphan",
+            "user" if index % 2 == 0 else "assistant",
+            f"W205SENT_HANDOFF_ORPHAN_{index}", index,
+        )
+    for pid, suffix in ((orphan_project, "ORPHAN"), (unknown_project, "X")):
+        await _pool_execute(
+            "INSERT INTO project_file_chunks "
+            "(project_id, file_id, file_name, chunk_index, content) "
+            "VALUES ($1,$2,$3,0,$4)",
+            pid, f"w205-file-{suffix.lower()}", f"{suffix}.txt", f"W205SENT_FILE_{suffix}",
+        )
+    await _pool_execute("DELETE FROM chat_projects WHERE id = $1", orphan_project)
+
+    private_markers = (
+        "W205SENT_INS_A", "W205SENT_INS_B", "W205SENT_INS_ORPHAN",
+        "W205SENT_MEM_A", "W205SENT_MEM_B",
+        "W205SENT_MEM_ORPHAN", "W205SENT_MEM_X", "W205SENT_CONV_ORPHAN",
+        "W205SENT_CONV_X", "W205SENT_FILE_ORPHAN", "W205SENT_FILE_X",
+    )
+
+    # Arms 1/2: absent and explicit-null requests are known global and see only G.
+    for label, payload in (("absent", {}), ("null", {"project_id": None})):
+        await _w205_scope_chat(
+            client,
+            session_id=f"w205-e2e-{label}",
+            payload=payload,
+            expected_known=True,
+            expected_project_id=None,
+            must_contain=("W205SENT_MEM_G",),
+            must_not_contain=private_markers,
+        )
+
+    # Metadata-bearing cases are duplicated so buffered and streaming finalizers both
+    # prove that the same immutable scope reaches the prompt and ledger.
+    for mode_name, stream in (("buffered", False), ("stream", True)):
+        conflict_sid = f"w205-e2e-conflict-{mode_name}"
+        global_sid = f"w205-e2e-global-{mode_name}"
+        orphan_sid = f"w205-e2e-orphan-{mode_name}"
+        for sid, pid in (
+            (conflict_sid, project_a),
+            (global_sid, None),
+            (orphan_sid, orphan_project),
+        ):
+            await _pool_execute(
+                "INSERT INTO chat_conversations (id, title, project_id) VALUES ($1, 'scope', $2)",
+                sid, pid,
+            )
+
+        # Arm 3: metadata A wins over payload B for prompt and ledger.
+        await _w205_scope_chat(
+            client,
+            session_id=conflict_sid,
+            payload={"project_id": project_b},
+            expected_known=True,
+            expected_project_id=project_a,
+            must_contain=("W205SENT_INS_A", "W205SENT_MEM_G", "W205SENT_MEM_A"),
+            must_not_contain=("W205SENT_INS_B", "W205SENT_MEM_B"),
+            event_code="scope_mismatch",
+            stream=stream,
+        )
+
+        # Arm 4: global metadata rejects a payload project as read authority.
+        await _w205_scope_chat(
+            client,
+            session_id=global_sid,
+            payload={"project_id": project_b},
+            expected_known=True,
+            expected_project_id=None,
+            must_contain=("W205SENT_MEM_G",),
+            must_not_contain=(
+                "W205SENT_INS_A", "W205SENT_INS_B", "W205SENT_MEM_A",
+                "W205SENT_MEM_B", "W205SENT_MEM_ORPHAN", "W205SENT_MEM_X",
+            ),
+            event_code="scope_mismatch",
+            stream=stream,
+        )
+
+        # Arm 5: missing metadata may trust a verified live payload project.
+        await _w205_scope_chat(
+            client,
+            session_id=f"w205-e2e-trusted-{mode_name}",
+            payload={"project_id": project_a},
+            expected_known=True,
+            expected_project_id=project_a,
+            must_contain=("W205SENT_INS_A", "W205SENT_MEM_G", "W205SENT_MEM_A"),
+            must_not_contain=("W205SENT_INS_B", "W205SENT_MEM_B"),
+            event_code="scope_payload_trusted",
+            stream=stream,
+        )
+
+    # Arms 6/7: quarantine must block every project read boundary even when orphaned
+    # SQL rows remain. Keep handoff enabled so its zero-call proof is meaningful.
+    await _upsert_config("handoff_enabled", "true")
+    quarantine_calls = {"project": [], "file": [], "handoff": []}
+    original_project = database.get_project_by_id
+    original_file = database.search_file_chunks
+    original_handoff = database.get_handoff_source
+
+    async def recording_project(*args, **kwargs):
+        quarantine_calls["project"].append((args, kwargs))
+        return await original_project(*args, **kwargs)
+
+    async def recording_file(*args, **kwargs):
+        quarantine_calls["file"].append((args, kwargs))
+        return await original_file(*args, **kwargs)
+
+    async def recording_handoff(*args, **kwargs):
+        quarantine_calls["handoff"].append((args, kwargs))
+        return await original_handoff(*args, **kwargs)
+
+    with (
+        patch.object(database, "get_project_by_id", recording_project),
+        patch.object(database, "search_file_chunks", recording_file),
+        patch.object(database, "get_handoff_source", recording_handoff),
+    ):
+        for mode_name, stream in (("buffered", False), ("stream", True)):
+            # Arm 6: a never-existing payload project keeps no ledger attribution.
+            await _w205_scope_chat(
+                client,
+                session_id=f"w205-e2e-unknown-{mode_name}",
+                payload={"project_id": unknown_project},
+                expected_known=False,
+                expected_project_id=None,
+                must_contain=("W205SENT_MEM_G",),
+                must_not_contain=(
+                    "W205SENT_MEM_X", "W205SENT_CONV_X", "W205SENT_FILE_X",
+                    "W205SENT_MEM_ORPHAN", "W205SENT_CONV_ORPHAN",
+                    "W205SENT_FILE_ORPHAN",
+                ),
+                event_code="scope_unverified",
+                stream=stream,
+            )
+
+            # Arm 7: deleted metadata retains historical attribution but reads G only.
+            await _w205_scope_chat(
+                client,
+                session_id=f"w205-e2e-orphan-{mode_name}",
+                payload={},
+                expected_known=True,
+                expected_project_id=orphan_project,
+                must_contain=("W205SENT_MEM_G",),
+                must_not_contain=(
+                    "W205SENT_MEM_ORPHAN", "W205SENT_CONV_ORPHAN",
+                    "W205SENT_FILE_ORPHAN", "W205SENT_INS_ORPHAN",
+                ),
+                event_code="scope_project_missing",
+                stream=stream,
+            )
+    require(all(not calls for calls in quarantine_calls.values()),
+            f"quarantine reached a project read boundary: {quarantine_calls!r}")
+    await _upsert_config("handoff_enabled", "false")
+
+    global_scope = _w205_scope(known=True, mode="global")
+    live_a = _w205_scope(
+        known=True, ledger_project_id=project_a, mode="live_project",
+        context_project_id=project_a,
+    )
+    quarantine = _w205_scope(
+        known=False, mode="quarantined_project", event_code="scope_unverified",
+    )
+    orphan_quarantine = _w205_scope(
+        known=True, ledger_project_id=orphan_project,
+        mode="quarantined_project", event_code="scope_project_missing",
+    )
+
+    # Arm 8: execute the real conversation search, not merely the hidden tool-map field.
+    import tool_drawer as drawer
+    for fn_name in ("route_tools", "build_tools_for_category", "build_full_fallback_tools",
+                    "handle_meta_tool", "execute_drawer_tool"):
+        fn = getattr(drawer, fn_name, None)
+        require(callable(fn) and "scope" in inspect.signature(fn).parameters,
+                f"{fn_name} does not accept the frozen request scope")
+    if not drawer.CATEGORIES:
+        drawer._auto_discover_mcp_tools()
+    _, global_conversation_map = drawer.build_tools_for_category(
+        "conversation", scope=global_scope)
+    _, live_conversation_map = drawer.build_tools_for_category(
+        "conversation", scope=live_a)
+    require("_gateway_search_conversations" in global_conversation_map
+            and "_gateway_search_conversations" in live_conversation_map,
+            "drawer did not build the conversation search route for live scopes")
+    global_result, _ = await app_module._execute_gateway_tool(
+        "_gateway_search_conversations", {"query": "W205SENT_CONV", "limit": 20},
+        global_conversation_map["_gateway_search_conversations"],
+    )
+    live_result, _ = await app_module._execute_gateway_tool(
+        "_gateway_search_conversations", {"query": "W205SENT_CONV", "limit": 20},
+        live_conversation_map["_gateway_search_conversations"],
+    )
+    require("W205SENT_CONV_G" in global_result
+            and all(marker not in global_result for marker in (
+                "W205SENT_CONV_A", "W205SENT_CONV_B", "W205SENT_CONV_ORPHAN",
+                "W205SENT_CONV_X",
+            )), "global conversation search escaped its NULL-only scope")
+    require("W205SENT_CONV_A" in live_result and "W205SENT_CONV_G" not in live_result,
+            "live-project conversation search crossed into the global layer")
+    require(drawer._conversation_scope_value(orphan_quarantine) is None,
+            "quarantine mapped its historical ledger project into conversation search")
+
+    traditional_maps = []
+
+    async def capture_traditional_tools(*args, **kwargs):
+        traditional_maps.append(kwargs.get("tool_map", {}))
+        yield "data: [DONE]\n\n"
+
+    with (
+        patch.object(app_module, "_stream_with_tools", capture_traditional_tools),
+        patch.object(database, "get_embedding", _none_embedding),
+    ):
+        response = await _chat(client, {
+            "model": "mock-model", "stream": True,
+            "conversation_id": "w205-traditional-global-map",
+            "messages": [{"role": "user", "content": "W205SENT scope probe"}],
+        })
+    require(response.status_code == 200 and len(traditional_maps) == 1,
+            "traditional global tool route did not reach the captured tool loop")
+    traditional_info = traditional_maps[0].get("_gateway_search_conversations", {})
+    require(traditional_info.get("project_id") == "none"
+            and traditional_info.get("scope", {}).get("context_mode") == "global",
+            "traditional global conversation tool lost the NULL-only sentinel")
+
+    # Arm 9: scope closes the initial route, category builder, full fallback,
+    # previous-expanded session state, meta expansion, and executor.
+    def exposed_categories(schemas):
+        names = {item.get("function", {}).get("name") for item in schemas}
+        return {drawer._tool_to_category.get(name) for name in names}
+
+    initial_sid = "w205-drawer-quarantine-initial"
+    drawer._sessions.pop(initial_sid, None)
+    initial_schemas, _ = await drawer.route_tools(
+        "请记住之前聊过的内容", initial_sid, mem_enabled=True,
+        search_enabled=False, scope=quarantine, mcp_mode="off",
+        reminder_tools_enabled=False,
+    )
+    require(not ({"memory", "conversation"} & exposed_categories(initial_schemas)),
+            "quarantine initial drawer route exposed memory/conversation")
+    for category in ("memory", "conversation"):
+        schemas, mapping = drawer.build_tools_for_category(category, scope=quarantine)
+        require(not schemas and not mapping,
+                f"quarantine category builder expanded {category}")
+
+    schemas, tool_map = drawer.build_full_fallback_tools(
+        search_enabled=False,
+        mem_enabled=True,
+        reminder_tools_enabled=False,
+        mcp_mode="off",
+        scope=quarantine,
+    )
+    require(not ({"memory", "conversation"} & exposed_categories(schemas))
+            and "_gateway_search_conversations" not in tool_map,
+            "quarantine full fallback exposed memory/conversation tools")
+
+    previous_sid = "w205-drawer-previous-expanded"
+    drawer._sessions.pop(previous_sid, None)
+    await drawer.route_tools(
+        "请记住我们之前聊过的内容", previous_sid, mem_enabled=True,
+        search_enabled=False, scope=live_a, mcp_mode="off",
+        reminder_tools_enabled=False,
+    )
+    require({"memory", "conversation"} <= set(drawer._sessions[previous_sid]["expanded"]),
+            "live drawer fixture failed to expand memory/conversation")
+    after_schemas, _ = await drawer.route_tools(
+        "请记住我们之前聊过的内容", previous_sid, mem_enabled=True,
+        search_enabled=False, scope=quarantine, mcp_mode="off",
+        reminder_tools_enabled=False,
+    )
+    require(not ({"memory", "conversation"} & exposed_categories(after_schemas))
+            and not ({"memory", "conversation"}
+                     & set(drawer._sessions[previous_sid]["expanded"])),
+            "quarantine revived a previous expanded drawer category")
+
+    meta_sid = "w205-drawer-meta-quarantine"
+    drawer._sessions.pop(meta_sid, None)
+    for category in ("memory", "conversation"):
+        await drawer.handle_meta_tool(
+            "_drawer_request_tools", {"category": category}, meta_sid,
+            mcp_mode="off", scope=quarantine,
+        )
+    require(not ({"memory", "conversation"}
+                 & set(drawer._sessions[meta_sid]["expanded"])),
+            "quarantine meta-tool expanded a forbidden category")
+    for tool_name in ("search_memory", "get_recent", "_gateway_search_conversations"):
+        result, _ = await drawer.execute_drawer_tool(
+            tool_name, {"query": "must-not-touch"}, scope=quarantine)
+        require("scope_quarantined" in str(result),
+                f"quarantine executor did not reject {tool_name} with the fixed code")
+
+    # Arm 10: extraction consumes the same three-state scope and never writes on skip.
+    extract_calls = []
+    process_memories = getattr(app_module, "process_memories_background", None)
+    require(callable(process_memories)
+            and "scope" in inspect.signature(process_memories).parameters,
+            "process_memories_background does not accept the frozen request scope")
+
+    async def recording_extract(*args, **kwargs):
+        extract_calls.append((args, kwargs))
+        return []
+
+    before_memories = await _pool_fetchval("SELECT COUNT(*) FROM memories")
+    quarantine_log = io.StringIO()
+    with (
+        patch.object(app_module, "extract_memories", recording_extract),
+        patch.object(database, "get_embedding", _none_embedding),
+        redirect_stdout(quarantine_log),
+    ):
+        quarantine_result = await app_module.process_memories_background(
+            "w205-extract-quarantine", "请记住 W205SENT", "ok", "mock-model",
+            scope=quarantine, extract_enabled=True, turn_key="w205-extract-quarantine-turn",
+            client_gave_conv_id=True, project_id_present=True,
+            payload_project_id=unknown_project,
+        )
+        live_result_extract = await app_module.process_memories_background(
+            "w205-extract-live", "请记住 W205SENT", "ok", "mock-model",
+            scope=live_a, extract_enabled=True, turn_key="w205-extract-live-turn",
+            client_gave_conv_id=True, project_id_present=True,
+            payload_project_id=project_a,
+        )
+        global_result_extract = await app_module.process_memories_background(
+            "w205-extract-global", "请记住 W205SENT", "ok", "mock-model",
+            scope=global_scope, extract_enabled=True, turn_key="w205-extract-global-turn",
+            client_gave_conv_id=True, project_id_present=False, payload_project_id=None,
+        )
+    require(quarantine_result == {"action": "skip_unverified"}
+            and "reason=scope_unverified" in quarantine_log.getvalue(),
+            f"quarantine extraction did not emit the frozen skip: {quarantine_result!r}")
+    require(live_result_extract.get("action") == "skip_project",
+            f"live project extraction did not skip: {live_result_extract!r}")
+    require(len(extract_calls) == 1 and global_result_extract.get("action") == "extract",
+            f"global extraction did not reach the extractor exactly once: "
+            f"{len(extract_calls)} / {global_result_extract!r}")
+    require(await _pool_fetchval("SELECT COUNT(*) FROM memories") == before_memories,
+            "quarantine/live extraction skip inserted a memory")
+
+    # Arm 11: metadata changing during provider resolution cannot rewrite this request.
+    for mode_name, stream in (("buffered", False), ("stream", True)):
+        sid = f"w205-e2e-provider-race-{mode_name}"
+        await _pool_execute(
+            "INSERT INTO chat_conversations (id, title, project_id) VALUES ($1, 'race', $2)",
+            sid, project_a,
+        )
+
+        async def move_metadata(sid=sid):
+            await _pool_execute(
+                "UPDATE chat_conversations SET project_id = $1 WHERE id = $2",
+                project_b, sid,
+            )
+
+        await _w205_scope_chat(
+            client,
+            session_id=sid,
+            payload={},
+            expected_known=True,
+            expected_project_id=project_a,
+            must_contain=("W205SENT_INS_A", "W205SENT_MEM_A"),
+            must_not_contain=("W205SENT_INS_B", "W205SENT_MEM_B"),
+            stream=stream,
+            on_provider=move_metadata,
+        )
+
+    # Arm 12: entry-shape rejection happens before a request scope exists.
+    snapshot_fn = getattr(app_module, "resolve_scope_snapshot", None)
+    require(callable(snapshot_fn), "request-level scope snapshot resolver is missing")
     invalid_cases = (("", "empty"), ("   ", "blank"), (True, "bool"),
                      (0, "zero"), (5, "number"), ([], "list"), ("p" * 257, "too long"))
     for index, (bad, label) in enumerate(invalid_cases):
@@ -6557,7 +7026,11 @@ async def test_w2_05_scope_contract(client: httpx.AsyncClient) -> None:
             return None
 
         before = await _pool_fetchval("SELECT COUNT(*) FROM conversations")
-        with patch.object(app_module, "resolve_provider_for_model", counted_provider):
+        with (
+            patch.object(app_module, "resolve_provider_for_model", counted_provider),
+            patch.object(app_module, "resolve_scope_snapshot",
+                         wraps=snapshot_fn) as scope_spy,
+        ):
             response = await client.post("/v1/chat/completions", json={
                 "model": "mock-model", "stream": False,
                 "conversation_id": f"w205-e2e-invalid-{index}", "project_id": bad,
@@ -6568,68 +7041,15 @@ async def test_w2_05_scope_contract(client: httpx.AsyncClient) -> None:
                 f"invalid project_id ({label}) must be 400, got {response.status_code}")
         require(response.json() == {"error": "invalid_project_id", "code": "invalid_project_id"},
                 f"invalid project_id ({label}) leaked a non-machine response: {response.text!r}")
-        require(before == after and not calls,
-                f"invalid project_id ({label}) wrote the ledger or reached provider routing")
+        require(before == after and not calls and scope_spy.await_count == 0,
+                f"invalid project_id ({label}) wrote the ledger, made a scope, or reached routing")
 
-    # v1.3.1: one request snapshot must reach every drawer construction path.  These
-    # guards use conditional invocation so the tests-only commit fails as an assertion,
-    # never as an ImportError/TypeError crash on the old implementation.
-    snapshot_fn = getattr(database, "resolve_scope_snapshot", None)
-    require(callable(snapshot_fn), "request-level scope snapshot resolver is missing")
-    import tool_drawer as drawer
-    quarantine = {
-        "scope_known": False,
-        "ledger_project_id": None,
-        "context_mode": "quarantined_project",
-        "context_project_id": None,
-        "event_code": "scope_unverified",
-    }
-    global_scope = {
-        "scope_known": True,
-        "ledger_project_id": None,
-        "context_mode": "global",
-        "context_project_id": None,
-        "event_code": None,
-    }
-    for fn_name in ("route_tools", "build_tools_for_category", "build_full_fallback_tools",
-                    "handle_meta_tool", "execute_drawer_tool"):
-        fn = getattr(drawer, fn_name, None)
-        require(callable(fn) and "scope" in inspect.signature(fn).parameters,
-                f"{fn_name} does not accept the frozen request scope")
-
-    if "scope" in inspect.signature(drawer.build_full_fallback_tools).parameters:
-        schemas, tool_map = drawer.build_full_fallback_tools(
-            search_enabled=False,
-            mem_enabled=True,
-            reminder_tools_enabled=False,
-            mcp_mode="off",
-            scope=quarantine,
-        )
-        exposed = {item.get("function", {}).get("name") for item in schemas}
-        require(not any(drawer._tool_to_category.get(name) in {"memory", "conversation"}
-                        for name in exposed),
-                "quarantine full fallback exposed memory/conversation tools")
-        require("_gateway_search_conversations" not in tool_map,
-                "quarantine full fallback registered conversation search")
-
-        _, global_map = drawer.build_full_fallback_tools(
-            search_enabled=False,
-            mem_enabled=True,
-            reminder_tools_enabled=False,
-            mcp_mode="off",
-            scope=global_scope,
-        )
-        if "_gateway_search_conversations" in global_map:
-            require(global_map["_gateway_search_conversations"].get("project_id") == "none",
-                    "global conversation search did not use the global-only sentinel")
-
-    if "scope" in inspect.signature(drawer.execute_drawer_tool).parameters:
-        for tool_name in ("search_memory", "get_recent",
-                          "_gateway_search_conversations"):
-            result, _ = await drawer.execute_drawer_tool(
-                tool_name, {"query": "must-not-touch"}, scope=quarantine)
-            require("scope_quarantined" in str(result),
-                    f"quarantine executor did not reject {tool_name} with the fixed code")
+    for key, previous_value in w205_config_before.items():
+        if previous_value is None:
+            await _pool_execute("DELETE FROM gateway_config WHERE key = $1", key)
+        else:
+            await _upsert_config(key, str(previous_value))
+    app_module._conversation_counter = w205_counter_before
     passed("T-W2-05-02 request scope is validated once and quarantine closes every drawer path")
 
 
@@ -7180,17 +7600,88 @@ async def test_w2_05_scale_snapshot_and_privacy() -> None:
     main_source = (ROOT / "main.py").read_text(encoding="utf-8")
     require("reconcile_event_ledger" not in main_source,
             "W2-05 accidentally exposed reconciliation through the unauthenticated HTTP app")
+    main_tree = ast.parse(main_source)
+    handlers = []
+    for node in main_tree.body:
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        assigns_ledger = any(
+            isinstance(child, (ast.Assign, ast.AnnAssign))
+            and any(
+                isinstance(target, ast.Name) and target.id == "ledger_ctx"
+                for target in (
+                    child.targets if isinstance(child, ast.Assign) else [child.target]
+                )
+            )
+            for child in ast.walk(node)
+        )
+        if assigns_ledger:
+            handlers.append(node)
+    require(len(handlers) == 1,
+            f"expected one chat handler with ledger_ctx, found {[n.name for n in handlers]}")
+    handler = handlers[0]
+    snapshot_statements = [
+        statement
+        for statement in handler.body
+        if any(
+            isinstance(child, ast.Call)
+            and isinstance(child.func, ast.Name)
+            and child.func.id == "resolve_scope_snapshot"
+            for child in ast.walk(statement)
+        )
+    ]
+    require(len(snapshot_statements) == 1,
+            f"chat handler must create exactly one request scope: {len(snapshot_statements)}")
+    # The call is formatted across several physical lines. Retire raw payload names only
+    # after the complete statement, not halfway through its own argument list.
+    snapshot_end = snapshot_statements[0].end_lineno
+    forbidden_names = []
+    forbidden_body_reads = []
+    for node in ast.walk(handler):
+        if getattr(node, "lineno", 0) <= snapshot_end:
+            continue
+        if isinstance(node, ast.Name) and node.id in {"raw_project_id", "project_id_present"}:
+            forbidden_names.append((node.id, node.lineno))
+        if (isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and isinstance(node.func.value, ast.Name)
+                and node.func.value.id == "body"
+                and node.func.attr in {"get", "pop"}
+                and node.args
+                and isinstance(node.args[0], ast.Constant)
+                and node.args[0].value == "project_id"):
+            forbidden_body_reads.append((node.func.attr, node.lineno))
+    require(not forbidden_names and not forbidden_body_reads,
+            f"chat handler rereads raw project scope after snapshot: "
+            f"names={forbidden_names!r}, body={forbidden_body_reads!r}")
+
+    prompt_calls = [
+        node for node in ast.walk(main_tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "build_system_prompt_with_memories"
+    ]
+    require(prompt_calls and all(
+        any(keyword.arg == "scope" for keyword in call.keywords)
+        for call in prompt_calls
+    ), "a build_system_prompt_with_memories call bypasses the frozen scope")
+
     drawer_source = (ROOT / "tool_drawer.py").read_text(encoding="utf-8")
     drawer_tree = ast.parse(drawer_source)
+    frozen_drawer_functions = {
+        "route_tools", "build_tools_for_category", "build_full_fallback_tools",
+        "handle_meta_tool", "execute_drawer_tool",
+    }
     drawer_signatures = {
-        node.name: {arg.arg for arg in node.args.args + node.args.kwonlyargs}
+        node.name: {
+            arg.arg for arg in node.args.posonlyargs + node.args.args + node.args.kwonlyargs
+        }
         for node in drawer_tree.body
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-        and node.name in {"route_tools", "build_tools_for_category", "build_full_fallback_tools"}
+        and node.name in frozen_drawer_functions
     }
-    require(set(drawer_signatures) == {
-        "route_tools", "build_tools_for_category", "build_full_fallback_tools"
-    } and all("scope" in args for args in drawer_signatures.values()),
+    require(set(drawer_signatures) == frozen_drawer_functions
+            and all("scope" in args for args in drawer_signatures.values()),
             f"drawer builders are missing the frozen scope parameter: {drawer_signatures!r}")
     passed("T-W2-05-10 old readers are byte-frozen and no-backfill/read-only docs are explicit")
 
