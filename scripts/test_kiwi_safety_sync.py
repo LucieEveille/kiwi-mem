@@ -6888,7 +6888,9 @@ async def test_w2_05_reconcile_evidence(client: httpx.AsyncClient) -> None:
     await _truncate("conversations", "turn_tombstones", "message_tombstones", "session_source_rev")
     await _w205_insert_event(1301, "w205-split", "user", turn_id=1301, scope_known=True)
     await _w205_insert_event(1302, "w205-split", "assistant", turn_id=1301, scope_known=False)
-    await only_unexplained("scope_split", 1302)
+    # Conflict-group buckets sample the group's minimum ledger id (§4.2), not
+    # whichever member happened to differ from the first inserted row.
+    await only_unexplained("scope_split", 1301)
 
     await _truncate("conversations", "turn_tombstones", "message_tombstones", "session_source_rev")
     await _w205_insert_event(1401, "w205-dup-user", "user", turn_id=1401)
