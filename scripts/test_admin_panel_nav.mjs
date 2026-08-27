@@ -157,9 +157,14 @@ const searchContainer = {
     if (selector === '#gs-drop') return searchDrop;
     return null;
   },
-  contains() { return true; },
+  contains(target) {
+    return target === searchContainer || target === searchInput || target === searchDrop;
+  },
 };
-globalThis.document = { addEventListener() {} };
+const documentListeners = new Map();
+globalThis.document = {
+  addEventListener(type, listener) { documentListeners.set(type, listener); },
+};
 globalThis.__KIWI_NAV_TEST__ = nav;
 const runnableSearchSource = searchSource
   .replace(
@@ -189,6 +194,27 @@ check(
   'T-P-DOM-05b open search refreshes with visibility',
   wasVisible && vanishedWhileOpen && returnedWhileOpen,
   `before=${wasVisible} hidden=${vanishedWhileOpen} shown=${returnedWhileOpen}`,
+);
+
+documentListeners.get('mousedown')({ target: {} });
+const dismissedBeforeRefresh = searchDrop.hidden;
+await emptyController.refresh();
+const stayedDismissedAfterEmpty = searchDrop.hidden;
+inputListeners.get('focus')();
+const emptyResultsStayedClosed = searchDrop.hidden;
+await nonEmptyController.refresh();
+const stayedDismissedAfterReturn = searchDrop.hidden;
+inputListeners.get('focus')();
+const refreshedResultsOpenOnFocus = !searchDrop.hidden
+  && searchDrop.innerHTML.includes('项目分隔');
+check(
+  'T-P-DOM-05c dismissed search stays closed across visibility refresh',
+  dismissedBeforeRefresh
+    && stayedDismissedAfterEmpty
+    && emptyResultsStayedClosed
+    && stayedDismissedAfterReturn
+    && refreshedResultsOpenOnFocus,
+  `dismissed=${dismissedBeforeRefresh} after_empty=${stayedDismissedAfterEmpty} empty_focus=${emptyResultsStayedClosed} after_return=${stayedDismissedAfterReturn} reopened=${refreshedResultsOpenOnFocus}`,
 );
 
 const routesSource = await fs.readFile(path.join(PANEL_JS, 'routes.js'), 'utf8');
@@ -244,4 +270,4 @@ if (failed.length) {
   console.error(`FAIL: ${failed.length} admin panel nav guards failed`);
   process.exit(1);
 }
-console.log('PASS: 9 admin panel nav behavior guards');
+console.log('PASS: 10 admin panel nav behavior guards');
