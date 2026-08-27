@@ -90,6 +90,11 @@ GATEWAY_CATEGORY_MAP = {
     "_gateway_delete_reminder": "reminder",
 }
 
+_QUARANTINED_TOOL_NAMES = {
+    "search_memory", "save_memory", "get_recent", "lock_memory", "unlock_memory",
+    "_gateway_search_conversations", "gateway_search_conversations",
+}
+
 # ============================================================
 # 3. Dynamic registries (populated at startup by init_drawer)
 # ============================================================
@@ -777,6 +782,25 @@ def _limit_external_matches(external_candidates, keyword_hits, scores, max_open)
     return kept
 
 
+def _scope_mode(scope):
+    return (scope or {}).get("context_mode", "global")
+
+
+def _conversation_scope_value(scope, legacy_project_id=None):
+    if scope is None:
+        return legacy_project_id
+    mode = _scope_mode(scope)
+    if mode == "global":
+        return "none"
+    if mode == "live_project":
+        return (scope or {}).get("context_project_id")
+    return None
+
+
+def _scope_disabled_categories(scope):
+    return {"memory", "conversation"} if _scope_mode(scope) == "quarantined_project" else set()
+
+
 async def route_tools(
     user_message,
     session_id,
@@ -784,6 +808,7 @@ async def route_tools(
     mem_enabled=True,
     search_enabled=False,
     project_id=None,
+    scope=None,
     mcp_mode="auto",
     reminder_tools_enabled=True,
 ):
@@ -879,11 +904,17 @@ async def route_tools(
         matched_categories.discard("reminder")
         _remove_expanded(session, {"reminder"})
 
+    scope_disabled = _scope_disabled_categories(scope)
+    if scope_disabled:
+        matched_categories -= scope_disabled
+        _remove_expanded(session, scope_disabled)
+
     disabled = _disabled_category_set(
         search_enabled=search_enabled,
         mem_enabled=mem_enabled,
         reminder_tools_enabled=reminder_tools_enabled,
     )
+    disabled.update(scope_disabled)
 
     _append_expanded_many(session, _sort_category_ids(matched_categories, category_order))
     active_categories = list(_get_expanded(session))
@@ -911,7 +942,8 @@ async def route_tools(
             if tool_name.startswith("_gateway_"):
                 route_info = {"type": "gateway_builtin", "handler": _infer_handler(tool_name)}
                 if tool_name == "_gateway_search_conversations":
-                    route_info["project_id"] = project_id
+                    route_info["project_id"] = _conversation_scope_value(scope, project_id)
+                    route_info["scope"] = scope
                 tool_map[tool_name] = route_info
             elif cat.get("external"):
                 ext_map = external_categories_snapshot.get(cat_id, {}).get("tool_map", {})
@@ -935,13 +967,15 @@ async def route_tools(
     return openai_tools, tool_map
 
 
-def build_tools_for_category(cat_id, project_id=None):
+def build_tools_for_category(cat_id, project_id=None, scope=None):
     """返回某个类别的 (schemas, tool_map_entries)。
 
     供工具循环里 _drawer_request_tools 展开抽屉后，把该类别的工具增量补进当轮工具表，
     实现「展开 → 同一次回复内下一步就能调用」。读 live 注册表（执行期取当前状态即可）。
     装配口径与 route_tools 末尾一致。
     """
+    if cat_id in _scope_disabled_categories(scope):
+        return [], {}
     cat = CATEGORIES.get(cat_id)
     if not cat:
         return [], {}
@@ -955,7 +989,8 @@ def build_tools_for_category(cat_id, project_id=None):
         if tool_name.startswith("_gateway_"):
             route_info = {"type": "gateway_builtin", "handler": _infer_handler(tool_name)}
             if tool_name == "_gateway_search_conversations":
-                route_info["project_id"] = project_id
+                route_info["project_id"] = _conversation_scope_value(scope, project_id)
+                route_info["scope"] = scope
             tmap[tool_name] = route_info
         elif cat.get("external"):
             ext_map = _external_categories.get(cat_id, {}).get("tool_map", {})
@@ -987,6 +1022,7 @@ def build_full_fallback_tools(
     mcp_mode="auto",
     pinned_external=None,
     project_id=None,
+    scope=None,
 ):
     """Build a route-failure tool set without bypassing request-level gates."""
     mode = _normalize_mcp_mode(mcp_mode)
@@ -996,6 +1032,7 @@ def build_full_fallback_tools(
         mem_enabled=mem_enabled,
         reminder_tools_enabled=reminder_tools_enabled,
     )
+    disabled.update(_scope_disabled_categories(scope))
 
     meta_tools_snapshot = list(META_TOOLS)
     tool_schemas_snapshot = dict(TOOL_SCHEMAS)
@@ -1032,7 +1069,8 @@ def build_full_fallback_tools(
         elif tool_name.startswith("_gateway_"):
             route_info = {"type": "gateway_builtin", "handler": _infer_handler(tool_name)}
             if tool_name == "_gateway_search_conversations":
-                route_info["project_id"] = project_id
+                route_info["project_id"] = _conversation_scope_value(scope, project_id)
+                route_info["scope"] = scope
             tool_map[tool_name] = route_info
         else:
             tool_map[tool_name] = {"type": "drawer", "handler": tool_name}
@@ -1050,9 +1088,11 @@ async def handle_meta_tool(
     mcp_mode=None,
     pinned_external=None,
     approved_categories=None,
+    scope=None,
 ):
     session = _get_session(session_id)
     disabled = set(disabled_categories or ())
+    disabled.update(_scope_disabled_categories(scope))
     mode = _normalize_mcp_mode(mcp_mode)
     pinned = set(pinned_external or ())
 
@@ -1114,8 +1154,13 @@ async def handle_meta_tool(
 # 12. Drawer Tool Execution
 # ============================================================
 
-async def execute_drawer_tool(tool_name, arguments):
+async def execute_drawer_tool(tool_name, arguments, scope=None):
     extra = {}
+    category = _tool_to_category.get(tool_name) or GATEWAY_CATEGORY_MAP.get(tool_name)
+    if (_scope_mode(scope) == "quarantined_project"
+            and (category in {"memory", "conversation"}
+                 or tool_name in _QUARANTINED_TOOL_NAMES)):
+        return '[tool_error] {"code":"scope_quarantined"}', extra
     try:
         import mcp_server
         func = getattr(mcp_server, tool_name, None)

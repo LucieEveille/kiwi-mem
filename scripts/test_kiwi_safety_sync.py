@@ -16,11 +16,13 @@ from __future__ import annotations
 
 import asyncio
 import ast
+import hashlib
 import inspect
 import io
 import json
 import os
 import re
+import subprocess
 import sys
 import uuid
 import zipfile
@@ -2672,7 +2674,8 @@ async def test_w2_03_scope_and_order() -> None:
     # row 3: metadata says global
     known, pid, _ = await scope_of("w203-c-null", client_gave_conv_id=True)
     require((known, pid) == (True, None), f"row 3: metadata NULL means global, got {(known, pid)}")
-    # row 4/5: only a server-generated session may trust the payload
+    # row 4/5: without metadata, a valid project or explicit null is still
+    # authoritative regardless of who supplied the conversation id.
     known, pid, _ = await scope_of("w203-gen-null", client_gave_conv_id=False,
                                    project_id_present=True, payload_project_id=None)
     require((known, pid) == (True, None), f"row 4: explicit null is trusted, got {(known, pid)}")
@@ -2680,19 +2683,43 @@ async def test_w2_03_scope_and_order() -> None:
                                        project_id_present=True, payload_project_id="w203-p-live")
     require((known, pid) == (True, "w203-p-live"), f"row 5: payload trusted, got {(known, pid)}")
     require("scope_payload_trusted" in codes, f"row 5 must emit scope_payload_trusted, got {codes}")
-    # row 6: client supplied a conversation_id but metadata is missing -> never trust payload
-    known, pid, codes = await scope_of("w203-c-missing", client_gave_conv_id=True,
+    known, pid, codes = await scope_of("w203-c-valid", client_gave_conv_id=True,
                                        project_id_present=True, payload_project_id="w203-p-live")
+    require((known, pid) == (True, "w203-p-live"),
+            f"row 4 client session: verified payload must be trusted, got {(known, pid)}",
+            tag="W2-05-SCOPE-LEGACY")
+    require("scope_payload_trusted" in codes,
+            f"row 4 client session must emit scope_payload_trusted, got {codes}",
+            tag="W2-05-SCOPE-LEGACY")
+    known, pid, _ = await scope_of("w203-c-null-payload", client_gave_conv_id=True,
+                                   project_id_present=True, payload_project_id=None)
+    require((known, pid) == (True, None),
+            f"row 5 client session: explicit null must be global, got {(known, pid)}",
+            tag="W2-05-SCOPE-LEGACY")
+    # row 6: absent project key defaults to known global.
+    known, pid, codes = await scope_of("w203-c-absent", client_gave_conv_id=True)
+    require((known, pid) == (True, None),
+            f"row 6: absent key must default to known global, got {(known, pid)}",
+            tag="W2-05-SCOPE-LEGACY")
+    require("scope_default_global" in codes,
+            f"row 6 must emit scope_default_global, got {codes}",
+            tag="W2-05-SCOPE-LEGACY")
+    # row 7: a syntactically valid but missing project stays unknown.
+    known, pid, codes = await scope_of("w203-c-missing", client_gave_conv_id=True,
+                                       project_id_present=True, payload_project_id="w203-p-gone")
     require((known, pid) == (False, None),
-            f"row 6: unverified session must stay FALSE+NULL regardless of payload, got {(known, pid)}")
-    require("scope_unverified" in codes, f"row 6 must emit scope_unverified, got {codes}")
-    # row 7: absent key on a generated session stays unknown
+            f"row 7: unverified project must stay FALSE+NULL, got {(known, pid)}")
+    require("scope_unverified" in codes, f"row 7 must emit scope_unverified, got {codes}")
+    # generated sessions follow the same absent-key default.
     known, pid, _ = await scope_of("w203-gen-absent", client_gave_conv_id=False)
-    require((known, pid) == (False, None), f"row 7: absent key stays unknown, got {(known, pid)}")
+    require((known, pid) == (True, None),
+            f"row 6 generated session: absent key must be global, got {(known, pid)}",
+            tag="W2-05-SCOPE-LEGACY")
+    # row 8 is an internal-only defensive fallback; the public entry rejects it.
     known, pid, codes = await scope_of("w203-gen-blank", client_gave_conv_id=False,
                                        project_id_present=True, payload_project_id="")
-    require((known, pid) == (False, None), f"row 7: blank payload stays unknown, got {(known, pid)}")
-    require("scope_unverified" in codes, f"row 7 blank must emit scope_unverified, got {codes}")
+    require((known, pid) == (False, None), f"row 8: blank payload stays unknown, got {(known, pid)}")
+    require("scope_unverified" in codes, f"row 8 must emit scope_unverified, got {codes}")
     passed("T-W2-03-12 the scope authority table holds row by row against a real database")
     begin("T-W2-03-17")
 
@@ -2971,9 +2998,14 @@ _USAGE_TAIL = _sse({"choices": [], "usage": {"prompt_tokens": 11, "completion_to
                                              "prompt_tokens_details": {"cached_tokens": 2}}})
 
 
-async def _chat(client, body, *, sse_events=None, json_body=None, status_code=200, captured=None):
+async def _chat(client, body, *, sse_events=None, json_body=None, status_code=200,
+                captured=None, on_provider=None):
     """POST /v1/chat/completions against a canned upstream; returns the response."""
     async def fake_provider(_model, provider_model_id=None):
+        if on_provider is not None:
+            outcome = on_provider()
+            if inspect.isawaitable(outcome):
+                await outcome
         return {
             "model_id": "mock-model",
             "api_key": "mock-key",
@@ -6383,6 +6415,1313 @@ async def _mn_extractor_case(*, key: str = "key", response: Any = None,
         _MNClient.calls = 0
 
 
+# ---------------------------------------------------------------------------
+# W2-05 | default-global scope and read-only ledger reconciliation
+# ---------------------------------------------------------------------------
+
+_W205_EXPLAINED = {
+    "unknown_scope_excluded",
+    "user_deleted_keeps_assistant_exact",
+    "deletion_anchor_unverifiable",
+    "assistant_without_usage",
+}
+_W205_UNEXPLAINED = {
+    "turn_orphan",
+    "turn_cross_session",
+    "order_break",
+    "scope_split",
+    "duplicate_user_in_turn",
+    "turn_key_conflict",
+    "session_tombstone_survivor",
+    "turn_tombstone_survivor",
+    "message_tombstone_survivor",
+    "user_anchor_invalid",
+    "assistant_anchor_non_user",
+    "role_invalid",
+    "turn_key_split",
+}
+
+
+def _w205_reconcile():
+    fn = getattr(database, "reconcile_event_ledger", None)
+    require(callable(fn), "T-W2-05 reconcile_event_ledger is missing")
+    return fn
+
+
+def _w205_bucket_count(result: dict, group: str, name: str) -> int:
+    return result[group][name]["count"]
+
+
+def _w205_unexplained_total(result: dict) -> int:
+    return sum(_w205_bucket_count(result, "unexplained", name) for name in _W205_UNEXPLAINED)
+
+
+def _w205_scope(*, known: bool, ledger_project_id=None, mode: str,
+                 context_project_id=None, event_code=None) -> dict:
+    return {
+        "scope_known": known,
+        "ledger_project_id": ledger_project_id,
+        "context_mode": mode,
+        "context_project_id": context_project_id,
+        "event_code": event_code,
+    }
+
+
+async def _w205_scope_chat(
+    client: httpx.AsyncClient,
+    *,
+    session_id: str,
+    payload: dict,
+    expected_known: bool,
+    expected_project_id,
+    must_contain=(),
+    must_not_contain=(),
+    event_code=None,
+    stream: bool = False,
+    on_provider=None,
+) -> tuple[str, str]:
+    """Run one real chat path and return its captured upstream request and stdout."""
+    sent = []
+    output = io.StringIO()
+    body = {
+        "model": "mock-model",
+        "stream": stream,
+        "conversation_id": session_id,
+        "turn_key": f"{session_id}-turn",
+        "messages": [{"role": "user", "content": "W205SENT scope probe"}],
+        **payload,
+    }
+    kwargs = {
+        "captured": sent,
+        "on_provider": on_provider,
+    }
+    if stream:
+        kwargs["sse_events"] = [_DELTA, _USAGE_TAIL, "data: [DONE]\n\n"]
+    else:
+        kwargs["json_body"] = {
+            "choices": [{"message": {"content": "w205 response"}}],
+            "model": "mock-model",
+        }
+    with patch.object(database, "get_embedding", _none_embedding), redirect_stdout(output):
+        response = await _chat(client, body, **kwargs)
+        require(response.status_code == 200,
+                f"scope chat failed: {session_id} -> {response.status_code} {response.text[:200]}")
+        rows = await _await_ledger(session_id, 2)
+        await _settle_background()
+    require(len(rows) == 2 and all(
+        row["scope_known"] is expected_known
+        and row["project_id"] == expected_project_id
+        for row in rows
+    ), f"endpoint wrote wrong scope for {session_id}: "
+       f"{[(r['scope_known'], r['project_id']) for r in rows]}")
+    require(bool(sent), f"scope chat never reached the captured upstream: {session_id}")
+    joined = json.dumps(sent[-1], ensure_ascii=False)
+    for marker in must_contain:
+        require(marker in joined, f"scope chat hid required marker {marker}: {session_id}")
+    for marker in must_not_contain:
+        require(marker not in joined, f"scope chat leaked forbidden marker {marker}: {session_id}")
+    if event_code is not None:
+        require(f"event={event_code}" in output.getvalue(),
+                f"scope chat lost event={event_code}: {session_id}")
+    return joined, output.getvalue()
+
+
+async def test_w2_05_scope_contract(client: httpx.AsyncClient) -> None:
+    begin("T-W2-05-01")
+    await _truncate("conversations", "chat_conversations", "chat_projects")
+    await _pool_execute("INSERT INTO chat_projects (id, name) VALUES ('w205-live', 'live')")
+    await _pool_execute(
+        "INSERT INTO chat_conversations (id, title, project_id) VALUES "
+        "('w205-meta-live','c','w205-live'), "
+        "('w205-meta-dead','c','w205-gone'), ('w205-meta-global','c',NULL)"
+    )
+    pool = await database.get_pool()
+    async with pool.acquire() as conn:
+        resolve = database._resolve_scope_tx
+        require(await resolve(
+            conn, "w205-meta-live", client_gave_conv_id=True,
+            project_id_present=False, payload_project_id=None,
+        ) == (True, "w205-live", "live_project", "w205-live", None),
+                "metadata project + absent payload drifted")
+        require(await resolve(
+            conn, "w205-meta-live", client_gave_conv_id=True,
+            project_id_present=True, payload_project_id=None,
+        ) == (True, "w205-live", "live_project", "w205-live", "scope_mismatch"),
+                "metadata project + explicit null must stay live and report mismatch")
+        require(await resolve(
+            conn, "w205-meta-dead", client_gave_conv_id=True,
+            project_id_present=True, payload_project_id="w205-live",
+        ) == (True, "w205-gone", "quarantined_project", None,
+              "scope_project_missing"),
+                "deleted metadata project must preserve attribution but quarantine reads")
+        require(await resolve(
+            conn, "w205-meta-global", client_gave_conv_id=True,
+            project_id_present=False, payload_project_id=None,
+        ) == (True, None, "global", None, None),
+                "metadata NULL must stay known-global")
+        require(await resolve(
+            conn, "w205-meta-global", client_gave_conv_id=True,
+            project_id_present=True, payload_project_id="w205-live",
+        ) == (True, None, "global", None, "scope_mismatch"),
+                "global metadata must reject a payload project as read authority")
+        for client_owned in (False, True):
+            require(await resolve(
+                conn, f"w205-valid-{int(client_owned)}", client_gave_conv_id=client_owned,
+                project_id_present=True, payload_project_id="w205-live",
+            ) == (True, "w205-live", "live_project", "w205-live",
+                  "scope_payload_trusted"),
+                    "a verified payload project must be trusted for either session source")
+            require(await resolve(
+                conn, f"w205-null-{int(client_owned)}", client_gave_conv_id=client_owned,
+                project_id_present=True, payload_project_id=None,
+            ) == (True, None, "global", None, None),
+                    "explicit null must be known-global for either session source")
+        require(await resolve(
+            conn, "w205-absent", client_gave_conv_id=True,
+            project_id_present=False, payload_project_id=None,
+        ) == (True, None, "global", None, "scope_default_global"),
+                "an absent project key must default to known-global")
+        require(await resolve(
+            conn, "w205-unverified", client_gave_conv_id=True,
+            project_id_present=True, payload_project_id="w205-gone",
+        ) == (False, None, "quarantined_project", None, "scope_unverified"),
+                "a syntactically valid missing project must stay unknown")
+        for invalid in ("", "   ", False, 0, 5, [], {}):
+            require(await resolve(
+                conn, "w205-defensive", client_gave_conv_id=False,
+                project_id_present=True, payload_project_id=invalid,
+            ) == (False, None, "quarantined_project", None, "scope_unverified"),
+                    f"internal defensive scope row promoted invalid input: {invalid!r}")
+    passed("T-W2-05-01 the eight-row five-field scope authority contract holds against PostgreSQL")
+
+    begin("T-W2-05-02")
+    await _truncate(
+        "conversations", "memories", "chat_messages", "chat_conversations",
+        "chat_projects", "project_file_chunks", "compression_summaries",
+    )
+    w205_config_keys = (
+        "memory_enabled", "max_inject", "extract_interval",
+        "calendar_inject_enabled", "scene_inject_enabled", "handoff_enabled",
+        "tool_drawer_enabled", "memory_event_ledger_write_enabled",
+    )
+    w205_config_before = {
+        key: await _config_row(key)
+        for key in w205_config_keys
+    }
+    w205_counter_before = app_module._conversation_counter
+    await _upsert_config("memory_enabled", "true")
+    await _upsert_config("max_inject", "15")
+    await _upsert_config("extract_interval", "999999")
+    await _upsert_config("calendar_inject_enabled", "false")
+    await _upsert_config("scene_inject_enabled", "false")
+    await _upsert_config("handoff_enabled", "false")
+    await _upsert_config("tool_drawer_enabled", "false")
+    await _set_ledger_gate(True)
+    app_module._conversation_counter = 0
+
+    project_a = "w205-project-a"
+    project_b = "w205-project-b"
+    orphan_project = "w205-project-orphan"
+    unknown_project = "w205-project-x"
+    await _pool_execute(
+        "INSERT INTO chat_projects (id, name, instructions) VALUES "
+        "($1, 'A', 'W205SENT_INS_A'), ($2, 'B', 'W205SENT_INS_B'), "
+        "($3, 'orphan', 'W205SENT_INS_ORPHAN')",
+        project_a, project_b, orphan_project,
+    )
+    for content, pid in (
+        ("W205SENT_MEM_G", None),
+        ("W205SENT_MEM_A", project_a),
+        ("W205SENT_MEM_B", project_b),
+        ("W205SENT_MEM_ORPHAN", orphan_project),
+        ("W205SENT_MEM_X", unknown_project),
+    ):
+        await _seed_memory(content, locked=True, project_id=pid)
+
+    conversation_rows = (
+        ("w205-conv-global", "W205SENT_CONV_G", None),
+        ("w205-conv-a", "W205SENT_CONV_A", project_a),
+        ("w205-conv-b", "W205SENT_CONV_B", project_b),
+        ("w205-conv-orphan", "W205SENT_CONV_ORPHAN", orphan_project),
+        ("w205-conv-x", "W205SENT_CONV_X", unknown_project),
+    )
+    for sid, title, pid in conversation_rows:
+        await _pool_execute(
+            "INSERT INTO chat_conversations (id, title, project_id) VALUES ($1, $2, $3)",
+            sid, title, pid,
+        )
+    for index in range(4):
+        await _pool_execute(
+            "INSERT INTO chat_messages "
+            "(id, conversation_id, role, content, sort_order) VALUES ($1,$2,$3,$4,$5)",
+            f"w205-orphan-message-{index}", "w205-conv-orphan",
+            "user" if index % 2 == 0 else "assistant",
+            f"W205SENT_HANDOFF_ORPHAN_{index}", index,
+        )
+    for pid, suffix in ((orphan_project, "ORPHAN"), (unknown_project, "X")):
+        await _pool_execute(
+            "INSERT INTO project_file_chunks "
+            "(project_id, file_id, file_name, chunk_index, content) "
+            "VALUES ($1,$2,$3,0,$4)",
+            pid, f"w205-file-{suffix.lower()}", f"{suffix}.txt", f"W205SENT_FILE_{suffix}",
+        )
+    await _pool_execute("DELETE FROM chat_projects WHERE id = $1", orphan_project)
+
+    private_markers = (
+        "W205SENT_INS_A", "W205SENT_INS_B", "W205SENT_INS_ORPHAN",
+        "W205SENT_MEM_A", "W205SENT_MEM_B",
+        "W205SENT_MEM_ORPHAN", "W205SENT_MEM_X", "W205SENT_CONV_ORPHAN",
+        "W205SENT_CONV_X", "W205SENT_FILE_ORPHAN", "W205SENT_FILE_X",
+    )
+
+    # Arms 1/2: absent and explicit-null requests are known global and see only G.
+    for label, payload in (("absent", {}), ("null", {"project_id": None})):
+        await _w205_scope_chat(
+            client,
+            session_id=f"w205-e2e-{label}",
+            payload=payload,
+            expected_known=True,
+            expected_project_id=None,
+            must_contain=("W205SENT_MEM_G",),
+            must_not_contain=private_markers,
+        )
+
+    # Metadata-bearing cases are duplicated so buffered and streaming finalizers both
+    # prove that the same immutable scope reaches the prompt and ledger.
+    for mode_name, stream in (("buffered", False), ("stream", True)):
+        conflict_sid = f"w205-e2e-conflict-{mode_name}"
+        global_sid = f"w205-e2e-global-{mode_name}"
+        orphan_sid = f"w205-e2e-orphan-{mode_name}"
+        for sid, pid in (
+            (conflict_sid, project_a),
+            (global_sid, None),
+            (orphan_sid, orphan_project),
+        ):
+            await _pool_execute(
+                "INSERT INTO chat_conversations (id, title, project_id) VALUES ($1, 'scope', $2)",
+                sid, pid,
+            )
+
+        # Arm 3: metadata A wins over payload B for prompt and ledger.
+        await _w205_scope_chat(
+            client,
+            session_id=conflict_sid,
+            payload={"project_id": project_b},
+            expected_known=True,
+            expected_project_id=project_a,
+            must_contain=("W205SENT_INS_A", "W205SENT_MEM_G", "W205SENT_MEM_A"),
+            must_not_contain=("W205SENT_INS_B", "W205SENT_MEM_B"),
+            event_code="scope_mismatch",
+            stream=stream,
+        )
+
+        # Arm 4: global metadata rejects a payload project as read authority.
+        await _w205_scope_chat(
+            client,
+            session_id=global_sid,
+            payload={"project_id": project_b},
+            expected_known=True,
+            expected_project_id=None,
+            must_contain=("W205SENT_MEM_G",),
+            must_not_contain=(
+                "W205SENT_INS_A", "W205SENT_INS_B", "W205SENT_MEM_A",
+                "W205SENT_MEM_B", "W205SENT_MEM_ORPHAN", "W205SENT_MEM_X",
+            ),
+            event_code="scope_mismatch",
+            stream=stream,
+        )
+
+        # Arm 5: missing metadata may trust a verified live payload project.
+        await _w205_scope_chat(
+            client,
+            session_id=f"w205-e2e-trusted-{mode_name}",
+            payload={"project_id": project_a},
+            expected_known=True,
+            expected_project_id=project_a,
+            must_contain=("W205SENT_INS_A", "W205SENT_MEM_G", "W205SENT_MEM_A"),
+            must_not_contain=("W205SENT_INS_B", "W205SENT_MEM_B"),
+            event_code="scope_payload_trusted",
+            stream=stream,
+        )
+
+    # Arms 6/7: quarantine must block every project read boundary even when orphaned
+    # SQL rows remain. Keep handoff enabled so its zero-call proof is meaningful.
+    await _upsert_config("handoff_enabled", "true")
+    quarantine_calls = {"project": [], "file": [], "handoff": []}
+    original_project = database.get_project_by_id
+    original_file = database.search_file_chunks
+    original_handoff = database.get_handoff_source
+
+    async def recording_project(*args, **kwargs):
+        quarantine_calls["project"].append((args, kwargs))
+        return await original_project(*args, **kwargs)
+
+    async def recording_file(*args, **kwargs):
+        quarantine_calls["file"].append((args, kwargs))
+        return await original_file(*args, **kwargs)
+
+    async def recording_handoff(*args, **kwargs):
+        quarantine_calls["handoff"].append((args, kwargs))
+        return await original_handoff(*args, **kwargs)
+
+    with (
+        patch.object(database, "get_project_by_id", recording_project),
+        patch.object(database, "search_file_chunks", recording_file),
+        patch.object(database, "get_handoff_source", recording_handoff),
+    ):
+        for mode_name, stream in (("buffered", False), ("stream", True)):
+            # Arm 6: a never-existing payload project keeps no ledger attribution.
+            await _w205_scope_chat(
+                client,
+                session_id=f"w205-e2e-unknown-{mode_name}",
+                payload={"project_id": unknown_project},
+                expected_known=False,
+                expected_project_id=None,
+                must_contain=("W205SENT_MEM_G",),
+                must_not_contain=(
+                    "W205SENT_MEM_X", "W205SENT_CONV_X", "W205SENT_FILE_X",
+                    "W205SENT_MEM_ORPHAN", "W205SENT_CONV_ORPHAN",
+                    "W205SENT_FILE_ORPHAN",
+                ),
+                event_code="scope_unverified",
+                stream=stream,
+            )
+
+            # Arm 7: deleted metadata retains historical attribution but reads G only.
+            await _w205_scope_chat(
+                client,
+                session_id=f"w205-e2e-orphan-{mode_name}",
+                payload={},
+                expected_known=True,
+                expected_project_id=orphan_project,
+                must_contain=("W205SENT_MEM_G",),
+                must_not_contain=(
+                    "W205SENT_MEM_ORPHAN", "W205SENT_CONV_ORPHAN",
+                    "W205SENT_FILE_ORPHAN", "W205SENT_INS_ORPHAN",
+                ),
+                event_code="scope_project_missing",
+                stream=stream,
+            )
+    require(all(not calls for calls in quarantine_calls.values()),
+            f"quarantine reached a project read boundary: {quarantine_calls!r}")
+    await _upsert_config("handoff_enabled", "false")
+
+    global_scope = _w205_scope(known=True, mode="global")
+    live_a = _w205_scope(
+        known=True, ledger_project_id=project_a, mode="live_project",
+        context_project_id=project_a,
+    )
+    quarantine = _w205_scope(
+        known=False, mode="quarantined_project", event_code="scope_unverified",
+    )
+    orphan_quarantine = _w205_scope(
+        known=True, ledger_project_id=orphan_project,
+        mode="quarantined_project", event_code="scope_project_missing",
+    )
+
+    # Arm 8: execute the real conversation search, not merely the hidden tool-map field.
+    import tool_drawer as drawer
+    for fn_name in ("route_tools", "build_tools_for_category", "build_full_fallback_tools",
+                    "handle_meta_tool", "execute_drawer_tool"):
+        fn = getattr(drawer, fn_name, None)
+        require(callable(fn) and "scope" in inspect.signature(fn).parameters,
+                f"{fn_name} does not accept the frozen request scope")
+    if not drawer.CATEGORIES:
+        drawer._auto_discover_mcp_tools()
+    _, global_conversation_map = drawer.build_tools_for_category(
+        "conversation", scope=global_scope)
+    _, live_conversation_map = drawer.build_tools_for_category(
+        "conversation", scope=live_a)
+    require("_gateway_search_conversations" in global_conversation_map
+            and "_gateway_search_conversations" in live_conversation_map,
+            "drawer did not build the conversation search route for live scopes")
+    global_result, _ = await app_module._execute_gateway_tool(
+        "_gateway_search_conversations", {"query": "W205SENT_CONV", "limit": 20},
+        global_conversation_map["_gateway_search_conversations"],
+    )
+    live_result, _ = await app_module._execute_gateway_tool(
+        "_gateway_search_conversations", {"query": "W205SENT_CONV", "limit": 20},
+        live_conversation_map["_gateway_search_conversations"],
+    )
+    require("W205SENT_CONV_G" in global_result
+            and all(marker not in global_result for marker in (
+                "W205SENT_CONV_A", "W205SENT_CONV_B", "W205SENT_CONV_ORPHAN",
+                "W205SENT_CONV_X",
+            )), "global conversation search escaped its NULL-only scope")
+    require("W205SENT_CONV_A" in live_result and "W205SENT_CONV_G" not in live_result,
+            "live-project conversation search crossed into the global layer")
+    require(drawer._conversation_scope_value(orphan_quarantine) is None,
+            "quarantine mapped its historical ledger project into conversation search")
+
+    traditional_maps = []
+
+    async def capture_traditional_tools(*args, **kwargs):
+        traditional_maps.append(kwargs.get("tool_map", {}))
+        yield "data: [DONE]\n\n"
+
+    with (
+        patch.object(app_module, "_stream_with_tools", capture_traditional_tools),
+        patch.object(database, "get_embedding", _none_embedding),
+    ):
+        response = await _chat(client, {
+            "model": "mock-model", "stream": True,
+            "conversation_id": "w205-traditional-global-map",
+            "messages": [{"role": "user", "content": "W205SENT scope probe"}],
+        })
+    require(response.status_code == 200 and len(traditional_maps) == 1,
+            "traditional global tool route did not reach the captured tool loop")
+    traditional_info = traditional_maps[0].get("_gateway_search_conversations", {})
+    require(traditional_info.get("project_id") == "none"
+            and traditional_info.get("scope", {}).get("context_mode") == "global",
+            "traditional global conversation tool lost the NULL-only sentinel")
+
+    # Arm 9: scope closes the initial route, category builder, full fallback,
+    # previous-expanded session state, meta expansion, and executor.
+    def exposed_categories(schemas):
+        names = {item.get("function", {}).get("name") for item in schemas}
+        return {drawer._tool_to_category.get(name) for name in names}
+
+    initial_sid = "w205-drawer-quarantine-initial"
+    drawer._sessions.pop(initial_sid, None)
+    initial_schemas, _ = await drawer.route_tools(
+        "请记住之前聊过的内容", initial_sid, mem_enabled=True,
+        search_enabled=False, scope=quarantine, mcp_mode="off",
+        reminder_tools_enabled=False,
+    )
+    require(not ({"memory", "conversation"} & exposed_categories(initial_schemas)),
+            "quarantine initial drawer route exposed memory/conversation")
+    for category in ("memory", "conversation"):
+        schemas, mapping = drawer.build_tools_for_category(category, scope=quarantine)
+        require(not schemas and not mapping,
+                f"quarantine category builder expanded {category}")
+
+    schemas, tool_map = drawer.build_full_fallback_tools(
+        search_enabled=False,
+        mem_enabled=True,
+        reminder_tools_enabled=False,
+        mcp_mode="off",
+        scope=quarantine,
+    )
+    require(not ({"memory", "conversation"} & exposed_categories(schemas))
+            and "_gateway_search_conversations" not in tool_map,
+            "quarantine full fallback exposed memory/conversation tools")
+
+    previous_sid = "w205-drawer-previous-expanded"
+    drawer._sessions.pop(previous_sid, None)
+    await drawer.route_tools(
+        "请记住我们之前聊过的内容", previous_sid, mem_enabled=True,
+        search_enabled=False, scope=live_a, mcp_mode="off",
+        reminder_tools_enabled=False,
+    )
+    require({"memory", "conversation"} <= set(drawer._sessions[previous_sid]["expanded"]),
+            "live drawer fixture failed to expand memory/conversation")
+    after_schemas, _ = await drawer.route_tools(
+        "请记住我们之前聊过的内容", previous_sid, mem_enabled=True,
+        search_enabled=False, scope=quarantine, mcp_mode="off",
+        reminder_tools_enabled=False,
+    )
+    require(not ({"memory", "conversation"} & exposed_categories(after_schemas))
+            and not ({"memory", "conversation"}
+                     & set(drawer._sessions[previous_sid]["expanded"])),
+            "quarantine revived a previous expanded drawer category")
+
+    meta_sid = "w205-drawer-meta-quarantine"
+    drawer._sessions.pop(meta_sid, None)
+    for category in ("memory", "conversation"):
+        await drawer.handle_meta_tool(
+            "_drawer_request_tools", {"category": category}, meta_sid,
+            mcp_mode="off", scope=quarantine,
+        )
+    require(not ({"memory", "conversation"}
+                 & set(drawer._sessions[meta_sid]["expanded"])),
+            "quarantine meta-tool expanded a forbidden category")
+    for tool_name in ("search_memory", "get_recent", "_gateway_search_conversations"):
+        result, _ = await drawer.execute_drawer_tool(
+            tool_name, {"query": "must-not-touch"}, scope=quarantine)
+        require("scope_quarantined" in str(result),
+                f"quarantine executor did not reject {tool_name} with the fixed code")
+
+    # Arm 10: extraction consumes the same three-state scope and never writes on skip.
+    extract_calls = []
+    process_memories = getattr(app_module, "process_memories_background", None)
+    require(callable(process_memories)
+            and "scope" in inspect.signature(process_memories).parameters,
+            "process_memories_background does not accept the frozen request scope")
+
+    async def recording_extract(*args, **kwargs):
+        extract_calls.append((args, kwargs))
+        return []
+
+    before_memories = await _pool_fetchval("SELECT COUNT(*) FROM memories")
+    quarantine_log = io.StringIO()
+    with (
+        patch.object(app_module, "extract_memories", recording_extract),
+        patch.object(database, "get_embedding", _none_embedding),
+        redirect_stdout(quarantine_log),
+    ):
+        quarantine_result = await app_module.process_memories_background(
+            "w205-extract-quarantine", "请记住 W205SENT", "ok", "mock-model",
+            scope=quarantine, extract_enabled=True, turn_key="w205-extract-quarantine-turn",
+            client_gave_conv_id=True, project_id_present=True,
+            payload_project_id=unknown_project,
+        )
+        live_result_extract = await app_module.process_memories_background(
+            "w205-extract-live", "请记住 W205SENT", "ok", "mock-model",
+            scope=live_a, extract_enabled=True, turn_key="w205-extract-live-turn",
+            client_gave_conv_id=True, project_id_present=True,
+            payload_project_id=project_a,
+        )
+        global_result_extract = await app_module.process_memories_background(
+            "w205-extract-global", "请记住 W205SENT", "ok", "mock-model",
+            scope=global_scope, extract_enabled=True, turn_key="w205-extract-global-turn",
+            client_gave_conv_id=True, project_id_present=False, payload_project_id=None,
+        )
+    require(quarantine_result == {"action": "skip_unverified"}
+            and "reason=scope_unverified" in quarantine_log.getvalue(),
+            f"quarantine extraction did not emit the frozen skip: {quarantine_result!r}")
+    require(live_result_extract.get("action") == "skip_project",
+            f"live project extraction did not skip: {live_result_extract!r}")
+    require(len(extract_calls) == 1 and global_result_extract.get("action") == "extract",
+            f"global extraction did not reach the extractor exactly once: "
+            f"{len(extract_calls)} / {global_result_extract!r}")
+    require(await _pool_fetchval("SELECT COUNT(*) FROM memories") == before_memories,
+            "quarantine/live extraction skip inserted a memory")
+
+    # Arm 11: metadata changing during provider resolution cannot rewrite this request.
+    for mode_name, stream in (("buffered", False), ("stream", True)):
+        sid = f"w205-e2e-provider-race-{mode_name}"
+        await _pool_execute(
+            "INSERT INTO chat_conversations (id, title, project_id) VALUES ($1, 'race', $2)",
+            sid, project_a,
+        )
+
+        async def move_metadata(sid=sid):
+            await _pool_execute(
+                "UPDATE chat_conversations SET project_id = $1 WHERE id = $2",
+                project_b, sid,
+            )
+
+        await _w205_scope_chat(
+            client,
+            session_id=sid,
+            payload={},
+            expected_known=True,
+            expected_project_id=project_a,
+            must_contain=("W205SENT_INS_A", "W205SENT_MEM_A"),
+            must_not_contain=("W205SENT_INS_B", "W205SENT_MEM_B"),
+            stream=stream,
+            on_provider=move_metadata,
+        )
+
+    # Arm 12: entry-shape rejection happens before a request scope exists.
+    snapshot_fn = getattr(app_module, "resolve_scope_snapshot", None)
+    require(callable(snapshot_fn), "request-level scope snapshot resolver is missing")
+    invalid_cases = (("", "empty"), ("   ", "blank"), (True, "bool"),
+                     (0, "zero"), (5, "number"), ([], "list"), ("p" * 257, "too long"))
+    for index, (bad, label) in enumerate(invalid_cases):
+        calls = []
+
+        async def counted_provider(*args, **kwargs):
+            calls.append((args, kwargs))
+            return None
+
+        before = await _pool_fetchval("SELECT COUNT(*) FROM conversations")
+        with (
+            patch.object(app_module, "resolve_provider_for_model", counted_provider),
+            patch.object(app_module, "resolve_scope_snapshot",
+                         wraps=snapshot_fn) as scope_spy,
+        ):
+            response = await client.post("/v1/chat/completions", json={
+                "model": "mock-model", "stream": False,
+                "conversation_id": f"w205-e2e-invalid-{index}", "project_id": bad,
+                "messages": [{"role": "user", "content": "must not run"}],
+            })
+        after = await _pool_fetchval("SELECT COUNT(*) FROM conversations")
+        require(response.status_code == 400,
+                f"invalid project_id ({label}) must be 400, got {response.status_code}")
+        require(response.json() == {"error": "invalid_project_id", "code": "invalid_project_id"},
+                f"invalid project_id ({label}) leaked a non-machine response: {response.text!r}")
+        require(before == after and not calls and scope_spy.await_count == 0,
+                f"invalid project_id ({label}) wrote the ledger, made a scope, or reached routing")
+
+    for key, previous_value in w205_config_before.items():
+        if previous_value is None:
+            await _pool_execute("DELETE FROM gateway_config WHERE key = $1", key)
+        else:
+            await _upsert_config(key, str(previous_value))
+    app_module._conversation_counter = w205_counter_before
+    passed("T-W2-05-02 request scope is validated once and quarantine closes every drawer path")
+
+
+async def _w205_insert_event(
+    event_id: int,
+    session_id: str,
+    role: str,
+    *,
+    turn_id=None,
+    turn_key=None,
+    source_message_id=None,
+    scope_known: bool = True,
+    project_id=None,
+    usage=None,
+    content: str = "w205-event",
+) -> None:
+    usage_json = json.dumps(usage) if usage is not None else None
+    await _pool_execute(
+        "INSERT INTO conversations "
+        "(id, session_id, role, content, model, project_id, scope_known, usage, "
+        " turn_id, turn_key, source_message_id) "
+        "VALUES ($1,$2,$3,$4,'m',$5,$6,$7::jsonb,$8,$9,$10)",
+        event_id, session_id, role, content, project_id, scope_known, usage_json,
+        turn_id, turn_key, source_message_id,
+    )
+
+
+async def test_w2_05_reconcile_matrix_and_happy_paths(client: httpx.AsyncClient) -> None:
+    begin("T-W2-05-03")
+    reconcile = _w205_reconcile()
+    await _truncate("conversations", "turn_tombstones", "message_tombstones", "session_source_rev")
+    specs = (
+        ("user", None, None, None, False, None, None),
+        ("assistant", None, None, "legacy-mid", False, None, None),
+        ("user", 101, "tk-a", None, True, None, None),
+        ("assistant", 201, "tk-b", None, True, None,
+         {"prompt": 1, "completion": 1, "cached": 0}),
+        ("user", 301, None, "mid-c", True, "matrix-project", None),
+        ("assistant", 401, None, "mid-d", True, "matrix-project", None),
+        ("user", None, "tk-e", "mid-e", False, None, None),
+        ("assistant", None, "tk-f", None, True, None,
+         {"prompt": 2, "completion": 1, "cached": 0}),
+    )
+    expected_matrix: dict[str, int] = {}
+    expected_roles = {"user": 0, "assistant": 0, "other": 0}
+    expected_scope = {"known_global": 0, "known_project": 0, "unknown": 0}
+    next_id = 1000
+    for spec_index, (role, turn_id, turn_key, smid, known, pid, usage) in enumerate(specs):
+        for duplicate in range(2):
+            await _w205_insert_event(
+                next_id, f"w205-matrix-{spec_index}-{duplicate}", role,
+                turn_id=turn_id, turn_key=turn_key, source_message_id=smid,
+                scope_known=known, project_id=pid, usage=usage,
+            )
+            next_id += 1
+        key = (
+            f"tid={int(turn_id is not None)},tkey={int(turn_key is not None)},"
+            f"smid={int(smid is not None)},known={int(known)},pid={int(pid is not None)},"
+            f"usage={int(role == 'assistant' and usage is not None)}"
+        )
+        expected_matrix[key] = expected_matrix.get(key, 0) + 2
+        expected_roles[role] += 2
+        if not known:
+            expected_scope["unknown"] += 2
+        elif pid is None:
+            expected_scope["known_global"] += 2
+        else:
+            expected_scope["known_project"] += 2
+    result = await reconcile(sample_limit=50)
+    require(result["total_rows"] == 16, f"fact matrix lost rows: {result['total_rows']}")
+    require(result["matrix"] == expected_matrix,
+            f"fact matrix drifted: {result['matrix']!r} != {expected_matrix!r}")
+    require(result["roles"] == expected_roles, f"role totals drifted: {result['roles']!r}")
+    require(result["scope"] == expected_scope, f"scope totals drifted: {result['scope']!r}")
+    passed("T-W2-05-03 all six ledger facts are counted without origin inference")
+
+    begin("T-W2-05-04")
+    await _truncate(
+        "conversations", "chat_messages", "chat_conversations", "chat_projects",
+        "session_tombstones", "turn_tombstones", "message_tombstones", "session_source_rev",
+    )
+    await _pool_execute("INSERT INTO chat_projects (id, name) VALUES ('w205-happy-project', 'p')")
+    await _upsert_config("memory_enabled", "false")
+    await _set_ledger_gate(True)
+
+    async def post_turn(sid, turn_key, **extra):
+        body = {
+            "model": "mock-model", "stream": False,
+            "conversation_id": sid, "turn_key": turn_key,
+            "messages": [{"role": "user", "content": f"body-{turn_key}"}],
+            **extra,
+        }
+        response = await _chat(client, body)
+        require(response.status_code == 200, f"happy-path request failed: {sid}/{turn_key}")
+        return response
+
+    await post_turn("w205-happy-single", "single-1")
+    await post_turn("w205-happy-multi", "multi-1")
+    await post_turn("w205-happy-multi", "multi-2")
+    await post_turn("w205-happy-regen", "regen-1")
+    await post_turn("w205-happy-regen", "regen-1", is_regenerate=True)
+    await post_turn("w205-happy-project-session", "project-1",
+                    project_id="w205-happy-project")
+    # The response-header identity is the opt-in v2 contract.  Keep the product
+    # default unchanged and scope the fixture to the one lifecycle case that
+    # needs to observe the server-generated ID.
+    await _upsert_config("session_identity_v2_enabled", "true")
+    response = await _chat(client, {
+        "model": "mock-model", "stream": False,
+        "messages": [{"role": "user", "content": "server generated"}],
+        "turn_key": "generated-1",
+    })
+    generated_sid = response.headers.get("x-kiwi-session-id")
+    await _upsert_config("session_identity_v2_enabled", "false")
+    require(response.status_code == 200 and generated_sid,
+            "missing-conversation-id case did not return a generated identity")
+    await _pool_execute(
+        "INSERT INTO chat_conversations (id, title, project_id) VALUES "
+        "('w205-happy-delete','delete',NULL)"
+    )
+    await post_turn("w205-happy-delete", "delete-1")
+    delete_response = await client.delete("/sync/conversations/w205-happy-delete")
+    require(delete_response.status_code == 200, "whole-conversation delete failed")
+    for sid, expected in (("w205-happy-single", 2), ("w205-happy-multi", 4),
+                          ("w205-happy-regen", 2), ("w205-happy-project-session", 2),
+                          (generated_sid, 2)):
+        require(len(await _await_ledger(sid, expected)) == expected,
+                f"happy-path ledger count drifted for {sid}")
+    require(not await _ledger_rows("w205-happy-delete"),
+            "whole-conversation delete left ledger rows")
+    result = await reconcile(sample_limit=50)
+    require(_w205_unexplained_total(result) == 0,
+            f"six accepted lifecycle shapes produced unexplained rows: {result['unexplained']!r}")
+    passed("T-W2-05-04 six accepted lifecycle shapes reconcile with zero unexplained rows")
+
+
+async def test_w2_05_reconcile_evidence(client: httpx.AsyncClient) -> None:
+    begin("T-W2-05-05")
+    reconcile = _w205_reconcile()
+    await _truncate(
+        "conversations", "chat_messages", "chat_conversations",
+        "turn_tombstones", "message_tombstones", "session_source_rev",
+    )
+    usage = {"prompt": 1, "completion": 1, "cached": 0}
+
+    exact_sid = "w205-exact"
+    exact_user_mid = "w205-exact-user"
+    exact_assistant_mid = "w205-exact-assistant"
+    await _pool_execute(
+        "INSERT INTO chat_conversations (id, title) VALUES ($1, 'exact')", exact_sid)
+    await _pool_execute(
+        "INSERT INTO chat_messages (id, conversation_id, role, content, turn_key, sort_order) "
+        "VALUES ($1,$3,'user','u',$1,0), ($2,$3,'assistant','a',$1,1)",
+        exact_user_mid, exact_assistant_mid, exact_sid,
+    )
+    await database.append_turn_events_atomic(
+        exact_sid, "u", "a", "m", turn_key=exact_user_mid,
+        user_message_id=exact_user_mid, assistant_message_id=exact_assistant_mid,
+        usage=usage,
+    )
+    response = await client.delete(
+        f"/sync/conversations/{exact_sid}/messages/{exact_user_mid}?role=user&turn_key={exact_user_mid}"
+    )
+    require(response.status_code == 200, "exact-evidence delete failed")
+    exact_assistant_id = await _pool_fetchval(
+        "SELECT id FROM conversations WHERE session_id=$1 AND role='assistant'", exact_sid)
+
+    weak_sid = "w205-weak"
+    weak_user_mid = "w205-weak-user"
+    weak_assistant_mid = "w205-weak-assistant"
+    await database.append_turn_events_atomic(
+        weak_sid, "u", "a", "m", turn_key=None,
+        user_message_id=weak_user_mid, assistant_message_id=weak_assistant_mid,
+        usage=usage,
+    )
+    response = await client.delete(
+        f"/sync/conversations/{weak_sid}/messages/{weak_user_mid}?role=user"
+    )
+    require(response.status_code == 200, "weak-evidence delete failed")
+    weak_assistant_id = await _pool_fetchval(
+        "SELECT id FROM conversations WHERE session_id=$1 AND role='assistant'", weak_sid)
+
+    orphan_sid = "w205-unrelated-tombstone"
+    orphan_result = await database.append_turn_events_atomic(
+        orphan_sid, "u", "a", "m", turn_key="w205-orphan-turn",
+        user_message_id="w205-orphan-user", assistant_message_id="w205-orphan-assistant",
+        usage=usage,
+    )
+    await _pool_execute("DELETE FROM conversations WHERE id=$1", orphan_result["turn_id"])
+    orphan_assistant_id = await _pool_fetchval(
+        "SELECT id FROM conversations WHERE session_id=$1 AND role='assistant'", orphan_sid)
+    await _pool_execute(
+        "INSERT INTO turn_tombstones (session_id, turn_key) VALUES "
+        "('w205-other-session','w205-orphan-turn'), ($1,'unrelated-turn')",
+        orphan_sid,
+    )
+    await _pool_execute(
+        "INSERT INTO message_tombstones (session_id, message_id) VALUES "
+        "('w205-other-session','w205-orphan-user'), ($1,'unrelated-message')",
+        orphan_sid,
+    )
+
+    no_usage = await database.append_turn_events_atomic(
+        "w205-no-usage", "u", "a", "m", turn_key="w205-no-usage-turn", usage=None)
+    no_usage_assistant_id = await _pool_fetchval(
+        "SELECT id FROM conversations WHERE session_id='w205-no-usage' AND role='assistant'")
+    await _w205_insert_event(
+        900000, "w205-unknown-history", "user", scope_known=False,
+        content="w205 historical sentinel",
+    )
+
+    result = await reconcile(sample_limit=50)
+    require(_w205_bucket_count(result, "explained", "user_deleted_keeps_assistant_exact") == 1
+            and exact_assistant_id in result["explained"]["user_deleted_keeps_assistant_exact"]["ids"],
+            "exact message/turn tombstone evidence was not accepted")
+    require(_w205_bucket_count(result, "explained", "deletion_anchor_unverifiable") == 1
+            and weak_assistant_id in result["explained"]["deletion_anchor_unverifiable"]["ids"],
+            "source-revision evidence was not isolated as a weak explanation")
+    require(_w205_bucket_count(result, "unexplained", "turn_orphan") == 1
+            and orphan_assistant_id in result["unexplained"]["turn_orphan"]["ids"],
+            "an unrelated tombstone incorrectly excused an orphan")
+    require(no_usage_assistant_id in result["explained"]["assistant_without_usage"]["ids"],
+            "legal NULL assistant usage was not recorded as explained")
+    require(900000 in result["explained"]["unknown_scope_excluded"]["ids"],
+            "unknown historical scope was not explicitly excluded")
+    require(no_usage.get("ok") is True, "NULL-usage fixture failed before reconciliation")
+    passed("T-W2-05-05 accepted explanations require exact or explicitly weak database evidence")
+
+    begin("T-W2-05-06")
+
+    async def only_unexplained(expected_bucket: str, expected_id: int) -> None:
+        outcome = await reconcile(sample_limit=50)
+        require(_w205_bucket_count(outcome, "unexplained", expected_bucket) == 1,
+                f"{expected_bucket} count drifted: {outcome['unexplained']!r}")
+        require(expected_id in outcome["unexplained"][expected_bucket]["ids"],
+                f"{expected_bucket} did not sample offending id {expected_id}")
+        require(all(
+            _w205_bucket_count(outcome, "unexplained", name) == (1 if name == expected_bucket else 0)
+            for name in (
+                "turn_orphan", "turn_cross_session", "order_break",
+                "scope_split", "duplicate_user_in_turn", "turn_key_conflict",
+            )
+        ), f"{expected_bucket} overlapped another primary unexplained bucket: {outcome['unexplained']!r}")
+        require(all(
+            expected_id not in payload["ids"]
+            for payload in outcome["explained"].values()
+        ), f"{expected_bucket} offender was incorrectly admitted to an explained bucket")
+
+    await _truncate("conversations", "turn_tombstones", "message_tombstones", "session_source_rev")
+    await _w205_insert_event(1001, "w205-bad-orphan", "assistant", turn_id=9999)
+    await only_unexplained("turn_orphan", 1001)
+
+    await _truncate("conversations", "turn_tombstones", "message_tombstones", "session_source_rev")
+    await _w205_insert_event(1101, "w205-cross-user", "user", turn_id=1101)
+    await _w205_insert_event(1102, "w205-cross-assistant", "assistant", turn_id=1101)
+    await only_unexplained("turn_cross_session", 1102)
+
+    await _truncate("conversations", "turn_tombstones", "message_tombstones", "session_source_rev")
+    await _w205_insert_event(1201, "w205-order", "assistant", turn_id=1202)
+    await _w205_insert_event(1202, "w205-order", "user", turn_id=1202)
+    await only_unexplained("order_break", 1201)
+
+    await _truncate("conversations", "turn_tombstones", "message_tombstones", "session_source_rev")
+    await _w205_insert_event(1301, "w205-split", "user", turn_id=1301, scope_known=True)
+    await _w205_insert_event(1302, "w205-split", "assistant", turn_id=1301, scope_known=False)
+    # Conflict-group buckets sample the group's minimum ledger id (§4.2), not
+    # whichever member happened to differ from the first inserted row.
+    await only_unexplained("scope_split", 1301)
+
+    await _truncate("conversations", "turn_tombstones", "message_tombstones", "session_source_rev")
+    await _w205_insert_event(1401, "w205-dup-user", "user", turn_id=1401)
+    await _w205_insert_event(1402, "w205-dup-user", "user", turn_id=1401)
+    await _w205_insert_event(1403, "w205-dup-user", "assistant", turn_id=1401,
+                             usage={"prompt": 1, "completion": 1, "cached": 0})
+    await only_unexplained("duplicate_user_in_turn", 1401)
+
+    await _truncate("conversations", "turn_tombstones", "message_tombstones", "session_source_rev")
+    await _w205_insert_event(1501, "w205-key-conflict", "user", turn_id=1501, turn_key="same")
+    await _w205_insert_event(1502, "w205-key-conflict", "user", turn_id=1502, turn_key="same")
+    await only_unexplained("turn_key_conflict", 1501)
+
+    async def assert_structural(bucket: str, expected_id: int) -> None:
+        outcome = await reconcile(sample_limit=50)
+        require(_w205_bucket_count(outcome, "unexplained", bucket) > 0
+                and expected_id in outcome["unexplained"][bucket]["ids"],
+                f"{bucket} did not sample its offending ledger id")
+        require(all(
+            expected_id not in payload["ids"]
+            for payload in outcome["explained"].values()
+        ), f"{bucket} offender was incorrectly admitted to an explained bucket")
+
+    await _truncate("conversations", "session_tombstones", "turn_tombstones",
+                    "message_tombstones", "session_source_rev")
+    await _w205_insert_event(1601, "w205-session-survivor", "user", turn_id=1601)
+    await _pool_execute(
+        "INSERT INTO session_tombstones (session_id) VALUES ('w205-session-survivor')")
+    await assert_structural("session_tombstone_survivor", 1601)
+
+    # Unknown-scope rows remain structural defects when a privacy tombstone exists.
+    # They must never be absorbed by the otherwise-explained historical-scope bucket.
+    await _truncate("conversations", "session_tombstones", "turn_tombstones",
+                    "message_tombstones", "session_source_rev")
+    await _w205_insert_event(
+        1651, "w205-session-survivor-unknown", "user",
+        turn_id=1651, scope_known=False,
+    )
+    await _pool_execute(
+        "INSERT INTO session_tombstones (session_id) "
+        "VALUES ('w205-session-survivor-unknown')")
+    await assert_structural("session_tombstone_survivor", 1651)
+
+    await _truncate("conversations", "session_tombstones", "turn_tombstones",
+                    "message_tombstones", "session_source_rev")
+    await _w205_insert_event(1701, "w205-turn-survivor", "user",
+                             turn_id=1701, turn_key="w205-dead-turn")
+    await _pool_execute(
+        "INSERT INTO turn_tombstones (session_id, turn_key) "
+        "VALUES ('w205-turn-survivor','w205-dead-turn')")
+    await assert_structural("turn_tombstone_survivor", 1701)
+
+    await _truncate("conversations", "session_tombstones", "turn_tombstones",
+                    "message_tombstones", "session_source_rev")
+    await _w205_insert_event(
+        1751, "w205-turn-survivor-unknown", "user",
+        turn_id=1751, turn_key="w205-dead-turn-unknown", scope_known=False,
+    )
+    await _pool_execute(
+        "INSERT INTO turn_tombstones (session_id, turn_key) "
+        "VALUES ('w205-turn-survivor-unknown','w205-dead-turn-unknown')")
+    await assert_structural("turn_tombstone_survivor", 1751)
+
+    await _truncate("conversations", "session_tombstones", "turn_tombstones",
+                    "message_tombstones", "session_source_rev")
+    await _w205_insert_event(1801, "w205-message-survivor", "user", turn_id=1801,
+                             source_message_id="w205-dead-message")
+    await _pool_execute(
+        "INSERT INTO message_tombstones (session_id, message_id) "
+        "VALUES ('w205-message-survivor','w205-dead-message')")
+    await assert_structural("message_tombstone_survivor", 1801)
+
+    await _truncate("conversations", "session_tombstones", "turn_tombstones",
+                    "message_tombstones", "session_source_rev")
+    await _w205_insert_event(
+        1851, "w205-message-survivor-unknown", "user",
+        turn_id=1851, source_message_id="w205-dead-message-unknown",
+        scope_known=False,
+    )
+    await _pool_execute(
+        "INSERT INTO message_tombstones (session_id, message_id) "
+        "VALUES ('w205-message-survivor-unknown','w205-dead-message-unknown')")
+    await assert_structural("message_tombstone_survivor", 1851)
+
+    for event_id, anchor in ((1901, None), (1902, 999999)):
+        await _truncate("conversations", "session_tombstones", "turn_tombstones",
+                        "message_tombstones", "session_source_rev")
+        await _w205_insert_event(event_id, f"w205-user-anchor-{event_id}", "user",
+                                 turn_id=anchor)
+        await assert_structural("user_anchor_invalid", event_id)
+
+    await _truncate("conversations", "session_tombstones", "turn_tombstones",
+                    "message_tombstones", "session_source_rev")
+    await _w205_insert_event(2001, "w205-non-user-anchor", "system", turn_id=2001)
+    await _w205_insert_event(2002, "w205-non-user-anchor", "assistant", turn_id=2001,
+                             usage={"prompt": 1, "completion": 1, "cached": 0})
+    await assert_structural("assistant_anchor_non_user", 2002)
+
+    await _truncate("conversations", "session_tombstones", "turn_tombstones",
+                    "message_tombstones", "session_source_rev")
+    await _w205_insert_event(2101, "w205-role-invalid", "tool", turn_id=2101)
+    await assert_structural("role_invalid", 2101)
+
+    for first_key, second_key in (("left", "right"), (None, "right")):
+        await _truncate("conversations", "session_tombstones", "turn_tombstones",
+                        "message_tombstones", "session_source_rev")
+        await _w205_insert_event(2201, "w205-key-split", "user",
+                                 turn_id=2201, turn_key=first_key)
+        await _w205_insert_event(2202, "w205-key-split", "assistant",
+                                 turn_id=2201, turn_key=second_key,
+                                 usage={"prompt": 1, "completion": 1, "cached": 0})
+        await assert_structural("turn_key_split", 2201)
+    passed("T-W2-05-06 all thirteen unexplained buckets detect their frozen defect shapes")
+
+
+def _w205_cli(*args: str) -> subprocess.CompletedProcess:
+    env = os.environ.copy()
+    env["DATABASE_URL"] = database.DATABASE_URL
+    env["PYTHONUTF8"] = "1"
+    return subprocess.run(
+        [sys.executable, str(ROOT / "scripts" / "ledger_reconcile.py"), *args],
+        cwd=ROOT,
+        env=env,
+        text=True,
+        encoding="utf-8",
+        capture_output=True,
+        timeout=30,
+        check=False,
+    )
+
+
+async def test_w2_05_scale_snapshot_and_privacy() -> None:
+    reconcile = _w205_reconcile()
+    begin("T-W2-05-07")
+    await _truncate("conversations", "turn_tombstones", "message_tombstones", "session_source_rev")
+    await _w205_insert_event(1, "w205-interleave-a", "user", turn_id=1, turn_key="a")
+    await _w205_insert_event(2, "w205-interleave-b", "user", turn_id=2, turn_key="b")
+    await _w205_insert_event(
+        3, "w205-interleave-a", "assistant", turn_id=1, turn_key="a",
+        usage={"prompt": 1, "completion": 1, "cached": 0},
+    )
+    await _w205_insert_event(
+        4, "w205-interleave-b", "assistant", turn_id=2, turn_key="b",
+        usage={"prompt": 1, "completion": 1, "cached": 0},
+    )
+    interleaved = await reconcile(sample_limit=2)
+    require(_w205_unexplained_total(interleaved) == 0,
+            f"globally interleaved ids were mistaken for deletion/corruption: {interleaved!r}")
+
+    await _truncate("conversations", "turn_tombstones", "message_tombstones", "session_source_rev")
+    await _pool_execute(
+        "INSERT INTO conversations "
+        "(id, session_id, role, content, model, scope_known) "
+        "SELECT 200000 + g, 'w205-scale-' || g::text, 'user', 'scale', 'm', FALSE "
+        "FROM generate_series(1, 501) AS g"
+    )
+    scaled = await reconcile(sample_limit=7)
+    require(scaled["total_rows"] == 501,
+            f"full-table count was capped by session/sample limits: {scaled['total_rows']}")
+    require(_w205_bucket_count(scaled, "explained", "unknown_scope_excluded") == 501,
+            "501 sessions were not all counted")
+    require(len(scaled["explained"]["unknown_scope_excluded"]["ids"]) == 7,
+            "sample_limit must cap ids without capping count")
+
+    def assert_no_truncated(value):
+        if isinstance(value, dict):
+            require("truncated" not in value, "reconcile output grew a truncated pass flag")
+            for child in value.values():
+                assert_no_truncated(child)
+        elif isinstance(value, list):
+            for child in value:
+                assert_no_truncated(child)
+
+    assert_no_truncated(scaled)
+    for invalid in (0, -1, 501):
+        try:
+            await reconcile(sample_limit=invalid)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f"function accepted invalid sample_limit={invalid}")
+        cli = _w205_cli("--json", "--sample-limit", str(invalid))
+        require(cli.returncode == 64,
+                f"CLI invalid sample_limit={invalid} must exit 64, got {cli.returncode}")
+    passed("T-W2-05-07 interleaving is safe, all sessions count, and only samples are capped")
+
+    begin("T-W2-05-08")
+    await _truncate("conversations", "turn_tombstones", "message_tombstones", "session_source_rev")
+    await database.append_turn_events_atomic(
+        "w205-readonly", "u", "a", "m", turn_key="readonly-turn",
+        usage={"prompt": 1, "completion": 1, "cached": 0},
+    )
+    checksum_sql = (
+        "SELECT md5(COALESCE(string_agg(to_jsonb(c)::text, '' ORDER BY id), '')) "
+        "FROM conversations c"
+    )
+    before = await _pool_fetchval(checksum_sql)
+    result = await reconcile(sample_limit=50)
+    after = await _pool_fetchval(checksum_sql)
+    require(before == after, "read-only reconcile changed conversations")
+    source = (ROOT / "database.py").read_text(encoding="utf-8")
+    require(re.search(
+        r"async def reconcile_event_ledger\(.*?transaction\(\s*"
+        r"isolation\s*=\s*['\"]repeatable_read['\"]\s*,\s*readonly\s*=\s*True\s*\)",
+        source,
+        re.S,
+    ), "reconcile does not open a repeatable-read read-only transaction")
+    pool = await database.get_pool()
+    readonly_error = None
+    async with pool.acquire() as conn:
+        try:
+            async with conn.transaction(isolation="repeatable_read", readonly=True):
+                await conn.execute("UPDATE conversations SET model='forbidden' WHERE id=-1")
+        except asyncpg.ReadOnlySQLTransactionError as exc:
+            readonly_error = exc
+    require(readonly_error is not None,
+            "PostgreSQL did not reject an injected UPDATE in the frozen read-only mode")
+    require(result["ok"] is True and _w205_unexplained_total(result) == 0,
+            "clean read-only fixture did not reconcile")
+    passed("T-W2-05-08 reconciliation uses one repeatable-read read-only snapshot and writes nothing")
+
+    begin("T-W2-05-09")
+    await _truncate("conversations", "turn_tombstones", "message_tombstones", "session_source_rev")
+    secret_sid = "W205_SECRET_SESSION_NEVER_PRINT"
+    secret_body = "绝密中文正文 postgresql://secret:pw@host/db sk-secret-never-print"
+    await _w205_insert_event(
+        300001, secret_sid, "user", turn_id=300001, turn_key="secret-turn",
+        source_message_id="secret-user-id", content=secret_body,
+    )
+    await _w205_insert_event(
+        300002, secret_sid, "assistant", turn_id=300001, turn_key="secret-turn",
+        source_message_id="secret-assistant-id", usage=None, content=secret_body,
+    )
+    private_result = await reconcile(session_id=secret_sid, sample_limit=50)
+    require(set(private_result) == {
+        "ok", "total_rows", "roles", "scope", "matrix", "explained", "unexplained",
+    }, f"top-level reconcile keys drifted: {set(private_result)}")
+    require(set(private_result["roles"]) == {"user", "assistant", "other"},
+            "role result keys drifted")
+    require(set(private_result["scope"]) == {"known_global", "known_project", "unknown"},
+            "scope result keys drifted")
+    require(set(private_result["explained"]) == _W205_EXPLAINED,
+            "explained bucket keys drifted")
+    require(set(private_result["unexplained"]) == _W205_UNEXPLAINED,
+            "unexplained bucket keys drifted")
+    require(all(re.fullmatch(
+        r"tid=[01],tkey=[01],smid=[01],known=[01],pid=[01],usage=[01]", key
+    ) for key in private_result["matrix"]),
+            f"fact matrix exposed an unfrozen key: {private_result['matrix']!r}")
+    for group in ("explained", "unexplained"):
+        for payload in private_result[group].values():
+            require(set(payload) == {"count", "ids"}
+                    and isinstance(payload["count"], int)
+                    and not isinstance(payload["count"], bool)
+                    and isinstance(payload["ids"], list)
+                    and all(isinstance(item, int) and not isinstance(item, bool)
+                            for item in payload["ids"]),
+                    f"{group} bucket contains an unsafe leaf: {payload!r}")
+    serialized = json.dumps(private_result, sort_keys=True, ensure_ascii=False)
+    require(all(secret not in serialized for secret in (
+        secret_sid, "绝密中文正文", "postgresql://", "sk-secret-never-print",
+    )), "reconcile return leaked a session id, body, DSN, or API key")
+
+    cli = _w205_cli("--json", "--session", secret_sid, "--sample-limit", "50")
+    require(cli.returncode == 0, f"clean CLI run failed: rc={cli.returncode}, stderr={cli.stderr!r}")
+    try:
+        cli_result = json.loads(cli.stdout)
+    except json.JSONDecodeError as exc:
+        raise AssertionError(
+            f"--json stdout must be exactly one JSON object with no pool chatter: {cli.stdout!r}"
+        ) from exc
+    require(isinstance(cli_result, dict) and cli_result == private_result,
+            "CLI JSON differs from the database function result")
+    require(all(secret not in cli.stdout for secret in (
+        secret_sid, "绝密中文正文", "postgresql://", "sk-secret-never-print",
+    )), "CLI stdout leaked a session id, body, DSN, or API key")
+    passed("T-W2-05-09 return values and exact JSON stdout contain no strings, bodies, or identifiers")
+
+    begin("T-W2-05-10")
+    db_source = (ROOT / "database.py").read_text(encoding="utf-8")
+    tree = ast.parse(db_source)
+    frozen_hashes = {
+        "get_recent_messages": "8c73cc57ba43ede21829fcbf69f303721244cb95cbc66b01d97a58d60876e0d8",
+        "snapshot_recent_conversation": "b6a63c4c8e3871568dcfbf31706e63482a9b4c8c3587d0c4e8469ed7cf9ee51c",
+    }
+    actual_hashes = {
+        node.name: hashlib.sha256(ast.get_source_segment(db_source, node).encode("utf-8")).hexdigest()
+        for node in tree.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name in frozen_hashes
+    }
+    require(actual_hashes == frozen_hashes,
+            f"old ledger readers changed outside W2-05: {actual_hashes!r}")
+    require("W2-05 可从 chat_messages 回填" not in db_source
+            and "可由 W2-05 从 chat_messages 回填" not in db_source,
+            "database comments still promise the abandoned automatic backfill")
+    issues = (ROOT / "KNOWN_ISSUES.md").read_text(encoding="utf-8")
+    for phrase in (
+        "历史账本行不回填",
+        "未知归属行不进新读路径",
+        "未带项目默认全局",
+        "共享底座",
+        "隔离态",
+        "W2-05b",
+    ):
+        require(phrase in issues, f"KNOWN_ISSUES is missing the W2-05 contract: {phrase}")
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    readme_en = (ROOT / "README_EN.md").read_text(encoding="utf-8")
+    require("scripts/ledger_reconcile.py" in readme,
+            "README does not document the read-only reconcile command")
+    require("共享底座" in readme and "私有层" in readme and "完全隔离" not in readme,
+            "Chinese README still overpromises project isolation")
+    require("shared" in readme_en.lower() and "private" in readme_en.lower(),
+            "English README does not describe the shared-base/private-layer contract")
+    require((ROOT / "scripts" / "ledger_reconcile.py").is_file(),
+            "read-only reconciliation CLI is missing")
+    main_source = (ROOT / "main.py").read_text(encoding="utf-8")
+    require("reconcile_event_ledger" not in main_source,
+            "W2-05 accidentally exposed reconciliation through the unauthenticated HTTP app")
+    main_tree = ast.parse(main_source)
+    handlers = []
+    for node in main_tree.body:
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        assigns_ledger = any(
+            isinstance(child, (ast.Assign, ast.AnnAssign))
+            and any(
+                isinstance(target, ast.Name) and target.id == "ledger_ctx"
+                for target in (
+                    child.targets if isinstance(child, ast.Assign) else [child.target]
+                )
+            )
+            for child in ast.walk(node)
+        )
+        if assigns_ledger:
+            handlers.append(node)
+    require(len(handlers) == 1,
+            f"expected one chat handler with ledger_ctx, found {[n.name for n in handlers]}")
+    handler = handlers[0]
+    snapshot_statements = [
+        statement
+        for statement in handler.body
+        if any(
+            isinstance(child, ast.Call)
+            and isinstance(child.func, ast.Name)
+            and child.func.id == "resolve_scope_snapshot"
+            for child in ast.walk(statement)
+        )
+    ]
+    require(len(snapshot_statements) == 1,
+            f"chat handler must create exactly one request scope: {len(snapshot_statements)}")
+    # The call is formatted across several physical lines. Retire raw payload names only
+    # after the complete statement, not halfway through its own argument list.
+    snapshot_end = snapshot_statements[0].end_lineno
+    forbidden_names = []
+    forbidden_body_reads = []
+    for node in ast.walk(handler):
+        if getattr(node, "lineno", 0) <= snapshot_end:
+            continue
+        if isinstance(node, ast.Name) and node.id in {"raw_project_id", "project_id_present"}:
+            forbidden_names.append((node.id, node.lineno))
+        if (isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and isinstance(node.func.value, ast.Name)
+                and node.func.value.id == "body"
+                and node.func.attr in {"get", "pop"}
+                and node.args
+                and isinstance(node.args[0], ast.Constant)
+                and node.args[0].value == "project_id"):
+            forbidden_body_reads.append((node.func.attr, node.lineno))
+    require(not forbidden_names and not forbidden_body_reads,
+            f"chat handler rereads raw project scope after snapshot: "
+            f"names={forbidden_names!r}, body={forbidden_body_reads!r}")
+
+    prompt_calls = [
+        node for node in ast.walk(main_tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "build_system_prompt_with_memories"
+    ]
+    require(prompt_calls and all(
+        any(keyword.arg == "scope" for keyword in call.keywords)
+        for call in prompt_calls
+    ), "a build_system_prompt_with_memories call bypasses the frozen scope")
+
+    drawer_source = (ROOT / "tool_drawer.py").read_text(encoding="utf-8")
+    drawer_tree = ast.parse(drawer_source)
+    frozen_drawer_functions = {
+        "route_tools", "build_tools_for_category", "build_full_fallback_tools",
+        "handle_meta_tool", "execute_drawer_tool",
+    }
+    drawer_signatures = {
+        node.name: {
+            arg.arg for arg in node.args.posonlyargs + node.args.args + node.args.kwonlyargs
+        }
+        for node in drawer_tree.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and node.name in frozen_drawer_functions
+    }
+    require(set(drawer_signatures) == frozen_drawer_functions
+            and all("scope" in args for args in drawer_signatures.values()),
+            f"drawer builders are missing the frozen scope parameter: {drawer_signatures!r}")
+    passed("T-W2-05-10 old readers are byte-frozen and no-backfill/read-only docs are explicit")
+
+
 async def test_memory_notice_contracts() -> None:
     begin("T-MN-K-01")
     failure_results = {
@@ -6733,6 +8072,10 @@ async def run_suite(test_dsn: str) -> None:
         await test_w2_04_handoff_copies(client)
         await test_w2_04_restore_stamp_states(client)
         await test_w2_04_1_ticket_c(client)
+        await test_w2_05_scope_contract(client)
+        await test_w2_05_reconcile_matrix_and_happy_paths(client)
+        await test_w2_05_reconcile_evidence(client)
+        await test_w2_05_scale_snapshot_and_privacy()
         await test_memory_notice_contracts()
         await test_empty_response_resilience_contracts()
 
@@ -6753,6 +8096,7 @@ async def async_main() -> int:
         w2_03_passed = [name for name in PASSED if name.startswith("T-W2-03-")]
         w2_04_passed = [name for name in PASSED if name.startswith("T-W2-04-")]
         ticket_c_passed = [name for name in PASSED if name.startswith("T-C-")]
+        w2_05_passed = [name for name in PASSED if name.startswith("T-W2-05-")]
         memory_notice_passed = [name for name in PASSED if name.startswith("T-MN-K-")]
         empty_response_passed = [name for name in PASSED if name.startswith("T-ER-K-")]
         print(f"\nPASS: {len(legacy_passed)} permanent S1-S6 behavior guards")
@@ -6764,6 +8108,7 @@ async def async_main() -> int:
         print(f"PASS: {len(w2_03_passed)} W2-03 ledger-schema/scope/dark-write guards")
         print(f"PASS: {len(w2_04_passed)} W2-04 session-delete/privacy guards")
         print(f"PASS: {len(ticket_c_passed)} W2-04.1 ticket-C guards")
+        print(f"PASS: {len(w2_05_passed)} W2-05 scope/reconciliation guards")
         print(f"PASS: {len(memory_notice_passed)} memory-notice/failure-propagation guards")
         print(f"PASS: {len(empty_response_passed)} empty-response diagnostic/resilience guards")
         if _MUTES_USED:
