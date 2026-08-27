@@ -70,6 +70,7 @@ jobs:
           python scripts/test_mcp_calendar_sections.py
           python scripts/test_calendar_period_guards.py
           python scripts/test_admin_panel_cache.py
+          node scripts/test_admin_panel_nav.mjs
           node scripts/test_calendar_period_defaults.mjs
 
       - name: 运行 S1-S6 永久真库行为守卫

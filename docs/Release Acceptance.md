@@ -32,7 +32,7 @@
 | # | 测试 | 执行方式 | 通过标准 | 证据 | 结论 |
 |---|---|---|---|---|---|
 | A1 | Python 语法检查 | CI：`syntax-check` job（"Python 语法自检"）/ 本地 `python -m compileall -q .` | job success；本地零输出 | Run 号 | |
-| A2 | 全部既有回归脚本 | CI：**`behavior-tests` job 的"运行既有开源回归脚本"步骤** / 本地逐个跑 `scripts/test_*.py` 与 `.mjs`（现 12 套） | 该步骤 success；本地全部 exit 0 | Run 号或输出尾行 | |
+| A2 | 全部既有回归脚本 | CI：**`behavior-tests` job 的"运行既有开源回归脚本"步骤** / 本地逐个跑 `scripts/test_*.py` 与 `.mjs`（现 13 套） | 该步骤 success；本地全部 exit 0 | Run 号或输出尾行 | |
 | A3 | PostgreSQL 16 真库守卫 | CI：`behavior-tests` job 的"运行 S1-S6 永久真库行为守卫"步骤 / 本地 `KIWI_TEST_DATABASE_URL=… python scripts/test_kiwi_safety_sync.py` | 尾行 `PASS: N total permanent behavior guards`（N=当前守卫总数，写就时 107）；本地再跑一遍取第二证据 | Run 号 + 本地尾行 | |
 | A4 | Docker 镜像构建 | 人工/CI：`docker build -t kiwi-mem:acc .` | 构建成功无报错 | 命令输出末行 | |
 | A5 | 空数据库首次安装 | 人工：一次性目录 `docker compose -p kiwi-acc up -d`（空卷）→ 等健康 | 容器全 healthy；启动日志无 Traceback；`GET /` 返回 running；`/admin` 能打开 | 日志摘要 + 截图 | |
