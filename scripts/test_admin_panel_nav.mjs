@@ -138,6 +138,59 @@ check(
   `hidden=${[...hidden]} filtered=${filtered}`,
 );
 
+await nonEmptyController.refresh();
+const inputListeners = new Map();
+const searchInput = {
+  value: '',
+  addEventListener(type, listener) { inputListeners.set(type, listener); },
+  blur() {},
+};
+const searchDrop = {
+  hidden: true,
+  innerHTML: '',
+  addEventListener() {},
+};
+const searchContainer = {
+  set innerHTML(_value) {},
+  querySelector(selector) {
+    if (selector === '#gs-input') return searchInput;
+    if (selector === '#gs-drop') return searchDrop;
+    return null;
+  },
+  contains() { return true; },
+};
+globalThis.document = { addEventListener() {} };
+globalThis.__KIWI_NAV_TEST__ = nav;
+const runnableSearchSource = searchSource
+  .replace(
+    "import { CONFIG_META, CONFIG_PAGES } from './config-schema.js';",
+    'const CONFIG_META = {}; const CONFIG_PAGES = {};',
+  )
+  .replace(
+    "import { ROUTE_INDEX } from './routes.js';",
+    "const ROUTE_INDEX = { dashboard: { icon: 'D', label: '仪表盘', group: '概览' }, projects: { icon: 'P', label: '项目分隔', group: '记忆机制' } };",
+  )
+  .replace(
+    "import { onNavVisibilityChange, visibleRouteEntries } from './nav-visibility.mjs';",
+    'const { onNavVisibilityChange, visibleRouteEntries } = globalThis.__KIWI_NAV_TEST__;',
+  );
+const searchModule = await import(
+  `data:text/javascript;base64,${Buffer.from(runnableSearchSource).toString('base64')}`
+);
+searchModule.initSearch(searchContainer);
+searchInput.value = '项目';
+inputListeners.get('input')();
+const wasVisible = searchDrop.innerHTML.includes('项目分隔');
+await emptyController.refresh();
+const vanishedWhileOpen = !searchDrop.innerHTML.includes('项目分隔');
+await nonEmptyController.refresh();
+const returnedWhileOpen = searchDrop.innerHTML.includes('项目分隔');
+check(
+  'T-P-DOM-05b open search refreshes with visibility',
+  wasVisible && vanishedWhileOpen && returnedWhileOpen,
+  `before=${wasVisible} hidden=${vanishedWhileOpen} shown=${returnedWhileOpen}`,
+);
+
 const routesSource = await fs.readFile(path.join(PANEL_JS, 'routes.js'), 'utf8');
 const routesModule = await import(`data:text/javascript;base64,${Buffer.from(routesSource).toString('base64')}`);
 check(
@@ -191,4 +244,4 @@ if (failed.length) {
   console.error(`FAIL: ${failed.length} admin panel nav guards failed`);
   process.exit(1);
 }
-console.log('PASS: 8 admin panel nav behavior guards');
+console.log('PASS: 9 admin panel nav behavior guards');
