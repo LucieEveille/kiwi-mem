@@ -95,6 +95,61 @@ def main_test():
     orphans = sorted(page_files - set(keys))
     check("场景6 没有孤儿页面文件", not orphans, f"无人引用：{orphans}")
 
+    # ---- 票 P：项目页按数据显隐的静态接线守卫 ----
+    expected_nav_keys = {
+        "dashboard", "providers", "websearch", "tools", "persona", "profile",
+        "memories", "categories", "metabolism", "dream", "calendar",
+        "compression", "handoff", "projects", "gateway", "sync", "security",
+        "rawconfig",
+    }
+    expected_lede_keys = {
+        "providers", "websearch", "tools", "persona", "profile", "memories",
+        "categories", "metabolism", "dream", "calendar", "compression",
+        "handoff", "projects", "gateway", "sync", "security", "rawconfig",
+    }
+    ledes_block = routes_js.split("export const LEDES = {", 1)[1].split("};", 1)[0]
+    lede_keys = set(re.findall(r"^\s*([a-z0-9_]+):", ledes_block, re.MULTILINE))
+    project_nav = re.search(
+        r"\{\s*key:\s*'projects'[^}]*hideWhenEmpty:\s*'/sync/projects'[^}]*\}",
+        routes_js,
+        re.DOTALL,
+    )
+    check(
+        "T-P-01 项目导航显隐声明且 key/LEDES 集合不漂移",
+        bool(project_nav) and set(keys) == expected_nav_keys and lede_keys == expected_lede_keys,
+        f"hideWhenEmpty={bool(project_nav)} nav={sorted(keys)} ledes={sorted(lede_keys)}",
+    )
+
+    style_css = open(os.path.join(panel, "css", "style.css"), encoding="utf-8").read()
+    hidden_rule = re.search(
+        r"\.nav-item\[hidden\]\s*\{(?P<body>[^}]*)\}", style_css, re.DOTALL
+    )
+    hidden_rule_body = hidden_rule.group("body") if hidden_rule else ""
+    check(
+        "T-P-02 hidden 属性覆盖 nav-item 的 flex 显示",
+        bool(hidden_rule)
+        and re.search(r"display\s*:\s*none\s*!important\s*;", hidden_rule_body) is not None,
+        "缺少 .nav-item[hidden] { display:none !important; }",
+    )
+
+    app_js = open(os.path.join(panel, "js", "app.js"), encoding="utf-8").read()
+    fetch_visibility = re.search(
+        r"fetchVisibility\s*:\s*async\s+\w+\s*=>\s*\{(?P<body>.*?)\n\s*\}",
+        app_js,
+        re.DOTALL,
+    )
+    fetch_visibility_body = fetch_visibility.group("body") if fetch_visibility else ""
+    catch_block = re.search(r"catch\s*\{(?P<body>[^}]*)\}", fetch_visibility_body, re.DOTALL)
+    catch_body = catch_block.group("body") if catch_block else ""
+    check(
+        "T-P-03 项目查询失败保持导航显示",
+        "./nav-visibility.mjs" in app_js
+        and bool(catch_block)
+        and "return false" in catch_body
+        and "hidden = true" not in catch_body,
+        "缺少显隐模块接线，或 catch 分支没有 fail-open 显示",
+    )
+
     print()
     if FAILED:
         print(f"❌ {len(FAILED)} 项未通过：")

@@ -39,7 +39,7 @@ set -euo pipefail
 python -m compileall -q .
 git diff --check
 
-# 12 套既有回归：与 .github/workflows/ci.yml 保持一致，任一失败立即停止。
+# 13 套既有回归：与 .github/workflows/ci.yml 保持一致，任一失败立即停止。
 python scripts/test_drawer_stability.py
 python scripts/test_gateway_tool_streaming.py
 python scripts/test_stream_capture.py
@@ -51,6 +51,7 @@ python scripts/test_calendar_delete_atomicity.py
 python scripts/test_mcp_calendar_sections.py
 python scripts/test_calendar_period_guards.py
 python scripts/test_admin_panel_cache.py
+node scripts/test_admin_panel_nav.mjs
 node scripts/test_calendar_period_defaults.mjs
 
 # 真库守卫（需要本机 PostgreSQL 16；没有则依赖 CI 结果并在交付里注明）

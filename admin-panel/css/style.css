@@ -155,6 +155,7 @@ h1,h2,h3,h4 { margin:0; font-weight:700; }
   transition:background .12s,color .12s,box-shadow .12s;
   white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
 }
+.nav-item[hidden] { display:none !important; }
 .nav-item:hover { background:var(--surface-hover); color:var(--text); }
 /* 选中态：浅绿底 + 左侧绿条 */
 .nav-item.active {

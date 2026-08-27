@@ -7,6 +7,7 @@
 // ============================================================
 import { CONFIG_META, CONFIG_PAGES } from './config-schema.js';
 import { ROUTE_INDEX } from './routes.js';
+import { onNavVisibilityChange, visibleRouteEntries } from './nav-visibility.mjs';
 
 // CONFIG_PAGES 的 key 大多就是路由页；例外在此映射
 const PAGE_ALIAS = { reminderTools: 'tools' };
@@ -14,6 +15,11 @@ const PAGE_ALIAS = { reminderTools: 'tools' };
 const TAB_PAGES = { memories: 'settings', dream: 'settings', calendar: 'settings' };
 
 let INDEX = null;
+let ACTIVE_SEARCH_REFRESH = null;
+onNavVisibilityChange(_event => {
+  INDEX = null;
+  ACTIVE_SEARCH_REFRESH?.();
+});
 
 function keyPos(key) {
   for (const [pk, def] of Object.entries(CONFIG_PAGES)) {
@@ -29,7 +35,7 @@ function keyPos(key) {
 function buildIndex() {
   if (INDEX) return INDEX;
   INDEX = [];
-  for (const [key, meta] of Object.entries(ROUTE_INDEX)) {
+  for (const [key, meta] of visibleRouteEntries(ROUTE_INDEX)) {
     INDEX.push({ type:'page', icon: meta.icon, label: meta.label, sub: meta.group, page: key, hay: (meta.label + ' ' + key).toLowerCase() });
   }
   for (const [key, m] of Object.entries(CONFIG_META)) {
@@ -131,7 +137,21 @@ export function initSearch(container) {
       </div>`).join('');
   };
 
-  input.addEventListener('input', () => { results = search(input.value); cursor = -1; render(); });
+  const refreshResults = () => {
+    results = search(input.value);
+    cursor = -1;
+  };
+  const refreshForVisibility = () => {
+    const wasOpen = !drop.hidden;
+    refreshResults();
+    if (wasOpen) render();
+  };
+  ACTIVE_SEARCH_REFRESH = refreshForVisibility;
+
+  input.addEventListener('input', () => {
+    refreshResults();
+    render();
+  });
   input.addEventListener('keydown', (e) => {
     if (e.key === 'ArrowDown') { e.preventDefault(); cursor = Math.min(cursor + 1, results.length - 1); render(); }
     else if (e.key === 'ArrowUp') { e.preventDefault(); cursor = Math.max(cursor - 1, 0); render(); }

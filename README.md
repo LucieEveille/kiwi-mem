@@ -76,6 +76,8 @@ kiwi-mem 内置了 20 多个工具（记忆搜索、日历查询、提醒、联�
 
 你不需要做任何设置，隔离是自动的。
 
+项目由支持它的客户端传入和使用；管理面板仅在已有项目时显示「项目分隔」页，直达 `#/projects` 仍可增删改。
+
 ---
 
 ## 适合谁用
@@ -505,6 +507,7 @@ GitHub 上那个 fork 留着不管就行，删不删都不影响服务器。
 - 历史账本行不回填；未知归属行保留为历史档，不进入后续新读路径
 - 命令只返回计数与有限的数字行 ID 样本，详见 [`docs/event-ledger-scope-and-reconciliation.md`](docs/event-ledger-scope-and-reconciliation.md)
 - 无需手动配置，创建项目后自动生效
+- 项目由支持它的客户端传入和使用；管理面板仅在已有项目时显示该页，直达 `#/projects` 仍可增删改
 
 ### 🔧 工具与扩展
 - MCP Server（20+ 工具）+ MCP Client
