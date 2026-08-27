@@ -19,6 +19,7 @@ import uuid
 import asyncio
 import copy
 import math
+import inspect
 import httpx
 from contextlib import asynccontextmanager
 from urllib.parse import urlparse
@@ -28,7 +29,8 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from database import (
     init_tables, close_pool, get_pool, save_message, delete_latest_assistant_message, search_memories, save_memory,
-    append_turn_events_atomic, normalize_usage_for_storage as _normalize_usage_for_storage,
+    append_turn_events_atomic, resolve_scope_snapshot,
+    normalize_usage_for_storage as _normalize_usage_for_storage,
     track_memory_recall, touch_permanent_memories, search_scenes,
     get_all_memories_count, get_recent_memories, get_recent_conversation, delete_memory,
     batch_delete_memories_guarded, clear_all_memories, update_memory, check_memory_duplicate,
@@ -730,7 +732,11 @@ def _rebalance_locked_memory_candidates(memories: list, max_inject: int, locked_
     return guaranteed + competitive
 
 
-async def build_system_prompt_with_memories(user_message: str, user_msg_count: int = 1, project_id: str = None, conversation_id: str = None, is_regenerate: bool = False) -> tuple:
+async def build_system_prompt_with_memories(user_message: str, user_msg_count: int = 1,
+                                            project_id: str = None,
+                                            conversation_id: str = None,
+                                            is_regenerate: bool = False,
+                                            scope: dict = None) -> tuple:
     """
     构建带记忆的 system prompt（v5.5 日历层级注入 + v5.8 项目注入 + 缓存优化）
     
@@ -748,6 +754,11 @@ async def build_system_prompt_with_memories(user_message: str, user_msg_count: i
     7. 项目文件相关片段（语义搜索）
     8. Dream 犯困提示
     """
+    context_mode = (scope or {}).get(
+        "context_mode", "live_project" if project_id else "global")
+    if scope is not None:
+        project_id = scope.get("context_project_id")
+    quarantined = context_mode == "quarantined_project"
     active_prompt = await get_active_system_prompt()
 
     # ---- 情绪标记指示（静态，系统级指令）----
@@ -1005,7 +1016,7 @@ async def build_system_prompt_with_memories(user_message: str, user_msg_count: i
         # ---- ⑥ 无缝换窗 v2 ----
         try:
             handoff_on = await get_config_bool("handoff_enabled", fallback=True)
-            if handoff_on and user_msg_count == 1 and not is_regenerate:
+            if handoff_on and not quarantined and user_msg_count == 1 and not is_regenerate:
                 from database import get_handoff_source, get_handoff_data
 
                 source = await get_handoff_source(
@@ -1360,7 +1371,7 @@ def _should_push_memory_event(result) -> bool:
     return has_saved or result.get("action") in ("extract_failed", "error")
 
 
-async def process_memories_background(session_id: str, user_msg: str, assistant_msg: str, model: str, emotion_level: str = "normal", project_id: str = None, is_regenerate: bool = False, *, extract_enabled: bool = True, usage: dict = None, turn_key: str = None, client_gave_conv_id: bool = False, project_id_present: bool = False, payload_project_id=None, user_message_id: str = None,
+async def process_memories_background(session_id: str, user_msg: str, assistant_msg: str, model: str, emotion_level: str = "normal", project_id: str = None, is_regenerate: bool = False, *, scope: dict = None, extract_enabled: bool = True, usage: dict = None, turn_key: str = None, client_gave_conv_id: bool = False, project_id_present: bool = False, payload_project_id=None, user_message_id: str = None,
                                      assistant_message_id: str = None,
                                      reset_generation: int = None):
     """
@@ -1385,6 +1396,16 @@ async def process_memories_background(session_id: str, user_msg: str, assistant_
     - 接受 project_id 参数，项目内对话提取的记忆自动打上 project_id 标签
     """
     global _conversation_counter
+    context_mode = (scope or {}).get(
+        "context_mode", "live_project" if project_id else "global")
+    if scope is not None:
+        project_id = scope.get("context_project_id")
+        scope_snapshot = tuple(scope[key] for key in (
+            "scope_known", "ledger_project_id", "context_mode",
+            "context_project_id", "event_code",
+        ))
+    else:
+        scope_snapshot = None
 
     # 情绪解析已在调用方用原始文本完成（emotion_level 已传入），
     # 这里把标记滤掉，保证存储和提取用的都是干净文本。
@@ -1405,6 +1426,7 @@ async def process_memories_background(session_id: str, user_msg: str, assistant_
                 user_message_id=user_message_id,
                 assistant_message_id=assistant_message_id,
                 reset_generation=reset_generation,
+                scope_snapshot=scope_snapshot,
             )
         else:
             ledger_result = await append_legacy_turn_if_not_deleted(
@@ -1426,7 +1448,10 @@ async def process_memories_background(session_id: str, user_msg: str, assistant_
 
         # 项目对话默认不提取碎片（对话已保存，但不走记忆提取流程）
         # 未来做"碎片进全局"开关后，这里加条件判断
-        if project_id:
+        if context_mode == "quarantined_project":
+            print("event=memory_extract_skipped reason=scope_unverified increment=1")
+            return {"action": "skip_unverified"}
+        if context_mode == "live_project":
             print(f"📂 项目对话，跳过记忆提取（project_id={project_id}）")
             return {"action": "skip_project", "project_id": project_id}
 
@@ -1931,6 +1956,26 @@ async def _apply_openrouter_sticky_routing(body: dict, is_openrouter: bool, mode
         print("🔀 Provider 偏好：优先 Anthropic 直连（prompt_cache_enabled=false）")
 
 
+async def _request_session_identity(conversation_id, messages):
+    """Choose the stable request session before scope/prompt/provider work begins."""
+    if conversation_id:
+        return conversation_id, False
+    if await get_config_bool("session_identity_v2_enabled", fallback=False):
+        session_id = "auto-r-" + uuid.uuid4().hex
+        print("event=session_generated increment=1")
+        return session_id, True
+    first_user = next(
+        (
+            _content_text_for_prompt(message.get("content"))
+            for message in messages
+            if message.get("role") == "user"
+            and not _is_compressed_summary_message(message)
+        ),
+        "",
+    ) or ""
+    return "auto-" + hashlib.md5(first_user.encode("utf-8")).hexdigest()[:8], False
+
+
 @app.post("/v1/chat/completions")
 async def chat_completions(request: Request):
     """核心转发接口"""
@@ -1982,8 +2027,20 @@ async def chat_completions(request: Request):
     # W2-03：键存在性先于取值——缺键 / 显式 null / 空串是三种不同输入，
     # 归属判定必须能区分它们，所以在 pop 抹平之前先记下来。
     project_id_present = "project_id" in body
-    raw_project_id = body.get("project_id")
-    project_id = body.pop('project_id', None) or None
+    raw_project_id = body.pop("project_id", None)
+    if not project_id_present or raw_project_id is None:
+        project_id = None
+    elif (not isinstance(raw_project_id, str)
+          or isinstance(raw_project_id, bool)
+          or not raw_project_id.strip()
+          or len(raw_project_id) > 128):
+        return JSONResponse(status_code=400, content={
+            "error": "invalid_project_id",
+            "code": "invalid_project_id",
+        })
+    else:
+        # The original string is the identity. strip() is validation only.
+        project_id = raw_project_id
     # v6.0：前端对话 ID，用于无缝换窗时避免衔接到当前对话自身
     conversation_id = body.pop('conversation_id', None) or None
     is_regenerate = bool(body.pop('is_regenerate', False))
@@ -2039,10 +2096,28 @@ async def chat_completions(request: Request):
             "code": "invalid_message_identity",
         })
 
+    session_id, session_generated = await _request_session_identity(conversation_id, messages)
+    scope_values = await resolve_scope_snapshot(
+        session_id,
+        client_gave_conv_id=client_gave_conv_id,
+        project_id_present=project_id_present,
+        payload_project_id=raw_project_id,
+    )
+    scope = dict(zip((
+        "scope_known",
+        "ledger_project_id",
+        "context_mode",
+        "context_project_id",
+        "event_code",
+    ), scope_values))
+    if scope["event_code"]:
+        print(f"event={scope['event_code']} increment=1")
+    # From here onward every consumer reads this immutable snapshot. The raw request
+    # identity is deliberately retired before prompt/tool/provider work starts.
+    project_id = scope["context_project_id"]
+
     ledger_ctx = {
-        "client_gave_conv_id": client_gave_conv_id,
-        "project_id_present": project_id_present,
-        "payload_project_id": raw_project_id,
+        "scope": scope,
         "turn_key": turn_key,
         "user_message_id": user_message_id,
         "assistant_message_id": assistant_message_id,
@@ -2121,7 +2196,13 @@ async def chat_completions(request: Request):
         # v5.6：计算用户消息数（用于无缝切窗判断是第几轮）
         user_msg_count = _count_real_user_messages(messages)
         if mem_enabled and user_message:
-            enhanced_prompt, prompt_meta = await build_system_prompt_with_memories(user_message, user_msg_count=user_msg_count, project_id=project_id, conversation_id=conversation_id, is_regenerate=is_regenerate)
+            enhanced_prompt, prompt_meta = await build_system_prompt_with_memories(
+                user_message,
+                user_msg_count=user_msg_count,
+                conversation_id=conversation_id,
+                is_regenerate=is_regenerate,
+                scope=scope,
+            )
         else:
             # v5.4：即使记忆关闭，也从数据库优先读取 system prompt（降级到文件版本）
             enhanced_prompt = await get_active_system_prompt() or SYSTEM_PROMPT
@@ -2311,33 +2392,7 @@ async def chat_completions(request: Request):
     if mcp_mode not in ("off", "auto", "manual"):
         mcp_mode = "auto"
     
-    # ---------- 生成 session ID ----------
-    # 优先用前端传来的 conversation_id：工具抽屉的"手动展开工具"状态按 session 存，
-    # 设计上是"下一轮对话生效"。session_id 必须跨轮稳定，否则每轮新 uuid 会丢掉
-    # 上一轮展开的类别，_drawer_request_tools 永远不会真正生效。
-    # Bug #3：前端不传 conversation_id 时，退回用「首条用户消息」的 hash —— 它在同一段
-    # 对话的多轮间稳定（不像 uuid 每轮都变），让上面说的“跨轮稳定”在无 conversation_id
-    # 时也成立。
-    # W2-03 身份 v2（默认关）：短 hash 会把两段不同对话的相同开场白合并成同一 session，
-    # 事件、提取游标、工具抽屉与 OpenRouter 黏性路由会一起串线。开关打开后改用
-    # auto-r- + 完整 uuid4，并把身份回传给客户端，让它下轮带回来继续同一会话。
-    session_generated = False
-    if conversation_id:
-        session_id = conversation_id
-    elif await get_config_bool("session_identity_v2_enabled", fallback=False):
-        session_id = "auto-r-" + uuid.uuid4().hex
-        session_generated = True
-        print("event=session_generated increment=1")
-    else:
-        first_user = next(
-            (
-                _content_text_for_prompt(m.get("content"))
-                for m in messages
-                if m.get("role") == "user" and not _is_compressed_summary_message(m)
-            ),
-            "",
-        ) or ""
-        session_id = "auto-" + hashlib.md5(first_user.encode("utf-8")).hexdigest()[:8]
+    # session_id and scope were frozen before any prompt/provider/tool work.
     
     # 请求 LLM 在流式响应中包含 token 用量
     if body.get("stream"):
@@ -2403,7 +2458,7 @@ async def chat_completions(request: Request):
                 user_embedding=user_embedding,
                 mem_enabled=mem_enabled,
                 search_enabled=bool(do_search_auto),
-                project_id=project_id,
+                scope=scope,
                 mcp_mode=mcp_mode,
                 reminder_tools_enabled=reminder_tools_enabled,
             )
@@ -2427,7 +2482,7 @@ async def chat_completions(request: Request):
                     reminder_tools_enabled=reminder_tools_enabled,
                     mcp_mode=mcp_mode,
                     pinned_external=pinned_external,
-                    project_id=project_id,
+                    scope=scope,
                 )
                 openai_tools.extend(fallback_tools)
                 tool_map.update(fallback_map)
@@ -2481,7 +2536,8 @@ async def chat_completions(request: Request):
             print(f"⚠️ 联网搜索 auto 模式已请求但未配置搜索引擎")
 
     # v5.8：对话搜索工具（始终可用，让模型能主动搜索过去的对话）
-    if not drawer_enabled and mem_enabled:
+    if (not drawer_enabled and mem_enabled
+            and scope["context_mode"] != "quarantined_project"):
         openai_tools.append({
             "type": "function",
             "function": {
@@ -2503,7 +2559,16 @@ async def chat_completions(request: Request):
                 },
             },
         })
-        tool_map["_gateway_search_conversations"] = {"type": "gateway_builtin", "handler": "search_conversations", "project_id": project_id}
+        conversation_project = (
+            "none" if scope["context_mode"] == "global"
+            else scope["context_project_id"]
+        )
+        tool_map["_gateway_search_conversations"] = {
+            "type": "gateway_builtin",
+            "handler": "search_conversations",
+            "project_id": conversation_project,
+            "scope": scope,
+        }
         print(f"🔍 对话搜索工具已注册")
 
     # 提醒系统工具：配置级常驻，独立于记忆开关。
@@ -2748,6 +2813,9 @@ async def _execute_gateway_tool(tool_name: str, arguments: dict, tool_info: dict
     # ── v5.8：对话搜索工具 ──
 
     if tool_name in ("_gateway_search_conversations", "gateway_search_conversations"):
+        tool_scope = tool_info.get("scope") or {}
+        if tool_scope.get("context_mode") == "quarantined_project":
+            return '[tool_error] {"code":"scope_quarantined"}', extra
         query = arguments.get("query", "")
         if not query:
             return "搜索关键词为空", extra
@@ -2902,6 +2970,7 @@ async def _stream_with_tools(messages, tools, tool_map, model, temperature, tool
     tool_map["_drawer_return_tools"] = {"type": "meta", "handler": "drawer_meta", "legacy": True}
 
     _api_url = api_url or API_BASE_URL
+    scope = (ledger_ctx or {}).get("scope")
     _api_key = api_key or API_KEY
 
     # 与主请求链路同口径：用 api_format（权威来源）+ URL 判断收敛成两个布尔
@@ -3139,7 +3208,11 @@ async def _stream_with_tools(messages, tools, tool_map, model, temperature, tool
         async def _run_drawer(p):
             try:
                 from tool_drawer import execute_drawer_tool, record_tool_use
-                result_text, extra_meta = await execute_drawer_tool(p["name"], p["args"])
+                if "scope" in inspect.signature(execute_drawer_tool).parameters:
+                    result_text, extra_meta = await execute_drawer_tool(
+                        p["name"], p["args"], scope=scope)
+                else:  # compatibility for injected legacy executors in integration tests
+                    result_text, extra_meta = await execute_drawer_tool(p["name"], p["args"])
                 tool_results[p["id"]] = result_text
                 tool_extras[p["id"]] = extra_meta or {}
                 record_tool_use(session_id, p["name"])
@@ -3160,6 +3233,7 @@ async def _stream_with_tools(messages, tools, tool_map, model, temperature, tool
                     mcp_mode=tool_info.get("mcp_mode"),
                     pinned_external=tool_info.get("pinned_external"),
                     approved_categories=approved_categories,
+                    scope=scope,
                 )
                 tool_results[p["id"]] = result_text
                 tool_extras[p["id"]] = {}
@@ -3225,7 +3299,7 @@ async def _stream_with_tools(messages, tools, tool_map, model, temperature, tool
                 if _newly:
                     _existing = {t["function"]["name"] for t in tools if t.get("function")}
                     for _cat in _newly:
-                        _schemas, _tmap = build_tools_for_category(_cat, project_id=project_id)
+                        _schemas, _tmap = build_tools_for_category(_cat, scope=scope)
                         for _s in _schemas:
                             _nm = _s.get("function", {}).get("name")
                             if _nm and _nm not in _existing:

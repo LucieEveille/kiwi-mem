@@ -70,9 +70,9 @@ The Tool Drawer takes a smarter approach: for each message, it quickly figures o
 
 Off by default. Turn it on in the admin panel under Config if you want it.
 
-### 🔒 Projects stay in their lane
+### 🔒 A shared base with private project layers
 
-If you use the project feature to separate different contexts (work in one project, daily life in another, fiction writing in a third), their memories are now fully isolated. Client info from your work project won't leak into casual conversations, Dream only consolidates fragments within the same project, and daily digests and locked memories follow the same rule.
+If you use projects to separate contexts (work, daily life, fiction), global memories, calendar pages, and Dream scenes form a shared base for every chat. Each project adds a private layer of instructions, files, project memories, and project conversations. Private project content never flows into global chats or another project.
 
 No setup needed — isolation is automatic.
 
@@ -312,8 +312,14 @@ Memory import is being rebuilt and will return in a future version in a smarter 
 - Off by default, one-click toggle in admin panel
 
 ### 🔒 Project memory isolation
-- Different projects have fully isolated memories
-- Dream, daily digest, and locked memory injection all respect project scope
+- Global memories, calendar pages, and Dream scenes are a shared base
+- Projects add private instructions, files, memories, and conversations on top
+- Private project content never flows into global chats or another project
+
+### 🧾 Read-only event-ledger audit
+- `python scripts/ledger_reconcile.py --json` checks the complete ledger in one consistent read-only snapshot
+- Historical rows are not backfilled; unknown-scope rows remain an archive and stay out of future readers
+- Output contains counts and bounded numeric row-ID samples only; see [`docs/event-ledger-scope-and-reconciliation.md`](docs/event-ledger-scope-and-reconciliation.md)
 - No manual config needed — automatic on project creation
 
 ### 🔧 Tools & extensions

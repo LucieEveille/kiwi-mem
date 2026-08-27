@@ -1131,7 +1131,8 @@ async def _sweep_unlinked_legacy_rows_tx(conn, session_id: str) -> int:
     露露裁决（v3.2）：能不能说清"这一行来自哪句话"，只看 `source_message_id` 一个字段。
     turn_key 只说得清"哪一轮"——闸门关时代的行连轮都没有，W2-03 时代的行有轮无 ID，
     两种都无法证明被删的那句话不在其中。所以这个会话只要发生一次删除，就把所有无关联
-    的行一并清掉：账本是派生物，W2-05 可以从 chat_messages 回填，而"多删"永远不会让
+    的行一并清掉：账本是派生物；W2-05 裁决不回填，无关联行按历史档处理，见
+    KNOWN_ISSUES。"多删"永远不会让
     删掉的话复活。带关联的行一行不动——它们能自证来自哪条消息。
     """
     swept = await conn.execute(
@@ -1505,17 +1506,11 @@ async def snapshot_recent_conversation(limit: int = 20) -> dict:
 
 async def _resolve_scope_tx(conn, session_id: str, *, client_gave_conv_id: bool,
                             project_id_present: bool, payload_project_id):
-    """在事务内判定本轮事件的归属，返回 (scope_known, project_id, event_code|None)。
+    """在事务内生成本轮唯一 scope 快照的五个冻结字段。
 
-    七行权威表（判定与写入共用同一事务快照）：
-      1. metadata 有且项目存在        → TRUE + metadata 值（payload 不一致仍以 metadata 为准）
-      2. metadata 有但项目已删        → TRUE + 原 project_id（历史归属是事实；TRUE+非空永不进全局）
-      3. metadata 有且 project_id 空  → TRUE + NULL（明确全局）
-      4. 服务端生成 session + 显式 null → TRUE + NULL（当轮唯一证据，采信）
-      5. 服务端生成 session + 有效项目 → TRUE + payload 值
-      6. 客户端给了 conversation_id 但 metadata 查无 → FALSE + NULL（无论 payload 写什么）
-      7. 其余（缺键 / 空串 / 项目不存在）→ FALSE + NULL
-    未经服务端验证的 payload 永不升格为权威：这正是行 6 与行 5 的分界。
+    返回 ``(scope_known, ledger_project_id, context_mode,
+    context_project_id, event_code)``。账本归属记录历史事实；读取授权只给仍存活的
+    项目。隔离态保留全局生活底座，但绝不读取已删/未验证项目的私有残留。
     """
     metadata = await conn.fetchrow(
         "SELECT project_id FROM chat_conversations WHERE id = $1", session_id
@@ -1527,27 +1522,316 @@ async def _resolve_scope_tx(conn, session_id: str, *, client_gave_conv_id: bool,
                 "SELECT EXISTS(SELECT 1 FROM chat_projects WHERE id = $1)", meta_pid
             )
             if not project_alive:
-                return True, meta_pid, "scope_project_missing"
+                return (True, meta_pid, "quarantined_project", None,
+                        "scope_project_missing")
             if project_id_present and payload_project_id != meta_pid:
-                return True, meta_pid, "scope_mismatch"
-            return True, meta_pid, None
-        return True, None, None
+                return (True, meta_pid, "live_project", meta_pid,
+                        "scope_mismatch")
+            return True, meta_pid, "live_project", meta_pid, None
+        if project_id_present and payload_project_id is not None:
+            return True, None, "global", None, "scope_mismatch"
+        return True, None, "global", None, None
 
-    if client_gave_conv_id:
-        # 同步缺口：会话身份来自客户端却查不到 metadata，无法证实归属
-        return False, None, "scope_unverified"
+    # 会话 ID 的来源不改变项目能否被数据库验证。参数保留在签名中，供既有
+    # 调用方与守卫明确记录入口事实。
+    _ = client_gave_conv_id
+    if not project_id_present:
+        return True, None, "global", None, "scope_default_global"
+    if payload_project_id is None:
+        return True, None, "global", None, None
+    if (isinstance(payload_project_id, str)
+            and payload_project_id.strip()
+            and len(payload_project_id) <= 128):
+        payload_alive = await conn.fetchval(
+            "SELECT EXISTS(SELECT 1 FROM chat_projects WHERE id = $1)", payload_project_id
+        )
+        if payload_alive:
+            return (True, payload_project_id, "live_project", payload_project_id,
+                    "scope_payload_trusted")
+    return False, None, "quarantined_project", None, "scope_unverified"
 
-    if project_id_present:
+
+async def resolve_scope_snapshot(session_id: str, *, client_gave_conv_id: bool,
+                                 project_id_present: bool, payload_project_id):
+    """Resolve one immutable request scope before prompt/tool/provider work begins."""
+    # Pure ASGI/tool-stream regression fixtures intentionally run without PostgreSQL.
+    # In that environment only the two database-independent outcomes are possible:
+    # ordinary missing/null input is global; any claimed project fails closed.
+    if not DATABASE_URL:
+        if not project_id_present:
+            return True, None, "global", None, "scope_default_global"
         if payload_project_id is None:
-            return True, None, None
-        if payload_project_id:
-            payload_alive = await conn.fetchval(
-                "SELECT EXISTS(SELECT 1 FROM chat_projects WHERE id = $1)", payload_project_id
+            return True, None, "global", None, None
+        return False, None, "quarantined_project", None, "scope_unverified"
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        async with conn.transaction(isolation="repeatable_read", readonly=True):
+            return await _resolve_scope_tx(
+                conn,
+                session_id,
+                client_gave_conv_id=client_gave_conv_id,
+                project_id_present=project_id_present,
+                payload_project_id=payload_project_id,
             )
-            if payload_alive:
-                return True, payload_project_id, "scope_payload_trusted"
-        return False, None, "scope_unverified"
-    return False, None, None
+
+
+async def _reconcile_bucket_tx(conn, ids_sql: str, session_id: str,
+                               sample_limit: int) -> dict:
+    """Count every defect row/group while returning only bounded integer samples."""
+    row = await conn.fetchrow(
+        f"""
+        WITH defects AS ({ids_sql}), sampled AS (
+            SELECT id FROM defects ORDER BY id LIMIT $2
+        )
+        SELECT (SELECT COUNT(*) FROM defects) AS count,
+               COALESCE((SELECT array_agg(id ORDER BY id) FROM sampled),
+                        ARRAY[]::BIGINT[]) AS ids
+        """,
+        session_id,
+        sample_limit,
+    )
+    return {"count": int(row["count"]), "ids": [int(value) for value in row["ids"]]}
+
+
+def _ledger_survivor_sql(alias: str) -> str:
+    """SQL predicate for rows that survived a matching privacy tombstone."""
+    return f"""
+        (EXISTS (SELECT 1 FROM session_tombstones st
+                 WHERE st.session_id = {alias}.session_id)
+         OR ({alias}.turn_key IS NOT NULL AND EXISTS (
+                SELECT 1 FROM turn_tombstones tt
+                WHERE tt.session_id = {alias}.session_id
+                  AND tt.turn_key = {alias}.turn_key))
+         OR ({alias}.source_message_id IS NOT NULL AND EXISTS (
+                SELECT 1 FROM message_tombstones mt
+                WHERE mt.session_id = {alias}.session_id
+                  AND mt.message_id = {alias}.source_message_id)))
+    """
+
+
+async def _reconcile_event_ledger_tx(conn, *, session_id: str,
+                                     sample_limit: int) -> dict:
+    """Collect W2-05 facts and evidence inside one immutable database snapshot."""
+    scope_filter = "($1::TEXT IS NULL OR c.session_id = $1)"
+    totals = await conn.fetchrow(
+        f"""
+        SELECT COUNT(*) AS total_rows,
+               COUNT(*) FILTER (WHERE role = 'user') AS user_rows,
+               COUNT(*) FILTER (WHERE role = 'assistant') AS assistant_rows,
+               COUNT(*) FILTER (WHERE role NOT IN ('user', 'assistant')) AS other_rows,
+               COUNT(*) FILTER (WHERE scope_known IS TRUE AND project_id IS NULL) AS known_global,
+               COUNT(*) FILTER (WHERE scope_known IS TRUE AND project_id IS NOT NULL) AS known_project,
+               COUNT(*) FILTER (WHERE scope_known IS FALSE) AS unknown
+        FROM conversations c WHERE {scope_filter}
+        """,
+        session_id,
+    )
+    matrix_rows = await conn.fetch(
+        f"""
+        SELECT (turn_id IS NOT NULL)::INT AS has_turn_id,
+               (turn_key IS NOT NULL)::INT AS has_turn_key,
+               (source_message_id IS NOT NULL)::INT AS has_source_message_id,
+               scope_known::INT AS scope_known,
+               (project_id IS NOT NULL)::INT AS has_project_id,
+               (role = 'assistant' AND usage IS NOT NULL)::INT AS has_usage,
+               COUNT(*) AS count
+        FROM conversations c WHERE {scope_filter}
+        GROUP BY 1,2,3,4,5,6 ORDER BY 1,2,3,4,5,6
+        """,
+        session_id,
+    )
+    matrix = {
+        (f"tid={row['has_turn_id']},tkey={row['has_turn_key']},"
+         f"smid={row['has_source_message_id']},known={row['scope_known']},"
+         f"pid={row['has_project_id']},usage={row['has_usage']}"): int(row["count"])
+        for row in matrix_rows
+    }
+
+    survivor = _ledger_survivor_sql("c")
+    assistant_survivor = _ledger_survivor_sql("a")
+    exact_evidence = """
+        a.turn_key IS NOT NULL AND EXISTS (
+            SELECT 1 FROM message_tombstones mt
+            WHERE mt.session_id = a.session_id AND mt.message_id = a.turn_key)
+    """
+    missing_user = """
+        NOT EXISTS (SELECT 1 FROM conversations u
+                    WHERE u.id = a.turn_id AND u.role = 'user')
+    """
+    anchor_is_non_user = """
+        EXISTS (SELECT 1 FROM conversations anchor
+                WHERE anchor.id = a.turn_id AND anchor.role <> 'user')
+    """
+
+    queries = {
+        "unknown_scope_excluded": f"""
+            SELECT c.id FROM conversations c
+            WHERE {scope_filter} AND c.scope_known IS FALSE AND NOT {survivor}
+        """,
+        "user_deleted_keeps_assistant_exact": f"""
+            SELECT a.id FROM conversations a
+            WHERE ($1::TEXT IS NULL OR a.session_id = $1)
+              AND a.role='assistant' AND a.scope_known IS TRUE
+              AND {missing_user} AND {exact_evidence}
+              AND NOT {assistant_survivor}
+        """,
+        "deletion_anchor_unverifiable": f"""
+            SELECT a.id FROM conversations a
+            WHERE ($1::TEXT IS NULL OR a.session_id = $1)
+              AND a.role='assistant' AND a.scope_known IS TRUE
+              AND {missing_user} AND NOT ({exact_evidence})
+              AND NOT ({anchor_is_non_user}) AND NOT {assistant_survivor}
+              AND EXISTS (SELECT 1 FROM session_source_rev r
+                          WHERE r.session_id=a.session_id AND r.rev>0)
+        """,
+        "assistant_without_usage": f"""
+            SELECT c.id FROM conversations c
+            WHERE {scope_filter} AND c.role='assistant' AND c.usage IS NULL
+              AND NOT {survivor}
+        """,
+        "turn_orphan": f"""
+            SELECT a.id FROM conversations a
+            WHERE ($1::TEXT IS NULL OR a.session_id = $1)
+              AND a.role='assistant' AND a.scope_known IS TRUE
+              AND {missing_user} AND NOT ({exact_evidence})
+              AND NOT ({anchor_is_non_user}) AND NOT {assistant_survivor}
+              AND NOT EXISTS (SELECT 1 FROM session_source_rev r
+                              WHERE r.session_id=a.session_id AND r.rev>0)
+        """,
+        "turn_cross_session": """
+            SELECT a.id FROM conversations a
+            WHERE ($1::TEXT IS NULL OR a.session_id=$1)
+              AND a.role='assistant' AND a.scope_known IS TRUE
+              AND EXISTS (SELECT 1 FROM conversations u WHERE u.id=a.turn_id
+                          AND u.role='user' AND u.session_id<>a.session_id)
+        """,
+        "order_break": """
+            SELECT a.id FROM conversations a
+            WHERE ($1::TEXT IS NULL OR a.session_id=$1)
+              AND a.role='assistant' AND a.scope_known IS TRUE
+              AND EXISTS (SELECT 1 FROM conversations u WHERE u.id=a.turn_id
+                          AND u.role='user' AND u.session_id=a.session_id
+                          AND u.scope_known IS TRUE AND a.id<u.id)
+        """,
+        "scope_split": """
+            SELECT MIN(c.id) AS id FROM conversations c
+            WHERE ($1::TEXT IS NULL OR c.session_id=$1) AND c.turn_id IS NOT NULL
+            GROUP BY c.session_id,c.turn_id
+            HAVING COUNT(DISTINCT (c.scope_known,c.project_id))>1
+        """,
+        "duplicate_user_in_turn": """
+            SELECT MIN(c.id) AS id FROM conversations c
+            WHERE ($1::TEXT IS NULL OR c.session_id=$1) AND c.role='user'
+              AND c.scope_known IS TRUE AND c.turn_id IS NOT NULL
+            GROUP BY c.session_id,c.turn_id HAVING COUNT(*)>1
+        """,
+        "turn_key_conflict": """
+            SELECT MIN(c.id) AS id FROM conversations c
+            WHERE ($1::TEXT IS NULL OR c.session_id=$1) AND c.scope_known IS TRUE
+              AND c.turn_key IS NOT NULL AND c.turn_id IS NOT NULL
+            GROUP BY c.session_id,c.turn_key HAVING COUNT(DISTINCT c.turn_id)>1
+        """,
+        "session_tombstone_survivor": """
+            SELECT c.id FROM conversations c
+            WHERE ($1::TEXT IS NULL OR c.session_id=$1)
+              AND EXISTS (SELECT 1 FROM session_tombstones st
+                          WHERE st.session_id=c.session_id)
+        """,
+        "turn_tombstone_survivor": """
+            SELECT c.id FROM conversations c
+            WHERE ($1::TEXT IS NULL OR c.session_id=$1) AND c.turn_key IS NOT NULL
+              AND NOT EXISTS (SELECT 1 FROM session_tombstones st
+                              WHERE st.session_id=c.session_id)
+              AND EXISTS (SELECT 1 FROM turn_tombstones tt
+                          WHERE tt.session_id=c.session_id AND tt.turn_key=c.turn_key)
+        """,
+        "message_tombstone_survivor": """
+            SELECT c.id FROM conversations c
+            WHERE ($1::TEXT IS NULL OR c.session_id=$1)
+              AND c.source_message_id IS NOT NULL
+              AND NOT EXISTS (SELECT 1 FROM session_tombstones st
+                              WHERE st.session_id=c.session_id)
+              AND NOT (c.turn_key IS NOT NULL AND EXISTS (
+                  SELECT 1 FROM turn_tombstones tt
+                  WHERE tt.session_id=c.session_id AND tt.turn_key=c.turn_key))
+              AND EXISTS (SELECT 1 FROM message_tombstones mt
+                          WHERE mt.session_id=c.session_id
+                            AND mt.message_id=c.source_message_id)
+        """,
+        "user_anchor_invalid": """
+            SELECT c.id FROM conversations c
+            WHERE ($1::TEXT IS NULL OR c.session_id=$1)
+              AND c.scope_known IS TRUE AND c.role='user'
+              AND (c.turn_id IS NULL OR c.turn_id<>c.id)
+        """,
+        "assistant_anchor_non_user": """
+            SELECT a.id FROM conversations a
+            WHERE ($1::TEXT IS NULL OR a.session_id=$1)
+              AND a.scope_known IS TRUE AND a.role='assistant'
+              AND EXISTS (SELECT 1 FROM conversations anchor
+                          WHERE anchor.id=a.turn_id AND anchor.role<>'user')
+        """,
+        "role_invalid": """
+            SELECT c.id FROM conversations c
+            WHERE ($1::TEXT IS NULL OR c.session_id=$1)
+              AND c.scope_known IS TRUE AND c.role NOT IN ('user','assistant')
+        """,
+        "turn_key_split": """
+            SELECT MIN(c.id) AS id FROM conversations c
+            WHERE ($1::TEXT IS NULL OR c.session_id=$1)
+              AND c.scope_known IS TRUE AND c.turn_id IS NOT NULL
+            GROUP BY c.session_id,c.turn_id
+            HAVING COUNT(DISTINCT COALESCE(c.turn_key, '__W205_NULL_TURN_KEY__'))>1
+        """,
+    }
+    explained_names = (
+        "unknown_scope_excluded", "user_deleted_keeps_assistant_exact",
+        "deletion_anchor_unverifiable", "assistant_without_usage",
+    )
+    unexplained_names = (
+        "turn_orphan", "turn_cross_session", "order_break", "scope_split",
+        "duplicate_user_in_turn", "turn_key_conflict",
+        "session_tombstone_survivor", "turn_tombstone_survivor",
+        "message_tombstone_survivor", "user_anchor_invalid",
+        "assistant_anchor_non_user", "role_invalid", "turn_key_split",
+    )
+    explained = {
+        name: await _reconcile_bucket_tx(conn, queries[name], session_id, sample_limit)
+        for name in explained_names
+    }
+    unexplained = {
+        name: await _reconcile_bucket_tx(conn, queries[name], session_id, sample_limit)
+        for name in unexplained_names
+    }
+    return {
+        "ok": all(bucket["count"] == 0 for bucket in unexplained.values()),
+        "total_rows": int(totals["total_rows"]),
+        "roles": {"user": int(totals["user_rows"]),
+                  "assistant": int(totals["assistant_rows"]),
+                  "other": int(totals["other_rows"])},
+        "scope": {"known_global": int(totals["known_global"]),
+                  "known_project": int(totals["known_project"]),
+                  "unknown": int(totals["unknown"])},
+        "matrix": matrix,
+        "explained": explained,
+        "unexplained": unexplained,
+    }
+
+
+async def reconcile_event_ledger(*, session_id: str = None,
+                                 sample_limit: int = 50) -> dict:
+    """Run the W2-05 audit in one repeatable-read, read-only transaction."""
+    if isinstance(sample_limit, bool) or not isinstance(sample_limit, int):
+        raise ValueError("sample_limit must be an integer from 1 to 500")
+    if not 1 <= sample_limit <= 500:
+        raise ValueError("sample_limit must be between 1 and 500")
+    if session_id is not None and not isinstance(session_id, str):
+        raise ValueError("session_id must be a string or None")
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        async with conn.transaction(isolation="repeatable_read", readonly=True):
+            return await _reconcile_event_ledger_tx(
+                conn, session_id=session_id, sample_limit=sample_limit)
 
 
 _NORMALIZED_USAGE_KEYS = {"prompt", "completion", "cached"}
@@ -1706,6 +1990,7 @@ async def append_turn_events_atomic(
     user_message_id: str = None,
     assistant_message_id: str = None,
     reset_generation: int = None,
+    scope_snapshot=None,
 ) -> dict:
     """把一轮交互作为单个事务追加进事件账本。
 
@@ -1721,6 +2006,20 @@ async def append_turn_events_atomic(
     失败不抛给调用方：暗写失败不得打断聊天，只记一条无标识的安全计数事件。
     """
     path = "regen" if is_regenerate else "atomic"
+    # The HTTP path always supplies the snapshot created before prompt/provider work.
+    # A compatibility fallback remains for direct internal callers and old test helpers;
+    # it resolves before the write transaction, never after generation and never between
+    # tombstone checks and INSERTs.
+    if scope_snapshot is None:
+        scope_snapshot = await resolve_scope_snapshot(
+            session_id,
+            client_gave_conv_id=client_gave_conv_id,
+            project_id_present=project_id_present,
+            payload_project_id=payload_project_id,
+        )
+        if scope_snapshot[4]:
+            print(f"event={scope_snapshot[4]} increment=1")
+    scope_known, project_id, _context_mode, _context_project_id, _event_code = scope_snapshot
     pool = await get_pool()
     try:
         async with pool.acquire() as conn:
@@ -1736,15 +2035,6 @@ async def append_turn_events_atomic(
                     # 删除后不可复活：见章即零写入，聊天本身不受影响。
                     print(f"event=ledger_write_skipped reason={blocked} increment=1")
                     return {"ok": False, "path": "tombstoned", "reason": blocked}
-
-                scope_known, project_id, scope_event = await _resolve_scope_tx(
-                    conn, session_id,
-                    client_gave_conv_id=client_gave_conv_id,
-                    project_id_present=project_id_present,
-                    payload_project_id=payload_project_id,
-                )
-                if scope_event:
-                    print(f"event={scope_event} increment=1")
 
                 user_blocked = bool(user_message_id) and await _message_tombstoned_tx(
                     conn, session_id, user_message_id)
@@ -4249,10 +4539,10 @@ async def sync_delete_message(conv_id: str, msg_id: str, *,
         才盖轮次章（在此之前该轮仍然活着，可以用**新** message ID 重生成）。
         再加一道**无关联清扫**：没有 source_message_id 的行说不清自己来自哪句话——
         闸门关时代的行连轮都没有，W2-03 时代的行有轮无 ID——只要这个会话发生了删除，
-        它们就一并清掉（隐私优先，W2-05 可从 chat_messages 回填）；带关联的行一行不动。
+        它们就一并清掉（隐私优先；W2-05 裁决不回填，无关联行按历史档处理）；带关联的行一行不动。
       · turn_key 为空的 user/assistant（定位不到轮次）：**隐私优先降级**，清掉该会话
         全部账本行，但**不盖会话章**——对话还活着，之后的新轮照常落账。宁可账本少一段
-        可由 W2-05 从 chat_messages 回填重建的历史，也不让用户以为删掉的正文
+        W2-05 裁决不回填的历史档，也不让用户以为删掉的正文
         继续留在后台。
 
     压缩摘要与自动压缩 divider 是系统对原文的浓缩副本，和用户自行管理的记忆、
