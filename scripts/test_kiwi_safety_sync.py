@@ -6868,8 +6868,12 @@ async def test_w2_05_reconcile_evidence(client: httpx.AsyncClient) -> None:
                 f"{expected_bucket} did not sample offending id {expected_id}")
         require(all(
             _w205_bucket_count(outcome, "unexplained", name) == (1 if name == expected_bucket else 0)
-            for name in _W205_UNEXPLAINED
-        ), f"{expected_bucket} overlapped another unexplained bucket: {outcome['unexplained']!r}")
+            for name in _W205_UNEXPLAINED[:6]
+        ), f"{expected_bucket} overlapped another primary unexplained bucket: {outcome['unexplained']!r}")
+        require(all(
+            expected_id not in payload["ids"]
+            for payload in outcome["explained"].values()
+        ), f"{expected_bucket} offender was incorrectly admitted to an explained bucket")
 
     await _truncate("conversations", "turn_tombstones", "message_tombstones", "session_source_rev")
     await _w205_insert_event(1001, "w205-bad-orphan", "assistant", turn_id=9999)
