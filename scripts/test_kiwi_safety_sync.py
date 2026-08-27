@@ -7348,6 +7348,19 @@ async def test_w2_05_reconcile_evidence(client: httpx.AsyncClient) -> None:
         "INSERT INTO session_tombstones (session_id) VALUES ('w205-session-survivor')")
     await assert_structural("session_tombstone_survivor", 1601)
 
+    # Unknown-scope rows remain structural defects when a privacy tombstone exists.
+    # They must never be absorbed by the otherwise-explained historical-scope bucket.
+    await _truncate("conversations", "session_tombstones", "turn_tombstones",
+                    "message_tombstones", "session_source_rev")
+    await _w205_insert_event(
+        1651, "w205-session-survivor-unknown", "user",
+        turn_id=1651, scope_known=False,
+    )
+    await _pool_execute(
+        "INSERT INTO session_tombstones (session_id) "
+        "VALUES ('w205-session-survivor-unknown')")
+    await assert_structural("session_tombstone_survivor", 1651)
+
     await _truncate("conversations", "session_tombstones", "turn_tombstones",
                     "message_tombstones", "session_source_rev")
     await _w205_insert_event(1701, "w205-turn-survivor", "user",
@@ -7359,12 +7372,35 @@ async def test_w2_05_reconcile_evidence(client: httpx.AsyncClient) -> None:
 
     await _truncate("conversations", "session_tombstones", "turn_tombstones",
                     "message_tombstones", "session_source_rev")
+    await _w205_insert_event(
+        1751, "w205-turn-survivor-unknown", "user",
+        turn_id=1751, turn_key="w205-dead-turn-unknown", scope_known=False,
+    )
+    await _pool_execute(
+        "INSERT INTO turn_tombstones (session_id, turn_key) "
+        "VALUES ('w205-turn-survivor-unknown','w205-dead-turn-unknown')")
+    await assert_structural("turn_tombstone_survivor", 1751)
+
+    await _truncate("conversations", "session_tombstones", "turn_tombstones",
+                    "message_tombstones", "session_source_rev")
     await _w205_insert_event(1801, "w205-message-survivor", "user", turn_id=1801,
                              source_message_id="w205-dead-message")
     await _pool_execute(
         "INSERT INTO message_tombstones (session_id, message_id) "
         "VALUES ('w205-message-survivor','w205-dead-message')")
     await assert_structural("message_tombstone_survivor", 1801)
+
+    await _truncate("conversations", "session_tombstones", "turn_tombstones",
+                    "message_tombstones", "session_source_rev")
+    await _w205_insert_event(
+        1851, "w205-message-survivor-unknown", "user",
+        turn_id=1851, source_message_id="w205-dead-message-unknown",
+        scope_known=False,
+    )
+    await _pool_execute(
+        "INSERT INTO message_tombstones (session_id, message_id) "
+        "VALUES ('w205-message-survivor-unknown','w205-dead-message-unknown')")
+    await assert_structural("message_tombstone_survivor", 1851)
 
     for event_id, anchor in ((1901, None), (1902, 999999)):
         await _truncate("conversations", "session_tombstones", "turn_tombstones",
