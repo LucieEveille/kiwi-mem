@@ -1685,9 +1685,20 @@ async def _reconcile_event_ledger_tx(conn, *, session_id: str,
                           WHERE r.session_id=a.session_id AND r.rev>0)
         """,
         "assistant_without_usage": f"""
-            SELECT c.id FROM conversations c
-            WHERE {scope_filter} AND c.role='assistant' AND c.usage IS NULL
-              AND NOT {survivor}
+            SELECT a.id FROM conversations a
+            JOIN conversations u ON u.id=a.turn_id
+                                AND u.role='user'
+                                AND u.session_id=a.session_id
+            WHERE ($1::TEXT IS NULL OR a.session_id=$1)
+              AND a.role='assistant' AND a.scope_known IS TRUE
+              AND u.scope_known IS TRUE AND a.usage IS NULL
+              AND u.id<a.id
+              AND a.project_id IS NOT DISTINCT FROM u.project_id
+              AND a.turn_key IS NOT DISTINCT FROM u.turn_key
+              AND (SELECT COUNT(*) FROM conversations du
+                   WHERE du.session_id=a.session_id AND du.turn_id=a.turn_id
+                     AND du.role='user' AND du.scope_known IS TRUE)=1
+              AND NOT {assistant_survivor}
         """,
         "turn_orphan": f"""
             SELECT a.id FROM conversations a
