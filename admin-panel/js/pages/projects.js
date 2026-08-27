@@ -197,6 +197,7 @@ export default {
         await put(`/sync/projects/${id}`, body);
         toast('项目已创建', 'ok');
         mod.close();
+        window.dispatchEvent(new CustomEvent('kiwi:projects-changed'));
         this.load();
       } catch (e) {
         toast('创建失败：' + e.message, 'err');
@@ -237,6 +238,7 @@ export default {
         await put(`/sync/projects/${p.id}`, body);
         toast('项目已更新', 'ok');
         mod.close();
+        window.dispatchEvent(new CustomEvent('kiwi:projects-changed'));
         this.load();
       } catch (e) {
         toast('保存失败：' + e.message, 'err');
@@ -247,7 +249,12 @@ export default {
 
   async remove(id) {
     if (!(await confirmDialog({ title: '删除项目', message: '确定删除这个项目？其文件向量块会一并删除，此操作不可恢复。', danger: true, okText: '删除' }))) return;
-    try { await del(`/sync/projects/${id}`); toast('项目已删除', 'ok'); this.load(); }
+    try {
+      await del(`/sync/projects/${id}`);
+      toast('项目已删除', 'ok');
+      window.dispatchEvent(new CustomEvent('kiwi:projects-changed'));
+      this.load();
+    }
     catch (e) { toast('删除失败：' + e.message, 'err'); }
   },
 };

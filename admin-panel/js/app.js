@@ -15,6 +15,11 @@ import { errorBlock, loadingBlock } from './ui.js';
 import { get } from './api.js';
 import { initSearch, tryHighlight } from './search.js';
 import { maybeShowWizard } from './wizard.js';
+import {
+  bindProjectChanges,
+  createNavVisibilityController,
+  shouldHide,
+} from './nav-visibility.mjs';
 
 const DEFAULT_ROUTE = 'dashboard';
 
@@ -57,6 +62,20 @@ function renderSidebar() {
           <span class="ico">${it.icon}</span><span class="nav-label">${it.label}</span>
         </a>`).join('')}
     </div>`).join('');
+}
+
+const conditionalNavItems = NAV.flatMap(group => group.items)
+  .filter(item => item.hideWhenEmpty);
+const navVisibilityController = createNavVisibilityController({
+  items: conditionalNavItems,
+  fetchVisibility: async item => {
+    try { return shouldHide(await get(item.hideWhenEmpty)); } catch { return false; }
+  },
+  navRoot: () => document.getElementById('sidebar-nav'),
+});
+
+export function refreshNavVisibility() {
+  return navVisibilityController.refresh();
 }
 
 function highlight(key) {
@@ -154,6 +173,8 @@ function boot() {
   initTheme();
   renderSidebar();
   initSearch(document.getElementById('global-search'));
+  bindProjectChanges(window, refreshNavVisibility);
+  refreshNavVisibility();
   document.getElementById('theme-btn')?.addEventListener('click', () => {
     applyTheme(document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark');
   });

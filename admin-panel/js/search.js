@@ -7,6 +7,7 @@
 // ============================================================
 import { CONFIG_META, CONFIG_PAGES } from './config-schema.js';
 import { ROUTE_INDEX } from './routes.js';
+import { onNavVisibilityChange, visibleRouteEntries } from './nav-visibility.mjs';
 
 // CONFIG_PAGES 的 key 大多就是路由页；例外在此映射
 const PAGE_ALIAS = { reminderTools: 'tools' };
@@ -14,6 +15,7 @@ const PAGE_ALIAS = { reminderTools: 'tools' };
 const TAB_PAGES = { memories: 'settings', dream: 'settings', calendar: 'settings' };
 
 let INDEX = null;
+onNavVisibilityChange(_event => { INDEX = null; });
 
 function keyPos(key) {
   for (const [pk, def] of Object.entries(CONFIG_PAGES)) {
@@ -29,7 +31,7 @@ function keyPos(key) {
 function buildIndex() {
   if (INDEX) return INDEX;
   INDEX = [];
-  for (const [key, meta] of Object.entries(ROUTE_INDEX)) {
+  for (const [key, meta] of visibleRouteEntries(ROUTE_INDEX)) {
     INDEX.push({ type:'page', icon: meta.icon, label: meta.label, sub: meta.group, page: key, hay: (meta.label + ' ' + key).toLowerCase() });
   }
   for (const [key, m] of Object.entries(CONFIG_META)) {

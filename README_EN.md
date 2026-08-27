@@ -76,6 +76,8 @@ If you use projects to separate contexts (work, daily life, fiction), global mem
 
 No setup needed — isolation is automatic.
 
+Projects are supplied and used by clients that support them. The admin panel only shows the Projects page when at least one project exists; direct access through `#/projects` remains available for creating, editing, and deleting projects.
+
 ---
 
 ## Who is it for
@@ -321,6 +323,7 @@ Memory import is being rebuilt and will return in a future version in a smarter 
 - Historical rows are not backfilled; unknown-scope rows remain an archive and stay out of future readers
 - Output contains counts and bounded numeric row-ID samples only; see [`docs/event-ledger-scope-and-reconciliation.md`](docs/event-ledger-scope-and-reconciliation.md)
 - No manual config needed — automatic on project creation
+- Projects are supplied and used by clients that support them; the admin panel only shows this page when projects exist, while `#/projects` remains directly available for creating, editing, and deleting projects
 
 ### 🔧 Tools & extensions
 - MCP Server (20+ tools) + MCP Client

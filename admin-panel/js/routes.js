@@ -28,7 +28,7 @@ export const NAV = [
     { key: 'calendar',    icon: '📅', label: '日历与整理' },
     { key: 'compression', icon: '🗜️', label: '上下文压缩' },
     { key: 'handoff',     icon: '🪟', label: '无缝换窗' },
-    { key: 'projects',    icon: '📁', label: '项目分隔' },
+    { key: 'projects',    icon: '📁', label: '项目分隔', hideWhenEmpty: '/sync/projects' },
   ]},
   { title: '运维与安全', items: [
     { key: 'gateway',     icon: '🚦', label: '网关与延迟' },
