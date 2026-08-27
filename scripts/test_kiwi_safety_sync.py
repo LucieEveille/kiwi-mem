@@ -16,11 +16,13 @@ from __future__ import annotations
 
 import asyncio
 import ast
+import hashlib
 import inspect
 import io
 import json
 import os
 import re
+import subprocess
 import sys
 import uuid
 import zipfile
@@ -2672,7 +2674,8 @@ async def test_w2_03_scope_and_order() -> None:
     # row 3: metadata says global
     known, pid, _ = await scope_of("w203-c-null", client_gave_conv_id=True)
     require((known, pid) == (True, None), f"row 3: metadata NULL means global, got {(known, pid)}")
-    # row 4/5: only a server-generated session may trust the payload
+    # row 4/5: without metadata, a valid project or explicit null is still
+    # authoritative regardless of who supplied the conversation id.
     known, pid, _ = await scope_of("w203-gen-null", client_gave_conv_id=False,
                                    project_id_present=True, payload_project_id=None)
     require((known, pid) == (True, None), f"row 4: explicit null is trusted, got {(known, pid)}")
@@ -2680,19 +2683,43 @@ async def test_w2_03_scope_and_order() -> None:
                                        project_id_present=True, payload_project_id="w203-p-live")
     require((known, pid) == (True, "w203-p-live"), f"row 5: payload trusted, got {(known, pid)}")
     require("scope_payload_trusted" in codes, f"row 5 must emit scope_payload_trusted, got {codes}")
-    # row 6: client supplied a conversation_id but metadata is missing -> never trust payload
-    known, pid, codes = await scope_of("w203-c-missing", client_gave_conv_id=True,
+    known, pid, codes = await scope_of("w203-c-valid", client_gave_conv_id=True,
                                        project_id_present=True, payload_project_id="w203-p-live")
+    require((known, pid) == (True, "w203-p-live"),
+            f"row 4 client session: verified payload must be trusted, got {(known, pid)}",
+            tag="W2-05-SCOPE-LEGACY")
+    require("scope_payload_trusted" in codes,
+            f"row 4 client session must emit scope_payload_trusted, got {codes}",
+            tag="W2-05-SCOPE-LEGACY")
+    known, pid, _ = await scope_of("w203-c-null-payload", client_gave_conv_id=True,
+                                   project_id_present=True, payload_project_id=None)
+    require((known, pid) == (True, None),
+            f"row 5 client session: explicit null must be global, got {(known, pid)}",
+            tag="W2-05-SCOPE-LEGACY")
+    # row 6: absent project key defaults to known global.
+    known, pid, codes = await scope_of("w203-c-absent", client_gave_conv_id=True)
+    require((known, pid) == (True, None),
+            f"row 6: absent key must default to known global, got {(known, pid)}",
+            tag="W2-05-SCOPE-LEGACY")
+    require("scope_default_global" in codes,
+            f"row 6 must emit scope_default_global, got {codes}",
+            tag="W2-05-SCOPE-LEGACY")
+    # row 7: a syntactically valid but missing project stays unknown.
+    known, pid, codes = await scope_of("w203-c-missing", client_gave_conv_id=True,
+                                       project_id_present=True, payload_project_id="w203-p-gone")
     require((known, pid) == (False, None),
-            f"row 6: unverified session must stay FALSE+NULL regardless of payload, got {(known, pid)}")
-    require("scope_unverified" in codes, f"row 6 must emit scope_unverified, got {codes}")
-    # row 7: absent key on a generated session stays unknown
+            f"row 7: unverified project must stay FALSE+NULL, got {(known, pid)}")
+    require("scope_unverified" in codes, f"row 7 must emit scope_unverified, got {codes}")
+    # generated sessions follow the same absent-key default.
     known, pid, _ = await scope_of("w203-gen-absent", client_gave_conv_id=False)
-    require((known, pid) == (False, None), f"row 7: absent key stays unknown, got {(known, pid)}")
+    require((known, pid) == (True, None),
+            f"row 6 generated session: absent key must be global, got {(known, pid)}",
+            tag="W2-05-SCOPE-LEGACY")
+    # row 8 is an internal-only defensive fallback; the public entry rejects it.
     known, pid, codes = await scope_of("w203-gen-blank", client_gave_conv_id=False,
                                        project_id_present=True, payload_project_id="")
-    require((known, pid) == (False, None), f"row 7: blank payload stays unknown, got {(known, pid)}")
-    require("scope_unverified" in codes, f"row 7 blank must emit scope_unverified, got {codes}")
+    require((known, pid) == (False, None), f"row 8: blank payload stays unknown, got {(known, pid)}")
+    require("scope_unverified" in codes, f"row 8 must emit scope_unverified, got {codes}")
     passed("T-W2-03-12 the scope authority table holds row by row against a real database")
     begin("T-W2-03-17")
 
@@ -6383,6 +6410,608 @@ async def _mn_extractor_case(*, key: str = "key", response: Any = None,
         _MNClient.calls = 0
 
 
+# ---------------------------------------------------------------------------
+# W2-05 | default-global scope and read-only ledger reconciliation
+# ---------------------------------------------------------------------------
+
+_W205_EXPLAINED = {
+    "unknown_scope_excluded",
+    "user_deleted_keeps_assistant_exact",
+    "deletion_anchor_unverifiable",
+    "assistant_without_usage",
+}
+_W205_UNEXPLAINED = {
+    "turn_orphan",
+    "turn_cross_session",
+    "order_break",
+    "scope_split",
+    "duplicate_user_in_turn",
+    "turn_key_conflict",
+}
+
+
+def _w205_reconcile():
+    fn = getattr(database, "reconcile_event_ledger", None)
+    require(callable(fn), "T-W2-05 reconcile_event_ledger is missing")
+    return fn
+
+
+def _w205_bucket_count(result: dict, group: str, name: str) -> int:
+    return result[group][name]["count"]
+
+
+def _w205_unexplained_total(result: dict) -> int:
+    return sum(_w205_bucket_count(result, "unexplained", name) for name in _W205_UNEXPLAINED)
+
+
+async def test_w2_05_scope_contract(client: httpx.AsyncClient) -> None:
+    begin("T-W2-05-01")
+    await _truncate("conversations", "chat_conversations", "chat_projects")
+    await _pool_execute("INSERT INTO chat_projects (id, name) VALUES ('w205-live', 'live')")
+    await _pool_execute(
+        "INSERT INTO chat_conversations (id, title, project_id) VALUES "
+        "('w205-meta-live','c','w205-live'), "
+        "('w205-meta-dead','c','w205-gone'), ('w205-meta-global','c',NULL)"
+    )
+    pool = await database.get_pool()
+    async with pool.acquire() as conn:
+        resolve = database._resolve_scope_tx
+        require(await resolve(
+            conn, "w205-meta-live", client_gave_conv_id=True,
+            project_id_present=False, payload_project_id=None,
+        ) == (True, "w205-live", None), "metadata project + absent payload drifted")
+        require(await resolve(
+            conn, "w205-meta-dead", client_gave_conv_id=True,
+            project_id_present=False, payload_project_id=None,
+        ) == (True, "w205-gone", "scope_project_missing"),
+                "deleted metadata project must preserve historical attribution")
+        require(await resolve(
+            conn, "w205-meta-global", client_gave_conv_id=True,
+            project_id_present=False, payload_project_id=None,
+        ) == (True, None, None), "metadata NULL must stay known-global")
+        for client_owned in (False, True):
+            require(await resolve(
+                conn, f"w205-valid-{int(client_owned)}", client_gave_conv_id=client_owned,
+                project_id_present=True, payload_project_id="w205-live",
+            ) == (True, "w205-live", "scope_payload_trusted"),
+                    "a verified payload project must be trusted for either session source")
+            require(await resolve(
+                conn, f"w205-null-{int(client_owned)}", client_gave_conv_id=client_owned,
+                project_id_present=True, payload_project_id=None,
+            ) == (True, None, None),
+                    "explicit null must be known-global for either session source")
+        require(await resolve(
+            conn, "w205-absent", client_gave_conv_id=True,
+            project_id_present=False, payload_project_id=None,
+        ) == (True, None, "scope_default_global"),
+                "an absent project key must default to known-global")
+        require(await resolve(
+            conn, "w205-unverified", client_gave_conv_id=True,
+            project_id_present=True, payload_project_id="w205-gone",
+        ) == (False, None, "scope_unverified"),
+                "a syntactically valid missing project must stay unknown")
+        for invalid in ("", "   ", False, 0, 5, [], {}):
+            require(await resolve(
+                conn, "w205-defensive", client_gave_conv_id=False,
+                project_id_present=True, payload_project_id=invalid,
+            ) == (False, None, "scope_unverified"),
+                    f"internal defensive scope row promoted invalid input: {invalid!r}")
+    passed("T-W2-05-01 the eight-row scope authority contract holds against PostgreSQL")
+
+    begin("T-W2-05-02")
+    await _truncate("conversations", "chat_conversations", "chat_projects")
+    await _pool_execute("INSERT INTO chat_projects (id, name) VALUES ('w205-e2e-project', 'p')")
+    await _upsert_config("memory_enabled", "false")
+    await _set_ledger_gate(True)
+
+    valid_cases = (
+        ("w205-e2e-absent", {}, True, None),
+        ("w205-e2e-null", {"project_id": None}, True, None),
+        ("w205-e2e-missing", {"project_id": "w205-no-such-project"}, False, None),
+        ("w205-e2e-project", {"project_id": "w205-e2e-project"}, True, "w205-e2e-project"),
+    )
+    for sid, extra, expected_known, expected_pid in valid_cases:
+        body = {
+            "model": "mock-model", "stream": False, "conversation_id": sid,
+            "turn_key": f"{sid}-turn",
+            "messages": [{"role": "user", "content": "w205 body"}],
+            **extra,
+        }
+        response = await _chat(client, body)
+        require(response.status_code == 200,
+                f"valid project scope case failed: {sid} -> {response.status_code}")
+        rows = await _await_ledger(sid, 2)
+        require(len(rows) == 2 and all(
+            row["scope_known"] is expected_known and row["project_id"] == expected_pid
+            for row in rows
+        ), f"endpoint wrote wrong scope for {sid}: {[(r['scope_known'], r['project_id']) for r in rows]}")
+
+    invalid_cases = (("", "empty"), ("   ", "blank"), (True, "bool"),
+                     (0, "zero"), (5, "number"), ([], "list"), ("p" * 257, "too long"))
+    for index, (bad, label) in enumerate(invalid_cases):
+        calls = []
+
+        async def counted_provider(*args, **kwargs):
+            calls.append((args, kwargs))
+            return None
+
+        before = await _pool_fetchval("SELECT COUNT(*) FROM conversations")
+        with patch.object(app_module, "resolve_provider_for_model", counted_provider):
+            response = await client.post("/v1/chat/completions", json={
+                "model": "mock-model", "stream": False,
+                "conversation_id": f"w205-e2e-invalid-{index}", "project_id": bad,
+                "messages": [{"role": "user", "content": "must not run"}],
+            })
+        after = await _pool_fetchval("SELECT COUNT(*) FROM conversations")
+        require(response.status_code == 400,
+                f"invalid project_id ({label}) must be 400, got {response.status_code}")
+        require(response.json() == {"error": "invalid_project_id", "code": "invalid_project_id"},
+                f"invalid project_id ({label}) leaked a non-machine response: {response.text!r}")
+        require(before == after and not calls,
+                f"invalid project_id ({label}) wrote the ledger or reached provider routing")
+    passed("T-W2-05-02 request entry defaults ordinary chats globally and rejects invalid project ids")
+
+
+async def _w205_insert_event(
+    event_id: int,
+    session_id: str,
+    role: str,
+    *,
+    turn_id=None,
+    turn_key=None,
+    source_message_id=None,
+    scope_known: bool = True,
+    project_id=None,
+    usage=None,
+    content: str = "w205-event",
+) -> None:
+    usage_json = json.dumps(usage) if usage is not None else None
+    await _pool_execute(
+        "INSERT INTO conversations "
+        "(id, session_id, role, content, model, project_id, scope_known, usage, "
+        " turn_id, turn_key, source_message_id) "
+        "VALUES ($1,$2,$3,$4,'m',$5,$6,$7::jsonb,$8,$9,$10)",
+        event_id, session_id, role, content, project_id, scope_known, usage_json,
+        turn_id, turn_key, source_message_id,
+    )
+
+
+async def test_w2_05_reconcile_matrix_and_happy_paths(client: httpx.AsyncClient) -> None:
+    begin("T-W2-05-03")
+    reconcile = _w205_reconcile()
+    await _truncate("conversations", "turn_tombstones", "message_tombstones", "session_source_rev")
+    specs = (
+        ("user", None, None, None, False, None, None),
+        ("assistant", None, None, "legacy-mid", False, None, None),
+        ("user", 101, "tk-a", None, True, None, None),
+        ("assistant", 201, "tk-b", None, True, None,
+         {"prompt": 1, "completion": 1, "cached": 0}),
+        ("user", 301, None, "mid-c", True, "matrix-project", None),
+        ("assistant", 401, None, "mid-d", True, "matrix-project", None),
+        ("user", None, "tk-e", "mid-e", False, None, None),
+        ("assistant", None, "tk-f", None, True, None,
+         {"prompt": 2, "completion": 1, "cached": 0}),
+    )
+    expected_matrix: dict[str, int] = {}
+    expected_roles = {"user": 0, "assistant": 0, "other": 0}
+    expected_scope = {"known_global": 0, "known_project": 0, "unknown": 0}
+    next_id = 1000
+    for spec_index, (role, turn_id, turn_key, smid, known, pid, usage) in enumerate(specs):
+        for duplicate in range(2):
+            await _w205_insert_event(
+                next_id, f"w205-matrix-{spec_index}-{duplicate}", role,
+                turn_id=turn_id, turn_key=turn_key, source_message_id=smid,
+                scope_known=known, project_id=pid, usage=usage,
+            )
+            next_id += 1
+        key = (
+            f"tid={int(turn_id is not None)},tkey={int(turn_key is not None)},"
+            f"smid={int(smid is not None)},known={int(known)},pid={int(pid is not None)},"
+            f"usage={int(role == 'assistant' and usage is not None)}"
+        )
+        expected_matrix[key] = expected_matrix.get(key, 0) + 2
+        expected_roles[role] += 2
+        if not known:
+            expected_scope["unknown"] += 2
+        elif pid is None:
+            expected_scope["known_global"] += 2
+        else:
+            expected_scope["known_project"] += 2
+    result = await reconcile(sample_limit=50)
+    require(result["total_rows"] == 16, f"fact matrix lost rows: {result['total_rows']}")
+    require(result["matrix"] == expected_matrix,
+            f"fact matrix drifted: {result['matrix']!r} != {expected_matrix!r}")
+    require(result["roles"] == expected_roles, f"role totals drifted: {result['roles']!r}")
+    require(result["scope"] == expected_scope, f"scope totals drifted: {result['scope']!r}")
+    passed("T-W2-05-03 all six ledger facts are counted without origin inference")
+
+    begin("T-W2-05-04")
+    await _truncate(
+        "conversations", "chat_messages", "chat_conversations", "chat_projects",
+        "session_tombstones", "turn_tombstones", "message_tombstones", "session_source_rev",
+    )
+    await _pool_execute("INSERT INTO chat_projects (id, name) VALUES ('w205-happy-project', 'p')")
+    await _upsert_config("memory_enabled", "false")
+    await _set_ledger_gate(True)
+
+    async def post_turn(sid, turn_key, **extra):
+        body = {
+            "model": "mock-model", "stream": False,
+            "conversation_id": sid, "turn_key": turn_key,
+            "messages": [{"role": "user", "content": f"body-{turn_key}"}],
+            **extra,
+        }
+        response = await _chat(client, body)
+        require(response.status_code == 200, f"happy-path request failed: {sid}/{turn_key}")
+        return response
+
+    await post_turn("w205-happy-single", "single-1")
+    await post_turn("w205-happy-multi", "multi-1")
+    await post_turn("w205-happy-multi", "multi-2")
+    await post_turn("w205-happy-regen", "regen-1")
+    await post_turn("w205-happy-regen", "regen-1", is_regenerate=True)
+    await post_turn("w205-happy-project-session", "project-1",
+                    project_id="w205-happy-project")
+    response = await _chat(client, {
+        "model": "mock-model", "stream": False,
+        "messages": [{"role": "user", "content": "server generated"}],
+        "turn_key": "generated-1",
+    })
+    generated_sid = response.headers.get("x-kiwi-session-id")
+    require(response.status_code == 200 and generated_sid,
+            "missing-conversation-id case did not return a generated identity")
+    await _pool_execute(
+        "INSERT INTO chat_conversations (id, title, project_id) VALUES "
+        "('w205-happy-delete','delete',NULL)"
+    )
+    await post_turn("w205-happy-delete", "delete-1")
+    delete_response = await client.delete("/sync/conversations/w205-happy-delete")
+    require(delete_response.status_code == 200, "whole-conversation delete failed")
+    for sid, expected in (("w205-happy-single", 2), ("w205-happy-multi", 4),
+                          ("w205-happy-regen", 2), ("w205-happy-project-session", 2),
+                          (generated_sid, 2)):
+        require(len(await _await_ledger(sid, expected)) == expected,
+                f"happy-path ledger count drifted for {sid}")
+    require(not await _ledger_rows("w205-happy-delete"),
+            "whole-conversation delete left ledger rows")
+    result = await reconcile(sample_limit=50)
+    require(_w205_unexplained_total(result) == 0,
+            f"six accepted lifecycle shapes produced unexplained rows: {result['unexplained']!r}")
+    passed("T-W2-05-04 six accepted lifecycle shapes reconcile with zero unexplained rows")
+
+
+async def test_w2_05_reconcile_evidence(client: httpx.AsyncClient) -> None:
+    begin("T-W2-05-05")
+    reconcile = _w205_reconcile()
+    await _truncate(
+        "conversations", "chat_messages", "chat_conversations",
+        "turn_tombstones", "message_tombstones", "session_source_rev",
+    )
+    usage = {"prompt": 1, "completion": 1, "cached": 0}
+
+    exact_sid = "w205-exact"
+    exact_user_mid = "w205-exact-user"
+    exact_assistant_mid = "w205-exact-assistant"
+    await _pool_execute(
+        "INSERT INTO chat_conversations (id, title) VALUES ($1, 'exact')", exact_sid)
+    await _pool_execute(
+        "INSERT INTO chat_messages (id, conversation_id, role, content, turn_key, sort_order) "
+        "VALUES ($1,$3,'user','u',$1,0), ($2,$3,'assistant','a',$1,1)",
+        exact_user_mid, exact_assistant_mid, exact_sid,
+    )
+    await database.append_turn_events_atomic(
+        exact_sid, "u", "a", "m", turn_key=exact_user_mid,
+        user_message_id=exact_user_mid, assistant_message_id=exact_assistant_mid,
+        usage=usage,
+    )
+    response = await client.delete(
+        f"/sync/conversations/{exact_sid}/messages/{exact_user_mid}?role=user&turn_key={exact_user_mid}"
+    )
+    require(response.status_code == 200, "exact-evidence delete failed")
+    exact_assistant_id = await _pool_fetchval(
+        "SELECT id FROM conversations WHERE session_id=$1 AND role='assistant'", exact_sid)
+
+    weak_sid = "w205-weak"
+    weak_user_mid = "w205-weak-user"
+    weak_assistant_mid = "w205-weak-assistant"
+    await database.append_turn_events_atomic(
+        weak_sid, "u", "a", "m", turn_key=None,
+        user_message_id=weak_user_mid, assistant_message_id=weak_assistant_mid,
+        usage=usage,
+    )
+    response = await client.delete(
+        f"/sync/conversations/{weak_sid}/messages/{weak_user_mid}?role=user"
+    )
+    require(response.status_code == 200, "weak-evidence delete failed")
+    weak_assistant_id = await _pool_fetchval(
+        "SELECT id FROM conversations WHERE session_id=$1 AND role='assistant'", weak_sid)
+
+    orphan_sid = "w205-unrelated-tombstone"
+    orphan_result = await database.append_turn_events_atomic(
+        orphan_sid, "u", "a", "m", turn_key="w205-orphan-turn",
+        user_message_id="w205-orphan-user", assistant_message_id="w205-orphan-assistant",
+        usage=usage,
+    )
+    await _pool_execute("DELETE FROM conversations WHERE id=$1", orphan_result["turn_id"])
+    orphan_assistant_id = await _pool_fetchval(
+        "SELECT id FROM conversations WHERE session_id=$1 AND role='assistant'", orphan_sid)
+    await _pool_execute(
+        "INSERT INTO turn_tombstones (session_id, turn_key) VALUES "
+        "('w205-other-session','w205-orphan-turn'), ($1,'unrelated-turn')",
+        orphan_sid,
+    )
+    await _pool_execute(
+        "INSERT INTO message_tombstones (session_id, message_id) VALUES "
+        "('w205-other-session','w205-orphan-user'), ($1,'unrelated-message')",
+        orphan_sid,
+    )
+
+    no_usage = await database.append_turn_events_atomic(
+        "w205-no-usage", "u", "a", "m", turn_key="w205-no-usage-turn", usage=None)
+    no_usage_assistant_id = await _pool_fetchval(
+        "SELECT id FROM conversations WHERE session_id='w205-no-usage' AND role='assistant'")
+    await _w205_insert_event(
+        900000, "w205-unknown-history", "user", scope_known=False,
+        content="w205 historical sentinel",
+    )
+
+    result = await reconcile(sample_limit=50)
+    require(_w205_bucket_count(result, "explained", "user_deleted_keeps_assistant_exact") == 1
+            and exact_assistant_id in result["explained"]["user_deleted_keeps_assistant_exact"]["ids"],
+            "exact message/turn tombstone evidence was not accepted")
+    require(_w205_bucket_count(result, "explained", "deletion_anchor_unverifiable") == 1
+            and weak_assistant_id in result["explained"]["deletion_anchor_unverifiable"]["ids"],
+            "source-revision evidence was not isolated as a weak explanation")
+    require(_w205_bucket_count(result, "unexplained", "turn_orphan") == 1
+            and orphan_assistant_id in result["unexplained"]["turn_orphan"]["ids"],
+            "an unrelated tombstone incorrectly excused an orphan")
+    require(no_usage_assistant_id in result["explained"]["assistant_without_usage"]["ids"],
+            "legal NULL assistant usage was not recorded as explained")
+    require(900000 in result["explained"]["unknown_scope_excluded"]["ids"],
+            "unknown historical scope was not explicitly excluded")
+    require(no_usage.get("ok") is True, "NULL-usage fixture failed before reconciliation")
+    passed("T-W2-05-05 accepted explanations require exact or explicitly weak database evidence")
+
+    begin("T-W2-05-06")
+
+    async def only_unexplained(expected_bucket: str, expected_id: int) -> None:
+        outcome = await reconcile(sample_limit=50)
+        require(_w205_bucket_count(outcome, "unexplained", expected_bucket) == 1,
+                f"{expected_bucket} count drifted: {outcome['unexplained']!r}")
+        require(expected_id in outcome["unexplained"][expected_bucket]["ids"],
+                f"{expected_bucket} did not sample offending id {expected_id}")
+        require(all(
+            _w205_bucket_count(outcome, "unexplained", name) == (1 if name == expected_bucket else 0)
+            for name in _W205_UNEXPLAINED
+        ), f"{expected_bucket} overlapped another unexplained bucket: {outcome['unexplained']!r}")
+
+    await _truncate("conversations", "turn_tombstones", "message_tombstones", "session_source_rev")
+    await _w205_insert_event(1001, "w205-bad-orphan", "assistant", turn_id=9999)
+    await only_unexplained("turn_orphan", 1001)
+
+    await _truncate("conversations", "turn_tombstones", "message_tombstones", "session_source_rev")
+    await _w205_insert_event(1101, "w205-cross-user", "user", turn_id=1101)
+    await _w205_insert_event(1102, "w205-cross-assistant", "assistant", turn_id=1101)
+    await only_unexplained("turn_cross_session", 1102)
+
+    await _truncate("conversations", "turn_tombstones", "message_tombstones", "session_source_rev")
+    await _w205_insert_event(1201, "w205-order", "assistant", turn_id=1202)
+    await _w205_insert_event(1202, "w205-order", "user", turn_id=1202)
+    await only_unexplained("order_break", 1201)
+
+    await _truncate("conversations", "turn_tombstones", "message_tombstones", "session_source_rev")
+    await _w205_insert_event(1301, "w205-split", "user", turn_id=1301, scope_known=True)
+    await _w205_insert_event(1302, "w205-split", "assistant", turn_id=1301, scope_known=False)
+    await only_unexplained("scope_split", 1302)
+
+    await _truncate("conversations", "turn_tombstones", "message_tombstones", "session_source_rev")
+    await _w205_insert_event(1401, "w205-dup-user", "user", turn_id=1401)
+    await _w205_insert_event(1402, "w205-dup-user", "user", turn_id=1401)
+    await _w205_insert_event(1403, "w205-dup-user", "assistant", turn_id=1401,
+                             usage={"prompt": 1, "completion": 1, "cached": 0})
+    await only_unexplained("duplicate_user_in_turn", 1401)
+
+    await _truncate("conversations", "turn_tombstones", "message_tombstones", "session_source_rev")
+    await _w205_insert_event(1501, "w205-key-conflict", "user", turn_id=1501, turn_key="same")
+    await _w205_insert_event(1502, "w205-key-conflict", "user", turn_id=1502, turn_key="same")
+    await only_unexplained("turn_key_conflict", 1501)
+    passed("T-W2-05-06 every unexplained ledger defect is detected in its own bucket")
+
+
+def _w205_cli(*args: str) -> subprocess.CompletedProcess:
+    env = os.environ.copy()
+    env["DATABASE_URL"] = database.DATABASE_URL
+    env["PYTHONUTF8"] = "1"
+    return subprocess.run(
+        [sys.executable, str(ROOT / "scripts" / "ledger_reconcile.py"), *args],
+        cwd=ROOT,
+        env=env,
+        text=True,
+        encoding="utf-8",
+        capture_output=True,
+        timeout=30,
+        check=False,
+    )
+
+
+async def test_w2_05_scale_snapshot_and_privacy() -> None:
+    reconcile = _w205_reconcile()
+    begin("T-W2-05-07")
+    await _truncate("conversations", "turn_tombstones", "message_tombstones", "session_source_rev")
+    await _w205_insert_event(1, "w205-interleave-a", "user", turn_id=1, turn_key="a")
+    await _w205_insert_event(2, "w205-interleave-b", "user", turn_id=2, turn_key="b")
+    await _w205_insert_event(
+        3, "w205-interleave-a", "assistant", turn_id=1, turn_key="a",
+        usage={"prompt": 1, "completion": 1, "cached": 0},
+    )
+    await _w205_insert_event(
+        4, "w205-interleave-b", "assistant", turn_id=2, turn_key="b",
+        usage={"prompt": 1, "completion": 1, "cached": 0},
+    )
+    interleaved = await reconcile(sample_limit=2)
+    require(_w205_unexplained_total(interleaved) == 0,
+            f"globally interleaved ids were mistaken for deletion/corruption: {interleaved!r}")
+
+    await _truncate("conversations", "turn_tombstones", "message_tombstones", "session_source_rev")
+    await _pool_execute(
+        "INSERT INTO conversations "
+        "(id, session_id, role, content, model, scope_known) "
+        "SELECT 200000 + g, 'w205-scale-' || g::text, 'user', 'scale', 'm', FALSE "
+        "FROM generate_series(1, 501) AS g"
+    )
+    scaled = await reconcile(sample_limit=7)
+    require(scaled["total_rows"] == 501,
+            f"full-table count was capped by session/sample limits: {scaled['total_rows']}")
+    require(_w205_bucket_count(scaled, "explained", "unknown_scope_excluded") == 501,
+            "501 sessions were not all counted")
+    require(len(scaled["explained"]["unknown_scope_excluded"]["ids"]) == 7,
+            "sample_limit must cap ids without capping count")
+
+    def assert_no_truncated(value):
+        if isinstance(value, dict):
+            require("truncated" not in value, "reconcile output grew a truncated pass flag")
+            for child in value.values():
+                assert_no_truncated(child)
+        elif isinstance(value, list):
+            for child in value:
+                assert_no_truncated(child)
+
+    assert_no_truncated(scaled)
+    for invalid in (0, -1, 501):
+        try:
+            await reconcile(sample_limit=invalid)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f"function accepted invalid sample_limit={invalid}")
+        cli = _w205_cli("--json", "--sample-limit", str(invalid))
+        require(cli.returncode == 64,
+                f"CLI invalid sample_limit={invalid} must exit 64, got {cli.returncode}")
+    passed("T-W2-05-07 interleaving is safe, all sessions count, and only samples are capped")
+
+    begin("T-W2-05-08")
+    await _truncate("conversations", "turn_tombstones", "message_tombstones", "session_source_rev")
+    await database.append_turn_events_atomic(
+        "w205-readonly", "u", "a", "m", turn_key="readonly-turn",
+        usage={"prompt": 1, "completion": 1, "cached": 0},
+    )
+    checksum_sql = (
+        "SELECT md5(COALESCE(string_agg(to_jsonb(c)::text, '' ORDER BY id), '')) "
+        "FROM conversations c"
+    )
+    before = await _pool_fetchval(checksum_sql)
+    result = await reconcile(sample_limit=50)
+    after = await _pool_fetchval(checksum_sql)
+    require(before == after, "read-only reconcile changed conversations")
+    source = (ROOT / "database.py").read_text(encoding="utf-8")
+    require(re.search(
+        r"async def reconcile_event_ledger\(.*?transaction\(\s*"
+        r"isolation\s*=\s*['\"]repeatable_read['\"]\s*,\s*readonly\s*=\s*True\s*\)",
+        source,
+        re.S,
+    ), "reconcile does not open a repeatable-read read-only transaction")
+    pool = await database.get_pool()
+    readonly_error = None
+    async with pool.acquire() as conn:
+        try:
+            async with conn.transaction(isolation="repeatable_read", readonly=True):
+                await conn.execute("UPDATE conversations SET model='forbidden' WHERE id=-1")
+        except asyncpg.ReadOnlySQLTransactionError as exc:
+            readonly_error = exc
+    require(readonly_error is not None,
+            "PostgreSQL did not reject an injected UPDATE in the frozen read-only mode")
+    require(result["ok"] is True and _w205_unexplained_total(result) == 0,
+            "clean read-only fixture did not reconcile")
+    passed("T-W2-05-08 reconciliation uses one repeatable-read read-only snapshot and writes nothing")
+
+    begin("T-W2-05-09")
+    await _truncate("conversations", "turn_tombstones", "message_tombstones", "session_source_rev")
+    secret_sid = "W205_SECRET_SESSION_NEVER_PRINT"
+    secret_body = "绝密中文正文 postgresql://secret:pw@host/db sk-secret-never-print"
+    await _w205_insert_event(
+        300001, secret_sid, "user", turn_id=300001, turn_key="secret-turn",
+        source_message_id="secret-user-id", content=secret_body,
+    )
+    await _w205_insert_event(
+        300002, secret_sid, "assistant", turn_id=300001, turn_key="secret-turn",
+        source_message_id="secret-assistant-id", usage=None, content=secret_body,
+    )
+    private_result = await reconcile(session_id=secret_sid, sample_limit=50)
+    require(set(private_result) == {
+        "ok", "total_rows", "roles", "scope", "matrix", "explained", "unexplained",
+    }, f"top-level reconcile keys drifted: {set(private_result)}")
+    require(set(private_result["roles"]) == {"user", "assistant", "other"},
+            "role result keys drifted")
+    require(set(private_result["scope"]) == {"known_global", "known_project", "unknown"},
+            "scope result keys drifted")
+    require(set(private_result["explained"]) == _W205_EXPLAINED,
+            "explained bucket keys drifted")
+    require(set(private_result["unexplained"]) == _W205_UNEXPLAINED,
+            "unexplained bucket keys drifted")
+    require(all(re.fullmatch(
+        r"tid=[01],tkey=[01],smid=[01],known=[01],pid=[01],usage=[01]", key
+    ) for key in private_result["matrix"]),
+            f"fact matrix exposed an unfrozen key: {private_result['matrix']!r}")
+    for group in ("explained", "unexplained"):
+        for payload in private_result[group].values():
+            require(set(payload) == {"count", "ids"}
+                    and isinstance(payload["count"], int)
+                    and not isinstance(payload["count"], bool)
+                    and isinstance(payload["ids"], list)
+                    and all(isinstance(item, int) and not isinstance(item, bool)
+                            for item in payload["ids"]),
+                    f"{group} bucket contains an unsafe leaf: {payload!r}")
+    serialized = json.dumps(private_result, sort_keys=True, ensure_ascii=False)
+    require(all(secret not in serialized for secret in (
+        secret_sid, "绝密中文正文", "postgresql://", "sk-secret-never-print",
+    )), "reconcile return leaked a session id, body, DSN, or API key")
+
+    cli = _w205_cli("--json", "--session", secret_sid, "--sample-limit", "50")
+    require(cli.returncode == 0, f"clean CLI run failed: rc={cli.returncode}, stderr={cli.stderr!r}")
+    try:
+        cli_result = json.loads(cli.stdout)
+    except json.JSONDecodeError as exc:
+        raise AssertionError(
+            f"--json stdout must be exactly one JSON object with no pool chatter: {cli.stdout!r}"
+        ) from exc
+    require(isinstance(cli_result, dict) and cli_result == private_result,
+            "CLI JSON differs from the database function result")
+    require(all(secret not in cli.stdout for secret in (
+        secret_sid, "绝密中文正文", "postgresql://", "sk-secret-never-print",
+    )), "CLI stdout leaked a session id, body, DSN, or API key")
+    passed("T-W2-05-09 return values and exact JSON stdout contain no strings, bodies, or identifiers")
+
+    begin("T-W2-05-10")
+    db_source = (ROOT / "database.py").read_text(encoding="utf-8")
+    tree = ast.parse(db_source)
+    frozen_hashes = {
+        "get_recent_messages": "8c73cc57ba43ede21829fcbf69f303721244cb95cbc66b01d97a58d60876e0d8",
+        "snapshot_recent_conversation": "b6a63c4c8e3871568dcfbf31706e63482a9b4c8c3587d0c4e8469ed7cf9ee51c",
+    }
+    actual_hashes = {
+        node.name: hashlib.sha256(ast.get_source_segment(db_source, node).encode("utf-8")).hexdigest()
+        for node in tree.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name in frozen_hashes
+    }
+    require(actual_hashes == frozen_hashes,
+            f"old ledger readers changed outside W2-05: {actual_hashes!r}")
+    require("W2-05 可从 chat_messages 回填" not in db_source
+            and "可由 W2-05 从 chat_messages 回填" not in db_source,
+            "database comments still promise the abandoned automatic backfill")
+    issues = (ROOT / "KNOWN_ISSUES.md").read_text(encoding="utf-8")
+    for phrase in ("历史账本行不回填", "未知归属行不进新读路径", "未带项目默认全局"):
+        require(phrase in issues, f"KNOWN_ISSUES is missing the W2-05 contract: {phrase}")
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    require("scripts/ledger_reconcile.py" in readme,
+            "README does not document the read-only reconcile command")
+    require((ROOT / "scripts" / "ledger_reconcile.py").is_file(),
+            "read-only reconciliation CLI is missing")
+    main_source = (ROOT / "main.py").read_text(encoding="utf-8")
+    require("reconcile_event_ledger" not in main_source,
+            "W2-05 accidentally exposed reconciliation through the unauthenticated HTTP app")
+    passed("T-W2-05-10 old readers are byte-frozen and no-backfill/read-only docs are explicit")
+
+
 async def test_memory_notice_contracts() -> None:
     begin("T-MN-K-01")
     failure_results = {
@@ -6733,6 +7362,10 @@ async def run_suite(test_dsn: str) -> None:
         await test_w2_04_handoff_copies(client)
         await test_w2_04_restore_stamp_states(client)
         await test_w2_04_1_ticket_c(client)
+        await test_w2_05_scope_contract(client)
+        await test_w2_05_reconcile_matrix_and_happy_paths(client)
+        await test_w2_05_reconcile_evidence(client)
+        await test_w2_05_scale_snapshot_and_privacy()
         await test_memory_notice_contracts()
         await test_empty_response_resilience_contracts()
 
@@ -6753,6 +7386,7 @@ async def async_main() -> int:
         w2_03_passed = [name for name in PASSED if name.startswith("T-W2-03-")]
         w2_04_passed = [name for name in PASSED if name.startswith("T-W2-04-")]
         ticket_c_passed = [name for name in PASSED if name.startswith("T-C-")]
+        w2_05_passed = [name for name in PASSED if name.startswith("T-W2-05-")]
         memory_notice_passed = [name for name in PASSED if name.startswith("T-MN-K-")]
         empty_response_passed = [name for name in PASSED if name.startswith("T-ER-K-")]
         print(f"\nPASS: {len(legacy_passed)} permanent S1-S6 behavior guards")
@@ -6764,6 +7398,7 @@ async def async_main() -> int:
         print(f"PASS: {len(w2_03_passed)} W2-03 ledger-schema/scope/dark-write guards")
         print(f"PASS: {len(w2_04_passed)} W2-04 session-delete/privacy guards")
         print(f"PASS: {len(ticket_c_passed)} W2-04.1 ticket-C guards")
+        print(f"PASS: {len(w2_05_passed)} W2-05 scope/reconciliation guards")
         print(f"PASS: {len(memory_notice_passed)} memory-notice/failure-propagation guards")
         print(f"PASS: {len(empty_response_passed)} empty-response diagnostic/resilience guards")
         if _MUTES_USED:
