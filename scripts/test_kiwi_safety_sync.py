@@ -8016,6 +8016,32 @@ async def test_empty_response_resilience_contracts() -> None:
     passed("T-ER-K-04 both diagnostic arms are body-free and timeout stays separate")
 
 
+async def test_sec_01a_config(client) -> None:
+    """Real SQL tests for override removal and secret import/export semantics."""
+    key = "KIWI_PG_SENTINEL_8vR6nB2qL4sT9xZ3"
+    begin("T-SEC-01a-01")
+    response = await client.put("/admin/config/search_api_key", json={"value": key})
+    require(response.status_code == 200, "secret write failed")
+    require(await _config_row("search_api_key") == key, "secret did not reach DB")
+    for payload in ({}, {"value": ""}, {"value": "   "}):
+        response = await client.put("/admin/config/search_api_key", json=payload)
+        require(response.status_code == 200 and await _config_row("search_api_key") == key, "empty secret overwrote DB")
+    passed("T-SEC-01a-01 secret blank updates preserve stored value")
+    begin("T-SEC-01a-02")
+    with patch.dict(os.environ, {"SEARCH_API_KEY": key}):
+        response = await client.put("/admin/config/search_api_key", json={"clear": True})
+        require(response.status_code == 200, "clear failed")
+        require(await _config_row("search_api_key") is None, "clear must delete override row")
+        require(await config.get_config("search_api_key") == key, "env fallback was shadowed")
+        require(response.json()["config"]["source"] == "env", "wrong effective source")
+    passed("T-SEC-01a-02 clear deletes row and reveals env")
+    begin("T-SEC-01a-03")
+    for value in (None, 12, [], {}):
+        response = await client.put("/admin/config/search_api_key", json={"value": value})
+        require(response.status_code == 400 and await _config_row("search_api_key") is None, "invalid secret became a DB value")
+    passed("T-SEC-01a-03 invalid secret inputs create no row")
+
+
 async def run_suite(test_dsn: str) -> None:
     global database, config, app_module, memory_extractor
 
@@ -8083,6 +8109,7 @@ async def run_suite(test_dsn: str) -> None:
         await test_w2_05_scale_snapshot_and_privacy()
         await test_memory_notice_contracts()
         await test_empty_response_resilience_contracts()
+        await test_sec_01a_config(client)
 
 
 async def async_main() -> int:

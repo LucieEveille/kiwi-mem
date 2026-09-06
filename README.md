@@ -177,7 +177,7 @@ nano .env
 API_KEY=
 ```
 
-> 🔓 **kiwi-mem 不带访问密码。** 网关和管理面板默认不需要任何登录口令——这样最省心，不会再有人卡在 401。代价是：**任何知道你网关地址的人都能访问全部 API。** 如果服务暴露在公网，请用 Cloudflare Access、反向代理的 Basic Auth、IP 白名单等手段保护整个服务，尤其是 `/admin`、会导出完整配置（可能含 API Key）的 `/sync/export`，以及会恢复完整配置的 `/sync/import-backup`。这些端点目前没有内建鉴权。
+> 🔓 **kiwi-mem 不带访问密码。** 网关和管理面板默认不需要任何登录口令——这样最省心，不会再有人卡在 401。代价是：**任何知道你网关地址的人都能访问全部 API。** 如果服务暴露在公网，请用 Cloudflare Access、反向代理的 Basic Auth、IP 白名单等手段保护整个服务，尤其是 `/admin`、会导出对话和配置的 `/sync/export`（secret 配置值已排除），以及会恢复完整配置的 `/sync/import-backup`。这些端点目前没有内建鉴权。
 
 保存后启动：
 ```bash
@@ -719,3 +719,7 @@ kiwi-mem 使用 [GNU Affero General Public License v3.0 or later](LICENSE)（AGP
 > *"记忆不是存储，是理解。"*
 
 *Built with love, for anyone who wants their AI to truly remember.*
+
+### 凭据安全边界
+
+供应商与搜索密钥只返回配置状态及符合门槛的尾号；ZIP 不导出 schema 标记的 secret 值。服务仍无认证，请保护整个服务。配置清除、旧备份兼容和错误出口范围见 [安全模型](docs/security-model.md)。

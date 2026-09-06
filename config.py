@@ -96,7 +96,7 @@ CONFIG_SCHEMA = {
     "autolock_emo_diversity": ("",                       "3",    "自动锁定：高情绪多样性阈值","int"),
     # 联网搜索配置（v3.8）
     "search_engine":         ("SEARCH_ENGINE",           "",     "搜索引擎",          "text"),
-    "search_api_key":        ("SEARCH_API_KEY",          "",     "搜索 API Key",      "text"),
+    "search_api_key":        ("SEARCH_API_KEY",          "",     "搜索 API Key",      "secret"),
     "search_max_results":    ("SEARCH_MAX_RESULTS",      "5",    "搜索结果条数",      "int"),
     # 云端同步 — 用户/助手配置（v4.1）
     "user_avatar":           ("",                        "",     "用户头像",          "text"),
@@ -265,16 +265,11 @@ _ENUM_VALUES = {
 }
 
 
-def _mask_secret(value: str) -> str:
-    v = value or ""
-    return (v[:4] + "…" + v[-3:]) if len(v) > 10 else ("•" * min(len(v), 8))
-
-
 def _safe_log_value(key: str, value: str) -> str:
     """日志脱敏：密钥类只显脱敏值；提示词/长文本只显长度，避免进 Zeabur 日志。"""
     low = key.lower()
     if "key" in low or "token" in low or "secret" in low or "password" in low:
-        return _mask_secret(value)
+        return "已设置" if value else "已清除"
     if key.startswith("prompt_") or key in (
         "user_profile", "assistant_settings", "custom_skills", "quick_phrases",
         "mcp_servers", "mcp_switches", "mcp_manual_ids", "user_avatar", "assistant_avatar",
@@ -351,3 +346,14 @@ async def get_config_bool(key: str, fallback: bool = False) -> bool:
     if v in ("false", "0", "no", "off"):
         return False
     return fallback
+
+
+async def clear_secret_config(key: str) -> bool:
+    """Remove only a secret override; effective env/default is then visible."""
+    if key not in CONFIG_SCHEMA or CONFIG_SCHEMA[key][3] != "secret":
+        return False
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute("DELETE FROM gateway_config WHERE key = $1", key)
+    print(f"⚙️  配置更新: {key} = 已清除")
+    return True

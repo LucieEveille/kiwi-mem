@@ -38,7 +38,7 @@ export async function runHealthChecks() {
 
   if (scfg && scfg.engine) {
     const eng = (engines.engines || []).find(e => e.id === scfg.engine);
-    if (eng && eng.needs_key && !scfg.api_key) {
+    if (eng && eng.needs_key && !scfg.has_value) {
       issues.push({ level: 'warn', title: '联网搜索缺 API Key', detail: `已选「${eng.name}」但没填 Key，搜索会失败。`, route: 'websearch' });
     }
   }

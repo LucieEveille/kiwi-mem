@@ -10,6 +10,7 @@
 // 控件改动即时 PUT /admin/config/{key}，无需保存按钮。总开关联动变暗下方旋钮。
 // ============================================================
 import { get, put, post, escHtml, escAttr } from './api.js';
+import { isSecret, secretLabel, secretWriter } from './secret-fields.mjs';
 import { toast, cfgRow, ctl, masterSwitch, modal, setBusy } from './ui.js';
 import { CONFIG_META, CONFIG_PAGES, RESTORABLE_PROMPTS } from './config-schema.js';
 
@@ -18,7 +19,7 @@ export async function loadConfig() {
   const raw = data.config || data;
   const flat = {};
   for (const [k, v] of Object.entries(raw)) {
-    flat[k] = (v && typeof v === 'object' && 'value' in v) ? v.value : v;
+    flat[k] = isSecret(v) ? { ...v, value: '' } : (v && typeof v === 'object' && 'value' in v) ? v.value : v;
   }
   return flat;
 }
@@ -28,7 +29,8 @@ export async function saveConfig(key, value) {
 }
 
 // 单个 key 的控件（带 data-cfg + data-key，供 wireConfig 自动保存）
-function controlFor(key, val) {
+export function controlFor(key, val) {
+  if (isSecret(val)) return `<input type="password" data-cfg data-key="${escAttr(key)}" value="" autocomplete="new-password" placeholder="${escAttr(secretLabel(val))}"><button type="button" class="btn btn-xs btn-secondary" data-clear-secret="${escAttr(key)}">清除数据库密钥</button>`;
   const m = CONFIG_META[key] || { input: 'text' };
   const v = val ?? '';
   const attr = `data-cfg data-key="${key}"`;
@@ -127,9 +129,35 @@ export function wireConfig(root, cfg) {
   // 不必失焦，解决「改完没点别处、直接刷新就丢」（change 只在 blur 触发，开关却是点击即触发，
   // 所以之前只有开关能存）。change 与防抖互不重复；值未变则跳过。
   const debouncers = {};
+  const secretEditors = new Map();
+  root.querySelectorAll('[data-cfg][data-key]').forEach(el => {
+    const key = el.dataset.key;
+    if (!isSecret(cfg[key])) return;
+    const editor = secretWriter(el, {
+      write: body => put(`/admin/config/${key}`, body),
+      refresh: async () => (await get('/admin/config')).config[key],
+      update: meta => { cfg[key] = { ...meta, value: '' }; el.placeholder = secretLabel(meta); },
+    });
+    secretEditors.set(key, editor);
+    el.addEventListener('input', editor.changed);
+  });
+  root.querySelectorAll('[data-clear-secret]').forEach(button => {
+    button.addEventListener('click', async () => {
+      if (!window.confirm('清除数据库中的密钥设置？环境变量中配置的密钥仍会生效。')) return;
+      const key = button.dataset.clearSecret;
+      clearTimeout(debouncers[key]);
+      try { await secretEditors.get(key).submit(true); toast('数据库密钥已清除'); }
+      catch (err) { toast(err.message, 'err'); }
+    });
+  });
   const doSave = async (el) => {
     if (!el || el.dataset.prompt !== undefined) return; // prompt 走弹窗保存
     const key = el.dataset.key;
+    if (secretEditors.has(key)) {
+      try { await secretEditors.get(key).submit(); }
+      catch (err) { flashStatus(el, 'fail', err.message); toast(err.message, 'err'); }
+      return;
+    }
     const isBool = el.dataset.bool !== undefined || el.type === 'checkbox';
     const value = isBool ? (el.checked ? 'true' : 'false') : el.value;
     if (String(cfg[key] ?? '') === String(value)) return; // 未变化，跳过

@@ -8,6 +8,7 @@
 v1.0 初版
 """
 
+from security import safe_log
 import os
 import json
 import asyncio
@@ -2076,10 +2077,10 @@ async def _call_model_for_json(prompt: str, user_msg: str, model: str, max_token
             result = _parse_calendar_model_json(text, "summary")
             if result is not None:
                 return result
-            print(f"   ⚠️ JSON 解析失败：{text[:200]}")
+            safe_log("digest_model_failed", "parse_failed")
             return None
     except Exception as e:
-        print(f"   ⚠️ 模型调用出错: {e}")
+        safe_log("digest_model_failed", e)
         return None
 
 

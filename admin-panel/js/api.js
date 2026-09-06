@@ -17,6 +17,17 @@ export async function request(path, { method = 'GET', body, headers, signal } = 
   return fetch(API + path, opts);
 }
 
+export function errorMessage(data, status) {
+  if (data?.error_code) {
+    const code = data.error_code;
+    const labels = { invalid_request: '配置或输入无效', not_found: '资源不存在', internal_error: '服务内部错误', timeout: '上游请求超时', parse_failed: '上游响应格式无效', upstream_error: '上游请求失败', 'network:RequestError': '无法连接上游服务' };
+    if (Object.hasOwn(labels, code)) return labels[code];
+    if (/^http_[1-5][0-9]{2}$/.test(code)) return `上游请求失败（${code.slice(5)}）`;
+    return '请求失败';
+  }
+  return data?.error || `服务器错误 (${status})`;
+}
+
 export async function jfetch(path, opts = {}) {
   let res;
   try {
@@ -31,9 +42,9 @@ export async function jfetch(path, opts = {}) {
     if (!res.ok) throw new Error(`服务器错误 (${res.status})`);
     return text; // non-JSON body (rare)
   }
-  if (!res.ok) throw new Error(data?.error || `服务器错误 (${res.status})`);
+  if (!res.ok) throw new Error(errorMessage(data, res.status));
   if (data && typeof data === 'object' && !Array.isArray(data) && data.error) {
-    throw new Error(data.error);
+    throw new Error(errorMessage(data, res.status));
   }
   return data;
 }

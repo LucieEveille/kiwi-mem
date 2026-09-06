@@ -16,6 +16,7 @@ v5.7 升级：RRF 混合检索
 - 召回追踪统一在合并后执行（不重复追踪）
 """
 
+from security import validate_upstream_url, safe_log
 import os
 import re
 import json
@@ -846,12 +847,17 @@ async def _resolve_embedding_endpoint():
 
 async def get_embedding(text: str) -> Optional[List[float]]:
     """生成向量。优先走已保存供应商（按嵌入模型解析），否则回落环境变量。失败返回 None（触发降级搜索）。"""
-    url, key, model, _ = await _resolve_embedding_endpoint()
+    try:
+        url, key, model, _ = await _resolve_embedding_endpoint()
+        if url: url = validate_upstream_url(url)
+    except Exception as e:
+        safe_log("embedding_route_failed", e)
+        return None
     if not url or not key:
         print("⚠️  无可用 embedding 供应商/Key：把默认嵌入模型在某供应商下保存，或设置 API_KEY")
         return None
     try:
-        async with httpx.AsyncClient(timeout=15) as client:
+        async with httpx.AsyncClient(follow_redirects=False, timeout=15) as client:
             resp = await client.post(
                 url,
                 headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
@@ -859,10 +865,10 @@ async def get_embedding(text: str) -> Optional[List[float]]:
             )
             if resp.status_code == 200:
                 return resp.json()["data"][0]["embedding"]
-            print(f"⚠️  Embedding API 返回 {resp.status_code}: {resp.text[:200]}")
+            safe_log("embedding_failed", f"http_{resp.status_code}")
             return None
     except Exception as e:
-        print(f"⚠️  Embedding 生成失败: {e}")
+        safe_log("embedding_failed", e)
         return None
 
 
@@ -873,12 +879,17 @@ async def get_embeddings_batch(texts: List[str]) -> List[Optional[List[float]]]:
     """
     if not texts:
         return []
-    url, key, model, _ = await _resolve_embedding_endpoint()
+    try:
+        url, key, model, _ = await _resolve_embedding_endpoint()
+        if url: url = validate_upstream_url(url)
+    except Exception as e:
+        safe_log("embedding_route_failed", e)
+        return [None] * len(texts)
     if not url or not key:
         return [None] * len(texts)
 
     try:
-        async with httpx.AsyncClient(timeout=30) as client:
+        async with httpx.AsyncClient(follow_redirects=False, timeout=30) as client:
             resp = await client.post(
                 url,
                 headers={
@@ -900,11 +911,11 @@ async def get_embeddings_batch(texts: List[str]) -> List[Optional[List[float]]]:
                     results[idx] = item["embedding"]
                 return results
             else:
-                print(f"⚠️  批量 Embedding API 返回 {resp.status_code}: {resp.text[:200]}")
+                safe_log("embedding_failed", f"http_{resp.status_code}")
                 return [None] * len(texts)
                 
     except Exception as e:
-        print(f"⚠️  批量 Embedding 生成失败: {e}")
+        safe_log("embedding_failed", e)
         return [None] * len(texts)
 
 

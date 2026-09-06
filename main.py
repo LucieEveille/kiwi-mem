@@ -58,7 +58,14 @@ from database import (
     # v4.2 提醒系统
     create_reminder, get_reminders, update_reminder, delete_reminder, get_due_reminders, fire_reminder,
 )
+from security import (
+    require_success_event, public_model_result, public_dream_record,
+    serialize_provider, serialize_config, credential_state, export_config, validate_backup_meta,
+    secret_action, InvalidRequest, UpstreamFailure, stable_error, stable_payload, safe_log,
+    validate_upstream_url, upstream_origin, is_openrouter_url, sse_error, safe_sse,
+)
 from config import (
+    CONFIG_SCHEMA, clear_secret_config,
     REASONING_EFFORT_LEVELS,
     REASONING_EFFORT_VALUES,
     TRUSTED_HOST_CEILINGS,
@@ -68,7 +75,7 @@ from config import (
 )
 from memory_extractor import extract_memories
 from mcp_server import get_mcp_app, get_calendar_mcp_app, mcp_memory, mcp_calendar
-from web_search import web_search, format_results_for_prompt, get_engine_list
+from web_search import SEARCH_ENGINES, web_search, format_results_for_prompt, get_engine_list
 from mcp_client import get_tools_for_servers, call_tool, call_tools_batch, clear_tool_cache
 from anthropic_adapter import (
     to_anthropic_request, to_anthropic_headers, get_anthropic_url,
@@ -1656,7 +1663,7 @@ async def list_models():
     try:
         # 从 API_BASE_URL 提取基础地址（去掉 /chat/completions 部分）
         base = API_BASE_URL.split("/chat/completions")[0].rstrip("/")
-        async with httpx.AsyncClient(timeout=15) as client:
+        async with httpx.AsyncClient(follow_redirects=False, timeout=15) as client:
             resp = await client.get(
                 f"{base}/models",
                 headers={"Authorization": f"Bearer {API_KEY}"},
@@ -2177,7 +2184,11 @@ async def chat_completions(request: Request):
         chat_api_url = API_BASE_URL
 
     is_anthropic_fmt = (api_format == "anthropic")
-    is_openrouter = "openrouter" in chat_api_url.lower()
+    try:
+        chat_api_url = validate_upstream_url(chat_api_url)
+        is_openrouter = is_openrouter_url(chat_api_url)
+    except InvalidRequest:
+        return stable_error("invalid_request")
 
     # W2-03 分层双开关：把「记不记事件」与「提不提记忆」拆开。
     #   record_events   —— 只要是真实聊天就落账，即使记忆总开关是关的；
@@ -2721,11 +2732,19 @@ async def chat_completions(request: Request):
     else:
         # 非流式：Anthropic 格式需要转换请求和响应
         send_body = to_anthropic_request(body) if api_format == "anthropic" else body
-        async with httpx.AsyncClient(timeout=300) as client:
-            response = await client.post(chat_api_url, headers=headers, json=send_body)
+        async with httpx.AsyncClient(follow_redirects=False, timeout=300) as client:
+            try:
+                response = await client.post(chat_api_url, headers=headers, json=send_body)
+            except Exception as e:
+                return stable_error(e, status_code=502, headers=_session_headers(session_id, session_generated))
 
             if response.status_code == 200:
-                resp_data = response.json()
+                try:
+                    resp_data = response.json()
+                except (ValueError, TypeError):
+                    return stable_error("parse_failed", headers=_session_headers(session_id, session_generated))
+                if not isinstance(resp_data, dict) or resp_data.get("error") or resp_data.get("type") == "error":
+                    return stable_error("upstream_error", headers=_session_headers(session_id, session_generated))
                 # Anthropic 响应转回 OpenAI 格式
                 if api_format == "anthropic":
                     resp_data = from_anthropic_response(resp_data, model)
@@ -2755,12 +2774,7 @@ async def chat_completions(request: Request):
                 return JSONResponse(status_code=200, content=resp_data,
                                     headers=_session_headers(session_id, session_generated))
             else:
-                try:
-                    err_content = response.json()
-                except Exception:
-                    err_content = {"error": response.text[:500]}
-                # 身份已受理即回传：它表示「重试时继续用哪个会话」，与上游是否成功无关。
-                return JSONResponse(status_code=response.status_code, content=err_content,
+                return JSONResponse(status_code=502, content=stable_payload(f"http_{response.status_code}"),
                                     headers=_session_headers(session_id, session_generated))
 
 
@@ -2807,8 +2821,8 @@ async def _execute_gateway_tool(tool_name: str, arguments: dict, tool_info: dict
                 print(f"🌐 [auto] 搜索无结果")
                 return f"搜索「{query}」无结果。", extra
         except Exception as e:
-            print(f"❌ [auto] 搜索出错: {e}")
-            return f"搜索失败: {e}", extra
+            safe_log("search_tool_failed", e)
+            return "搜索失败: internal_error", extra
 
     # ── v5.8：对话搜索工具 ──
 
@@ -2975,7 +2989,8 @@ async def _stream_with_tools(messages, tools, tool_map, model, temperature, tool
 
     # 与主请求链路同口径：用 api_format（权威来源）+ URL 判断收敛成两个布尔
     _is_anthropic_fmt = (api_format == "anthropic")
-    _is_openrouter = "openrouter" in _api_url.lower()
+    _api_url = validate_upstream_url(_api_url)
+    _is_openrouter = is_openrouter_url(_api_url)
 
     # 先发送衔接提示（如果有无缝切窗）
     if prompt_meta and prompt_meta.get("handoff"):
@@ -3025,10 +3040,10 @@ async def _stream_with_tools(messages, tools, tool_map, model, temperature, tool
 
         print(f"🔄 Tool loop round {round_num + 1}: {len(tools)} tools, {len(current_messages)} msgs (format={api_format})")
 
-        async with _httpx.AsyncClient(timeout=120) as client:
+        async with _httpx.AsyncClient(follow_redirects=False, timeout=120) as client:
             resp = await client.post(_api_url, headers=headers, json=send_body)
             if resp.status_code != 200:
-                print(f"❌ LLM 请求失败: {resp.status_code} {resp.text[:1000]}")
+                safe_log("upstream_request_failed", f"http_{resp.status_code}")
 
             if resp.status_code != 200 and api_format == "anthropic" and isinstance(send_body, dict) and send_body.get("thinking"):
                 retry_body = dict(send_body)
@@ -3038,7 +3053,7 @@ async def _stream_with_tools(messages, tools, tool_map, model, temperature, tool
                 resp = await client.post(_api_url, headers=headers, json=retry_body)
                 send_body = retry_body
                 if resp.status_code != 200:
-                    print(f"❌ LLM 降级重试失败（no thinking）: {resp.status_code} {resp.text[:1000]}")
+                    safe_log("upstream_request_failed", f"http_{resp.status_code}")
 
             if resp.status_code != 200 and api_format == "anthropic" and isinstance(send_body, dict) and send_body.get("tools"):
                 retry_body = dict(send_body)
@@ -3047,15 +3062,17 @@ async def _stream_with_tools(messages, tools, tool_map, model, temperature, tool
                 print("↩️ Anthropic 工具轮降级重试：移除 tools/tool_choice")
                 resp = await client.post(_api_url, headers=headers, json=retry_body)
                 if resp.status_code != 200:
-                    print(f"❌ LLM 降级重试失败（no tools）: {resp.status_code} {resp.text[:1000]}")
+                    safe_log("upstream_request_failed", f"http_{resp.status_code}")
                 else:
                     send_body = retry_body
 
             if resp.status_code != 200:
-                yield f"data: {json.dumps({'choices': [{'delta': {'content': f'⚠️ 模型请求失败 ({resp.status_code})'}, 'finish_reason': None}], 'model': model}, ensure_ascii=False)}\n\n"
+                yield sse_error(f"http_{resp.status_code}")
                 yield "data: [DONE]\n\n"
                 return
             data = resp.json()
+            if not isinstance(data, dict) or data.get("error") or data.get("type") == "error":
+                raise UpstreamFailure()
             # W2-03 D1：工具循环每一轮的 usage 都累加，账本存整轮聚合值
             _usage_total = _accumulate_usage(_usage_total, _normalize_usage_for_storage(data.get("usage")))
             # Anthropic 响应转回 OpenAI 格式
@@ -3523,11 +3540,11 @@ def _ev_session_frame(session_id: str) -> bytes:
 def _with_ev_session(inner, session_id: str, generated: bool):
     """把 ev_session 放在流的最前面（先于 ev_handoff / ev_tool / 正文 delta），每流恰一次。"""
     if not generated:
-        return inner
+        return safe_sse(inner)
 
     async def _wrapped():
         yield _ev_session_frame(session_id)
-        async for chunk in inner:
+        async for chunk in safe_sse(inner):
             yield chunk
 
     return _wrapped()
@@ -3540,7 +3557,7 @@ def _session_headers(session_id: str, generated: bool) -> dict:
 
 async def stream_and_capture(headers: dict, body: dict, session_id: str, user_message: str, model: str, tool_events: list = None, api_url: str = None, project_id: str = None, prompt_meta: dict = None, api_format: str = "openai", api_key: str = None, is_regenerate: bool = False, mem_enabled: bool = True, record_events: bool = None, extract_enabled: bool = None, ledger_ctx: dict = None):
     """流式响应 + 捕获完整回复 + 工具事件"""
-    _api_url = api_url or API_BASE_URL
+    _api_url = validate_upstream_url(api_url or API_BASE_URL)
     _usage_total = None  # W2-03：按事件累加归一化 usage，流结束时落账本
 
     # 先发送衔接提示（如果有无缝切窗）
@@ -3596,16 +3613,11 @@ async def stream_and_capture(headers: dict, body: dict, session_id: str, user_me
             _headers = to_anthropic_headers(api_key or API_KEY)
             _headers["Accept-Encoding"] = "identity"
 
-            async with httpx.AsyncClient(timeout=300) as client:
+            async with httpx.AsyncClient(follow_redirects=False, timeout=300) as client:
                 async with client.stream("POST", _api_url, headers=_headers, json=send_body) as response:
                     if response.status_code != 200:
-                        error_body = b""
-                        async for chunk in response.aiter_bytes():
-                            error_body += chunk
-                        print(f"❌ Anthropic 流式请求失败 [{response.status_code}]: {error_body[:500].decode('utf-8', errors='ignore')}")
-                        err_msg = f"⚠️ 请求失败 ({response.status_code})"
-                        err_payload = json.dumps({'choices': [{'delta': {'content': err_msg}, 'finish_reason': None}], 'model': model}, ensure_ascii=False)
-                        yield f"data: {err_payload}\n\n".encode("utf-8")
+                        safe_log("upstream_stream_failed", f"http_{response.status_code}")
+                        yield sse_error(f"http_{response.status_code}").encode("utf-8")
                         yield b"data: [DONE]\n\n"
                         return
 
@@ -3618,12 +3630,14 @@ async def stream_and_capture(headers: dict, body: dict, session_id: str, user_me
                             event = event.strip()
                             if not event or event == "data: [DONE]":
                                 continue
+                            require_success_event(event)
                             captured_reasoning, _ = _capture_openai_sse_event(event, full_response)
                             _usage_total = _accumulate_usage(_usage_total, _capture_stream_usage(event))
                             _reasoning_chunks += captured_reasoning
                             yield (event + "\n\n").encode("utf-8")
                     _tail = _ev_buf.strip()
                     if _tail and _tail != "data: [DONE]":
+                        require_success_event(_tail)
                         captured_reasoning, _ = _capture_openai_sse_event(_tail, full_response)
                         _usage_total = _accumulate_usage(_usage_total, _capture_stream_usage(_tail))
                         _reasoning_chunks += captured_reasoning
@@ -3637,16 +3651,11 @@ async def stream_and_capture(headers: dict, body: dict, session_id: str, user_me
                 if key.lower() != "accept-encoding"
             }
             stream_headers["Accept-Encoding"] = "identity"
-            async with httpx.AsyncClient(timeout=300) as client:
+            async with httpx.AsyncClient(follow_redirects=False, timeout=300) as client:
                 async with client.stream("POST", _api_url, headers=stream_headers, json=body) as response:
                     if response.status_code != 200:
-                        error_body = b""
-                        async for chunk in response.aiter_bytes():
-                            error_body += chunk
-                        print(f"❌ 流式请求失败 [{response.status_code}]: {error_body[:500].decode('utf-8', errors='ignore')}")
-                        err_msg = f"⚠️ 请求失败 ({response.status_code})"
-                        err_payload = json.dumps({'choices': [{'delta': {'content': err_msg}, 'finish_reason': None}], 'model': model}, ensure_ascii=False)
-                        yield f"data: {err_payload}\n\n".encode("utf-8")
+                        safe_log("upstream_stream_failed", f"http_{response.status_code}")
+                        yield sse_error(f"http_{response.status_code}").encode("utf-8")
                         yield b"data: [DONE]\n\n"
                         return
 
@@ -3659,6 +3668,7 @@ async def stream_and_capture(headers: dict, body: dict, session_id: str, user_me
                             event = event.strip()
                             if not event or event == "data: [DONE]":
                                 continue
+                            require_success_event(event)
                             captured_reasoning, first_delta = _capture_openai_sse_event(event, full_response)
                             _usage_total = _accumulate_usage(_usage_total, _capture_stream_usage(event))
                             _reasoning_chunks += captured_reasoning
@@ -3677,6 +3687,7 @@ async def stream_and_capture(headers: dict, body: dict, session_id: str, user_me
                             yield (event + "\n\n").encode("utf-8")
                     _tail = buffer.strip()
                     if _tail and _tail != "data: [DONE]":
+                        require_success_event(_tail)
                         captured_reasoning, _ = _capture_openai_sse_event(_tail, full_response)
                         _usage_total = _accumulate_usage(_usage_total, _capture_stream_usage(_tail))
                         _reasoning_chunks += captured_reasoning
@@ -3973,7 +3984,7 @@ async def update_single_memory(memory_id: int, request: Request):
         else:
             return JSONResponse(status_code=404, content={"error": f"记忆 #{memory_id} 不存在或没有提供更新内容"})
     except Exception as e:
-        return {"error": str(e)}
+        return stable_error(e)
 
 
 @app.post("/debug/memories")
@@ -3999,7 +4010,7 @@ async def add_memory_manual(request: Request):
         total = await get_all_memories_count()
         return {"status": "added", "id": new_id, "content": content, "importance": importance, "title": title, "total": total}
     except Exception as e:
-        return {"error": str(e)}
+        return stable_error(e)
 
 
 @app.post("/debug/memories/{memory_id}/toggle-permanent")
@@ -4036,9 +4047,9 @@ async def api_migrate_embeddings():
         return {"error": "记忆系统未启用"}
     try:
         result = await migrate_embeddings()
-        return result
+        return public_model_result(result)
     except Exception as e:
-        return {"error": str(e)}
+        return stable_error(e)
 
 
 @app.get("/admin/embedding-stats")
@@ -4048,9 +4059,9 @@ async def api_embedding_stats():
         return {"error": "记忆系统未启用"}
     try:
         stats = await get_embedding_stats()
-        return stats
+        return public_model_result(stats)
     except Exception as e:
-        return {"error": str(e)}
+        return stable_error(e)
 
 
 @app.post("/admin/extract-now")
@@ -4137,7 +4148,7 @@ async def api_extract_now(request: Request):
         return {"status": "ok", "action": "abandoned", "reason": "sources_changed",
                 "saved": 0, "skipped": 0, "total": await get_all_memories_count()}
     except Exception as e:
-        return {"error": str(e)}
+        return stable_error(e)
 
 
 @app.get("/admin/daily-digest")
@@ -4159,9 +4170,9 @@ async def api_daily_digest(date: str = None):
             model_override=db_digest_model if db_digest_model else None,
             prompt_override=db_digest_prompt if db_digest_prompt else None,
         )
-        return {"status": "ok", **result}
+        return public_model_result({"status": "ok", **result})
     except Exception as e:
-        return {"error": str(e)}
+        return stable_error(e)
 
 
 # ============================================================
@@ -4174,9 +4185,9 @@ async def api_generate_day_page(date: str = None):
     try:
         from daily_digest import generate_day_page
         result = await generate_day_page(target_date=date)
-        return {"status": "ok", **result}
+        return public_model_result({"status": "ok", **result})
     except Exception as e:
-        return {"error": str(e)}
+        return stable_error(e)
 
 
 @app.get("/admin/week-summary")
@@ -4199,11 +4210,11 @@ async def api_generate_week_summary(start: str = None, end: str = None):
             end = last_sunday.strftime("%Y-%m-%d")
         validate_calendar_period_identity(start, "week", end_value=end)
         result = await generate_week_summary(start, end)
-        return {"status": "ok", **result}
+        return public_model_result({"status": "ok", **result})
     except ValueError as e:
-        return JSONResponse(status_code=400, content={"error": str(e)})
+        return stable_error("invalid_request")
     except Exception as e:
-        return {"error": str(e)}
+        return stable_error(e)
 
 
 @app.get("/admin/month-summary")
@@ -4226,11 +4237,11 @@ async def api_generate_month_summary(month: str = None):
         end = f"{month}-{last_day:02d}"
         validate_calendar_period_identity(start, "month", end_value=end)
         result = await generate_month_summary(start, end, month)
-        return {"status": "ok", **result}
+        return public_model_result({"status": "ok", **result})
     except ValueError as e:
-        return JSONResponse(status_code=400, content={"error": str(e)})
+        return stable_error("invalid_request")
     except Exception as e:
-        return {"error": str(e)}
+        return stable_error(e)
 
 
 @app.get("/admin/quarter-summary")
@@ -4269,11 +4280,11 @@ async def api_generate_quarter_summary(quarter: str = None):
 
         validate_calendar_period_identity(start, "quarter", end_value=end)
         result = await generate_period_summary(start, end, "quarter", label, "月总结")
-        return {"status": "ok", **result}
+        return public_model_result({"status": "ok", **result})
     except ValueError as e:
-        return JSONResponse(status_code=400, content={"error": str(e)})
+        return stable_error("invalid_request")
     except Exception as e:
-        return {"error": str(e)}
+        return stable_error(e)
 
 
 @app.get("/admin/year-summary")
@@ -4295,11 +4306,11 @@ async def api_generate_year_summary(year: str = None):
 
         validate_calendar_period_identity(start, "year", end_value=end)
         result = await generate_period_summary(start, end, "year", str(y), "季度总结")
-        return {"status": "ok", **result}
+        return public_model_result({"status": "ok", **result})
     except ValueError as e:
-        return JSONResponse(status_code=400, content={"error": str(e)})
+        return stable_error("invalid_request")
     except Exception as e:
-        return {"error": str(e)}
+        return stable_error(e)
 
 
 # ============================================================
@@ -4586,6 +4597,7 @@ async def api_dream_status():
         # 序列化时间
         for key in ("current", "last_completed"):
             if status.get(key):
+                status[key] = public_dream_record(status[key])
                 for field in ("started_at", "finished_at"):
                     if status[key].get(field):
                         status[key][field] = status[key][field].isoformat()
@@ -4602,7 +4614,7 @@ async def api_dream_status():
             "last_dream_date": last_dream_date,
         }
     except Exception as e:
-        return {"error": str(e)}
+        return stable_error(e)
 
 
 @app.get("/dream/history")
@@ -4610,14 +4622,14 @@ async def api_dream_history(limit: int = 10):
     """获取 Dream 执行历史"""
     try:
         from database import get_dream_history
-        history = await get_dream_history(limit)
+        history = [public_dream_record(h) for h in await get_dream_history(limit)]
         for h in history:
             for field in ("started_at", "finished_at"):
                 if h.get(field):
                     h[field] = h[field].isoformat()
         return {"status": "ok", "history": history}
     except Exception as e:
-        return {"error": str(e)}
+        return stable_error(e)
 
 
 @app.get("/dream/scenes")
@@ -4686,7 +4698,7 @@ async def api_update_scene(scene_id: int, req: Request):
         ok = await update_mem_scene(scene_id, **kwargs)
         return {"status": "ok" if ok else "not_found"}
     except Exception as e:
-        return {"error": str(e)}
+        return stable_error(e)
 
 
 # ============================================================
@@ -4695,27 +4707,32 @@ async def api_update_scene(scene_id: int, req: Request):
 
 @app.get("/admin/config")
 async def api_get_config():
-    """获取所有配置"""
     try:
-        config = await get_all_config()
-        return {"status": "ok", "config": config}
+        return {"status": "ok", "config": serialize_config(await get_all_config(), CONFIG_SCHEMA)}
     except Exception as e:
-        return {"error": str(e)}
+        return stable_error(e)
 
 
 @app.put("/admin/config/{key}")
 async def api_set_config(key: str, request: Request):
-    """更新单个配置"""
     try:
         data = await request.json()
+        if not isinstance(data, dict) or key not in CONFIG_SCHEMA:
+            return stable_error("invalid_request")
+        if CONFIG_SCHEMA[key][3] == "secret":
+            action, value = secret_action(data)
+            if action == "clear":
+                await clear_secret_config(key)
+            elif action == "set" and not await set_config(key, value):
+                return stable_error("invalid_request")
+            item = serialize_config(await get_all_config(), CONFIG_SCHEMA)[key]
+            return {"status": "updated", "key": key, "config": item}
         value = str(data.get("value", ""))
-        success = await set_config(key, value)
-        if success:
+        if await set_config(key, value):
             return {"status": "updated", "key": key, "value": value}
-        else:
-            return {"error": f"无效的配置项或值: {key}={value}"}
+        return stable_error("invalid_request")
     except Exception as e:
-        return {"error": str(e)}
+        return stable_error(e)
 
 
 # ============================================================
@@ -4803,7 +4820,7 @@ async def _compress_for_handoff(existing_summary: str, messages: list):
             ],
         }
         _headers, _send_body = prepare_background_request(use_api_key, use_api_format, _body)
-        async with httpx.AsyncClient(timeout=20) as client:
+        async with httpx.AsyncClient(follow_redirects=False, timeout=20) as client:
             response = await client.post(use_api_url, headers=_headers, json=_send_body)
 
         if response.status_code == 200:
@@ -4872,34 +4889,11 @@ async def api_restore_prompt(key: str):
 
 @app.get("/admin/providers")
 async def api_get_providers():
-    """获取所有供应商。
-
-    注意：必须脱敏 api_key —— 数据库里存的是 LLM 服务商的原始 key，
-    直接 dict(p) 送给前端会让任何能调到这个接口的人拿到完整 key。
-    前端 admin-panel 读的是 api_key_preview, 这里把 api_key 替换成
-    preview 字段, 原始 key 不出后端。
-    """
+    """Only the public provider serializer may cross these three exits."""
     try:
-        providers = await get_all_providers()
-        result = []
-        for p in providers:
-            sp = dict(p)
-            raw_key = sp.pop("api_key", "") or ""
-            if raw_key:
-                if len(raw_key) > 12:
-                    sp["api_key_preview"] = raw_key[:6] + "…" + raw_key[-4:]
-                else:
-                    sp["api_key_preview"] = "•" * min(len(raw_key), 8)
-            else:
-                sp["api_key_preview"] = ""
-            if sp.get("created_at"):
-                sp["created_at"] = sp["created_at"].isoformat()
-            if sp.get("updated_at"):
-                sp["updated_at"] = sp["updated_at"].isoformat()
-            result.append(sp)
-        return {"status": "ok", "providers": result}
+        return {"status": "ok", "providers": [serialize_provider(p) for p in await get_all_providers()]}
     except Exception as e:
-        return {"error": str(e)}
+        return stable_error(e)
 
 
 @app.post("/admin/providers")
@@ -4908,7 +4902,7 @@ async def api_create_provider(request: Request):
     try:
         data = await request.json()
         name = data.get("name", "").strip()
-        api_base_url = data.get("api_base_url", "").strip()
+        api_base_url = validate_upstream_url(data.get("api_base_url", "").strip())
         api_key = data.get("api_key", "").strip()
         enabled = data.get("enabled", True)
 
@@ -4918,10 +4912,10 @@ async def api_create_provider(request: Request):
             return {"error": "API Base URL 不能为空"}
 
         provider = await create_provider(name, api_base_url, api_key, enabled, api_format=data.get("api_format", "openai"))
-        return {"status": "created", "provider": provider}
+        return {"status": "created", "provider": serialize_provider(provider)}
     except Exception as e:
-        print(f"⚠️  创建供应商失败: {e}")
-        return {"error": str(e)}
+        safe_log("api_create_provider_failed", e)
+        return stable_error(e)
 
 
 @app.put("/admin/providers/{provider_id}")
@@ -4932,13 +4926,15 @@ async def api_update_provider(provider_id: int, request: Request):
         # 编辑时留空的 api_key 视为「不修改」，避免把已存的 key 清空（前端会发空串）
         if not (data.get("api_key") or "").strip():
             data.pop("api_key", None)
+        if "api_base_url" in data:
+            data["api_base_url"] = validate_upstream_url(data["api_base_url"])
         provider = await update_provider(provider_id, **data)
         if provider:
-            return {"status": "updated", "provider": provider}
-        return {"error": "供应商不存在"}
+            return {"status": "updated", "provider": serialize_provider(provider)}
+        return stable_error("not_found")
     except Exception as e:
-        print(f"⚠️  更新供应商失败: {e}")
-        return {"error": str(e)}
+        safe_log("api_update_provider_failed", e)
+        return stable_error(e)
 
 
 @app.delete("/admin/providers/{provider_id}")
@@ -4948,9 +4944,9 @@ async def api_delete_provider(provider_id: int):
         success = await delete_provider(provider_id)
         if success:
             return {"status": "deleted"}
-        return {"error": "供应商不存在"}
+        return stable_error("not_found")
     except Exception as e:
-        return {"error": str(e)}
+        return stable_error(e)
 
 
 @app.post("/admin/test-provider/{provider_id}")
@@ -4959,11 +4955,11 @@ async def api_test_provider(provider_id: int):
     try:
         provider = await get_provider(provider_id)
         if not provider:
-            return {"ok": False, "error": "供应商不存在"}
-        base = (provider.get("api_base_url") or "").rstrip("/")
+            return stable_error("not_found")
+        base = validate_upstream_url(provider.get("api_base_url") or "").rstrip("/")
         api_key = provider.get("api_key") or ""
         if not base or not api_key:
-            return {"ok": False, "error": "缺少 API Base URL 或 API Key"}
+            return stable_error("invalid_request")
 
         # 去掉聊天端点后缀，还原到基础地址再拼 /models
         # （供应商可能保存成完整的 .../v1/chat/completions 或 Anthropic 的 .../v1/messages）
@@ -4981,34 +4977,30 @@ async def api_test_provider(provider_id: int):
             headers = {"Authorization": f"Bearer {api_key}"}
             models_url = f"{base}/models"
 
-        async with httpx.AsyncClient(timeout=10) as client:
+        async with httpx.AsyncClient(follow_redirects=False, timeout=10) as client:
             resp = await client.get(models_url, headers=headers)
         if resp.status_code == 200:
             data = resp.json()
             count = len(data.get("data", []))
             return {"ok": True, "message": f"连接成功，获取到 {count} 个模型"}
         elif resp.status_code == 401:
-            return {"ok": False, "error": "API Key 无效（401）"}
+            return stable_error(f"http_{resp.status_code}")
         elif resp.status_code == 403:
-            return {"ok": False, "error": "权限不足（403）"}
+            return stable_error(f"http_{resp.status_code}")
         else:
-            return {"ok": False, "error": f"HTTP {resp.status_code}"}
+            return stable_error(f"http_{resp.status_code}")
     except httpx.TimeoutException:
-        return {"ok": False, "error": "连接超时"}
+        return stable_error("timeout")
     except httpx.ConnectError:
-        return {"ok": False, "error": "无法连接到服务器"}
+        return stable_error("network:RequestError")
     except Exception as e:
-        return {"ok": False, "error": str(e)}
+        return stable_error(e)
 
 
 def _detect_provider_type(api_base_url: str) -> str:
-    """根据供应商 URL 判断类型"""
-    url = (api_base_url or '').lower()
-    if 'aihubmix' in url:
-        return 'aihubmix'
-    elif 'openrouter' in url:
-        return 'openrouter'
-    return 'generic'
+    from urllib.parse import urlsplit
+    host = urlsplit(validate_upstream_url(api_base_url)).hostname
+    return {"aihubmix.com": "aihubmix", "openrouter.ai": "openrouter"}.get(host, "generic")
 
 
 def _transform_aihubmix_model(m: dict) -> dict:
@@ -5066,10 +5058,10 @@ async def api_get_provider_models(provider_id: int):
     try:
         provider = await get_provider(provider_id)
         if not provider:
-            return {"error": "供应商不存在"}
+            return stable_error("not_found")
 
         # 构造基础地址：去掉聊天端点后缀（OpenAI 的 /chat/completions、Anthropic 的 /messages）
-        base = provider['api_base_url'].rstrip('/')
+        base = validate_upstream_url(provider['api_base_url']).rstrip('/')
         for suffix in ('/chat/completions', '/messages'):
             if base.endswith(suffix):
                 base = base.rsplit(suffix, 1)[0]
@@ -5086,8 +5078,7 @@ async def api_get_provider_models(provider_id: int):
             if provider['api_key']:
                 headers["Authorization"] = f"Bearer {provider['api_key']}"
 
-        import httpx
-        async with httpx.AsyncClient(timeout=30) as client:
+        async with httpx.AsyncClient(follow_redirects=False, timeout=30) as client:
 
             # ── AIHubMix：优先用新 API，失败降级旧 API ──
             if provider_type == 'aihubmix':
@@ -5104,7 +5095,7 @@ async def api_get_provider_models(provider_id: int):
                     # 降级到旧 /v1/models 接口
                     resp = await client.get(f"{base}/models", headers=headers)
                     if resp.status_code != 200:
-                        return {"error": f"供应商返回 {resp.status_code}", "detail": resp.text[:500]}
+                        return stable_error(f"http_{resp.status_code}")
                     models = resp.json().get("data", [])
                     provider_type = 'generic'  # 降级后按通用处理
 
@@ -5117,7 +5108,7 @@ async def api_get_provider_models(provider_id: int):
                     models_url = f"{base}/models"
                 resp = await client.get(models_url, headers=headers)
                 if resp.status_code != 200:
-                    return {"error": f"供应商返回 {resp.status_code}", "detail": resp.text[:500]}
+                    return stable_error(f"http_{resp.status_code}")
                 chat_models = resp.json().get("data", [])
 
                 # 尝试拉取嵌入模型（不是所有供应商都支持，失败不影响）
@@ -5145,9 +5136,9 @@ async def api_get_provider_models(provider_id: int):
             "models": models,
         }
     except httpx.TimeoutException:
-        return {"error": "请求超时，请检查供应商地址"}
+        return stable_error("timeout")
     except Exception as e:
-        return {"error": str(e)}
+        return stable_error(e)
 
 
 # ============================================================
@@ -5161,7 +5152,7 @@ async def api_get_all_saved_models():
         models = await get_all_saved_models()
         return {"status": "ok", "models": models}
     except Exception as e:
-        return {"error": str(e)}
+        return stable_error(e)
 
 
 @app.get("/admin/providers/{provider_id}/saved-models")
@@ -5171,7 +5162,7 @@ async def api_get_saved_models(provider_id: int):
         models = await get_provider_models(provider_id)
         return {"status": "ok", "models": models}
     except Exception as e:
-        return {"error": str(e)}
+        return stable_error(e)
 
 
 @app.post("/admin/providers/{provider_id}/saved-models")
@@ -5197,7 +5188,7 @@ async def api_add_saved_model(provider_id: int, request: Request):
             return {"status": "created", "model": model}
         return {"error": "模型已存在"}
     except Exception as e:
-        return {"error": str(e)}
+        return stable_error(e)
 
 
 @app.put("/admin/saved-models/{model_pk_id}")
@@ -5210,7 +5201,7 @@ async def api_update_saved_model(model_pk_id: int, request: Request):
             return {"status": "updated", "model": model}
         return {"error": "模型不存在"}
     except Exception as e:
-        return {"error": str(e)}
+        return stable_error(e)
 
 
 @app.delete("/admin/saved-models/{model_pk_id}")
@@ -5222,7 +5213,7 @@ async def api_delete_saved_model(model_pk_id: int):
             return {"status": "deleted"}
         return {"error": "模型不存在"}
     except Exception as e:
-        return {"error": str(e)}
+        return stable_error(e)
 
         
 # ============================================================
@@ -5297,35 +5288,35 @@ async def api_get_search_engines():
 
 @app.get("/admin/search-config")
 async def api_get_search_config():
-    """获取当前搜索配置（api_key 脱敏，不回显明文）"""
-    engine = await get_config("search_engine") or ""
-    api_key = await get_config("search_api_key") or ""
-    max_results = await get_config_int("search_max_results", fallback=5)
-    masked = (api_key[:4] + "…" + api_key[-3:]) if len(api_key) > 10 else ("•" * min(len(api_key), 8))
-    return {
-        "engine": engine,
-        "api_key": masked,
-        "api_key_set": bool(api_key),
-        "max_results": max_results,
-    }
+    try:
+        state = credential_state(await get_config("search_api_key"))
+        return {"engine": await get_config("search_engine") or "",
+                "max_results": await get_config_int("search_max_results", fallback=5),
+                **state, "api_key_set": state["has_value"]}
+    except Exception as e:
+        return stable_error(e)
 
 
 @app.put("/admin/search-config")
 async def api_set_search_config(request: Request):
-    """更新搜索配置"""
     try:
         data = await request.json()
+        if not isinstance(data, dict) or "clear" in data:
+            return stable_error("invalid_request")
+        action, value = secret_action(data, "api_key")
+        if "engine" in data and (not isinstance(data["engine"], str) or data["engine"] not in SEARCH_ENGINES and data["engine"] != ""):
+            return stable_error("invalid_request")
+        if "max_results" in data and (type(data["max_results"]) is not int or not 1 <= data["max_results"] <= 20):
+            return stable_error("invalid_request")
         if "engine" in data:
             await set_config("search_engine", data["engine"])
-        # 仅当传入了非空、且不是脱敏回显的值时才覆盖（留空＝保持原 key）
-        _sk = (data.get("api_key") or "")
-        if _sk and "…" not in _sk and "•" not in _sk:
-            await set_config("search_api_key", _sk)
+        if action == "set" and not await set_config("search_api_key", value):
+            return stable_error("invalid_request")
         if "max_results" in data:
             await set_config("search_max_results", str(data["max_results"]))
         return {"status": "updated"}
     except Exception as e:
-        return JSONResponse(status_code=400, content={"error": str(e)})
+        return stable_error(e)
 
 
 @app.post("/admin/search-test")
@@ -5343,7 +5334,7 @@ async def api_search_test(request: Request):
         if not engine:
             return JSONResponse(status_code=400, content={"error": "未配置搜索引擎"})
         
-        results = await web_search(query=query, engine=engine, api_key=api_key, max_results=max_results)
+        results = await web_search(query=query, engine=engine, api_key=api_key, max_results=max_results, strict=True)
         return {
             "engine": engine,
             "query": query,
@@ -5351,7 +5342,7 @@ async def api_search_test(request: Request):
             "results": [r.to_dict() for r in results],
         }
     except Exception as e:
-        return JSONResponse(status_code=500, content={"error": str(e)})
+        return stable_error(e)
 
 
 # ============================================================
@@ -5404,14 +5395,17 @@ async def api_mcp_clear_cache(request: Request):
 # 供应商余额查询 API（多供应商通用）
 # ============================================================
 
-async def _query_openrouter_credits(api_key: str):
-    """查询 OpenRouter 余额"""
+async def _query_openrouter_credits(base_url: str, api_key: str):
+    """查询已验证供应商 origin 下的两个额度路径。"""
+    origin = upstream_origin(base_url)
     result = {}
-    async with httpx.AsyncClient(timeout=10) as client:
+    async with httpx.AsyncClient(follow_redirects=False, timeout=10) as client:
         resp1 = await client.get(
-            "https://openrouter.ai/api/v1/auth/key",
+            f"{origin}/api/v1/auth/key",
             headers={"Authorization": f"Bearer {api_key}"},
         )
+        if resp1.status_code != 200:
+            raise UpstreamFailure(f"http_{resp1.status_code}")
         if resp1.status_code == 200:
             d = resp1.json().get("data", {})
             result["usage"] = d.get("usage", 0)
@@ -5419,9 +5413,11 @@ async def _query_openrouter_credits(api_key: str):
             result["limit_remaining"] = d.get("limit_remaining")
         
         resp2 = await client.get(
-            "https://openrouter.ai/api/v1/credits",
+            f"{origin}/api/v1/credits",
             headers={"Authorization": f"Bearer {api_key}"},
         )
+        if resp2.status_code != 200:
+            raise UpstreamFailure(f"http_{resp2.status_code}")
         if resp2.status_code == 200:
             d2 = resp2.json().get("data", {})
             result["total_credits"] = d2.get("total_credits", 0)
@@ -5432,25 +5428,28 @@ async def _query_openrouter_credits(api_key: str):
 
 async def _query_generic_credits(base_url: str, api_key: str):
     """尝试 OpenAI 兼容的余额查询（/v1/dashboard/billing/subscription）"""
-    base = base_url.rstrip("/").split("/chat/completions")[0].rstrip("/")
+    base = validate_upstream_url(base_url).rstrip("/").split("/chat/completions")[0].rstrip("/")
     # 去掉末尾的 /v1 以拿到根域名
     root = base.rsplit("/v1", 1)[0] if "/v1" in base else base
     result = {}
-    async with httpx.AsyncClient(timeout=10) as client:
+    async with httpx.AsyncClient(follow_redirects=False, timeout=10) as client:
         # 方式1：new-api / one-api 风格的 /v1/dashboard/billing/subscription
         try:
             resp = await client.get(
                 f"{root}/v1/dashboard/billing/subscription",
                 headers={"Authorization": f"Bearer {api_key}"},
             )
+            if resp.status_code not in (200, 404):
+                raise UpstreamFailure(f"http_{resp.status_code}")
             if resp.status_code == 200:
                 d = resp.json()
                 hard_limit = d.get("hard_limit_usd") or d.get("system_hard_limit_usd", 0)
                 # 过滤掉 new-api 返回的"无限额度"假数字（通常是 1亿）
                 if hard_limit and hard_limit < 100000:
                     result["total_credits"] = hard_limit
-        except Exception:
-            pass
+        except Exception as e:
+            if isinstance(e, UpstreamFailure): raise
+            raise UpstreamFailure("upstream_error") from None
         
         # 方式2：/v1/dashboard/billing/usage
         try:
@@ -5461,12 +5460,15 @@ async def _query_generic_credits(base_url: str, api_key: str):
                 f"{root}/v1/dashboard/billing/usage?start_date={start}&end_date={today}",
                 headers={"Authorization": f"Bearer {api_key}"},
             )
+            if resp2.status_code not in (200, 404):
+                raise UpstreamFailure(f"http_{resp2.status_code}")
             if resp2.status_code == 200:
                 d2 = resp2.json()
                 usage_cents = d2.get("total_usage", 0)
                 result["total_usage"] = round(usage_cents / 100, 6) if usage_cents > 1 else usage_cents
-        except Exception:
-            pass
+        except Exception as e:
+            if isinstance(e, UpstreamFailure): raise
+            raise UpstreamFailure("upstream_error") from None
         
         if "total_credits" in result:
             total_usage = result.get("total_usage", 0)
@@ -5486,8 +5488,8 @@ async def api_get_credits():
             # 没有配置供应商，用全局环境变量兜底（向后兼容）。
             # 非 OpenRouter 的环境变量供应商也走通用查询，不再只认 OpenRouter。
             if API_KEY:
-                if "openrouter" in API_BASE_URL.lower():
-                    result = await _query_openrouter_credits(API_KEY)
+                if is_openrouter_url(API_BASE_URL):
+                    result = await _query_openrouter_credits(API_BASE_URL, API_KEY)
                     name = "OpenRouter"
                 else:
                     result = await _query_generic_credits(API_BASE_URL, API_KEY)
@@ -5506,8 +5508,8 @@ async def api_get_credits():
             
             entry = {"provider_id": p["id"], "provider_name": p["name"]}
             
-            if "openrouter" in base.lower():
-                data = await _query_openrouter_credits(key)
+            if is_openrouter_url(base):
+                data = await _query_openrouter_credits(base, key)
             else:
                 data = await _query_generic_credits(base, key)
             
@@ -5517,7 +5519,7 @@ async def api_get_credits():
         
         return {"providers": results}
     except Exception as e:
-        return {"error": str(e)}
+        return stable_error(e)
 
 
 # ============================================================
@@ -5559,9 +5561,9 @@ async def api_update_profile_now():
     try:
         from daily_digest import update_user_profile
         result = await update_user_profile()
-        return result
+        return public_model_result(result)
     except Exception as e:
-        return {"error": str(e)}
+        return stable_error(e)
 
 
 # ============================================================
@@ -5894,7 +5896,7 @@ async def api_process_file_chunks(proj_id: str, file_id: str, request: Request):
         count = await save_file_chunks(proj_id, file_id, file_name, text_content)
         return {"chunks": count, "file_id": file_id, "file_name": file_name}
     except Exception as e:
-        return JSONResponse(status_code=500, content={"error": str(e)})
+        return stable_error(e)
 
 
 @app.delete("/projects/{proj_id}/files/{file_id}/chunks")
@@ -6011,9 +6013,7 @@ async def api_sync_export():
 
         # 配置
         all_config = await get_all_config()
-        config_flat = {}
-        for k, v in all_config.items():
-            config_flat[k] = v.get("value", "") if isinstance(v, dict) else v
+        config_flat, backup_meta = export_config(all_config, CONFIG_SCHEMA)
 
         # 同步设置
         settings = {}
@@ -6027,6 +6027,7 @@ async def api_sync_export():
             zf.writestr("conversations.json", json.dumps(convs_full, ensure_ascii=False, indent=2))
             zf.writestr("projects.json", json.dumps(projs, ensure_ascii=False, indent=2))
             zf.writestr("memories.json", json.dumps(memories, ensure_ascii=False, indent=2))
+            zf.writestr("backup_meta.json", json.dumps(backup_meta, ensure_ascii=False))
             zf.writestr("config.json", json.dumps(config_flat, ensure_ascii=False, indent=2))
             zf.writestr("settings.json", json.dumps(settings, ensure_ascii=False, indent=2))
         buf.seek(0)
@@ -6040,9 +6041,8 @@ async def api_sync_export():
             headers={"Content-Disposition": f'attachment; filename="{filename}"'}
         )
     except Exception as e:
-        import traceback
-        traceback.print_exc()
-        return JSONResponse(status_code=500, content={"error": str(e)})
+        safe_log("api_sync_export_failed", e)
+        return stable_error(e)
 
 
 def _serialize_datetimes(obj):
@@ -6079,6 +6079,12 @@ async def api_sync_import_backup(file: UploadFile = File(...)):
 
         with zipfile.ZipFile(buf, 'r') as zf:
             names = zf.namelist()
+            configured_secrets = []
+            if "backup_meta.json" in names:
+                try:
+                    configured_secrets = validate_backup_meta(json.loads(zf.read("backup_meta.json")), CONFIG_SCHEMA)
+                except (ValueError, TypeError, UnicodeError):
+                    return stable_error("invalid_request")
 
             # 导入项目
             if "projects.json" in names:
@@ -6139,13 +6145,13 @@ async def api_sync_import_backup(file: UploadFile = File(...)):
                         if ok:
                             result["config"] += 1
 
+        result["secrets_requiring_input"] = [key for key in configured_secrets if not await get_config(key)]
         print(f"📦 备份导入完成：{result}")
         return {"status": "ok", **result}
 
     except Exception as e:
-        import traceback
-        traceback.print_exc()
-        return JSONResponse(status_code=500, content={"error": str(e)})
+        safe_log("api_sync_import_backup_failed", e)
+        return stable_error(e)
 
 
 # ──── 数据重置 ────

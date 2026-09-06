@@ -1,3 +1,4 @@
+import { secretLabel } from '../secret-fields.mjs';
 // 🌐 联网搜索 — 引擎选择 + API Key + 条数（配置）+ 实时测试
 import { get, put, post, escHtml, escAttr } from '../api.js';
 import { toast, emptyState, loadingBlock, setBusy, delegate } from '../ui.js';
@@ -6,6 +7,9 @@ export default {
   title: '联网搜索',
   engines: [],
   config: { engine: '', api_key: '', max_results: 5 },
+  keyRevision: 0,
+  saving: false,
+  last4: '',
   hasKey: false,  // 后端已存在 API Key（不回显原文，留空＝不修改）
 
   async mount(root) {
@@ -23,6 +27,7 @@ export default {
 
     delegate(root, {
       save: (el) => this.save(el),
+      'clear-key': (el) => this.clearKey(el),
       test: (el) => this.test(el),
     });
 
@@ -40,11 +45,8 @@ export default {
         get('/admin/search-config'),
       ]);
       this.engines = eng.engines || [];
-      // 后端可能只回传遮罩/预览的 api_key，绝不回显原文。
-      // 「已配置」检测优先用显式布尔 has_api_key/api_key_set；否则看返回值是否像遮罩（含 … 或 *）或非空。
-      const rawKey = typeof cfg.api_key === 'string' ? cfg.api_key : '';
-      const looksMasked = rawKey.includes('…') || rawKey.includes('*');
-      this.hasKey = (cfg.has_api_key ?? cfg.api_key_set) ?? (looksMasked || rawKey.length > 0);
+      this.hasKey = cfg.has_value === true;
+      this.last4 = cfg.last4 || '';
       this.config = {
         engine: cfg.engine ?? '',
         api_key: '',  // 永不回显，输入框始终留空
@@ -83,7 +85,7 @@ export default {
         </div>
         <div class="field" id="ws-key-field" style="${this.needsKey() ? '' : 'display:none'}">
           <label>API Key</label>
-          <input type="password" id="ws-apikey" value="" placeholder="${this.hasKey ? '（已配置，留空不修改）' : '所选引擎的 API Key'}">
+          <input type="password" id="ws-apikey" value="" placeholder="${escAttr(secretLabel({has_value:this.hasKey,last4:this.last4}))}">
           <div class="field-hint">本地引擎无需 Key；切换引擎时此项会自动显隐。${this.hasKey ? '已配置 Key 不回显，留空＝不修改。' : ''}</div>
         </div>
         <div class="field">
@@ -92,9 +94,11 @@ export default {
         </div>
         <div class="btn-row">
           <button class="btn btn-primary" data-act="save">保存配置</button>
+          <button class="btn btn-secondary" data-act="clear-key">清除数据库密钥</button>
         </div>
       </div>`;
 
+    el.querySelector('#ws-apikey').addEventListener('input', () => { this.keyRevision++; });
     el.querySelector('#ws-engine').addEventListener('change', (ev) => {
       this.config.engine = ev.target.value;
       const kf = el.querySelector('#ws-key-field');
@@ -113,23 +117,50 @@ export default {
   },
 
   async save(btn) {
+    if (this.saving) return;
+    const root = this.root;
+    const revision = this.keyRevision;
     const form = this.readForm();
     if (!form.engine) { toast('请先选择搜索引擎', 'err'); return; }
     const body = { engine: form.engine, max_results: form.max_results };
     // 只有用户输入了非空 Key 才提交 api_key；留空＝保留已存的（不覆盖）。
     if (this.needsKey() && form.api_key.trim() !== '') body.api_key = form.api_key;
+    this.saving = true;
     setBusy(btn, true, '保存中');
     try {
       await put('/admin/search-config', body);
-      // 用户填了新 Key 即视为「已配置」；不回写明文到 config。
-      if (body.api_key !== undefined) this.hasKey = true;
+      const meta = await get('/admin/search-config');
+      if (this.root !== root || !root.isConnected) return;
+      this.hasKey = meta.has_value === true;
+      this.last4 = meta.last4 || '';
+      const input = root.querySelector('#ws-apikey');
+      input.placeholder = secretLabel(meta);
+      if (revision === this.keyRevision) input.value = '';
       this.config = { engine: form.engine, api_key: '', max_results: form.max_results };
       toast('已保存');
     } catch (e) {
       toast('保存失败：' + e.message, 'err');
     } finally {
+      this.saving = false;
       setBusy(btn, false);
     }
+  },
+
+  async clearKey(btn) {
+    if (this.saving || !window.confirm('清除数据库中的密钥设置？环境变量中配置的密钥仍会生效。')) return;
+    this.saving = true;
+    const root = this.root, revision = this.keyRevision;
+    setBusy(btn, true, '清除中');
+    try {
+      const result = await put('/admin/config/search_api_key', { clear: true });
+      if (this.root !== root || !root.isConnected) return;
+      this.hasKey = result.config.has_value === true; this.last4 = result.config.last4 || '';
+      const input = root.querySelector('#ws-apikey');
+      input.placeholder = secretLabel(result.config);
+      if (revision === this.keyRevision) input.value = '';
+      toast('数据库密钥已清除');
+    } catch (e) { toast(e.message, 'err'); }
+    finally { this.saving = false; setBusy(btn, false); }
   },
 
   async test(btn) {

@@ -4,6 +4,7 @@ No lifespan, external service or developer .env is used. PostgreSQL coverage
 remains in test_kiwi_safety_sync.py. Run directly; failures are named assertions.
 """
 import asyncio
+import ast
 import io
 import json
 import os
@@ -204,6 +205,119 @@ class SecurityTests(unittest.IsolatedAsyncioTestCase):
             self.assertIsNone(await db.get_embedding('x'))
             self.assertEqual(await db.get_embeddings_batch(['x','y']),[None,None])
         self.safe(log.getvalue())
+
+    async def test_stream_errors_are_not_assistant_content(self):
+        class Response:
+            status_code=502
+            async def aiter_bytes(self, **kw):
+                raise AssertionError('error body must not be buffered')
+                yield b''
+        class Client:
+            async def __aenter__(self): return self
+            async def __aexit__(self,*a): pass
+            def stream(self,*a,**kw): return self
+        class StreamClient(Client):
+            def stream(self,*a,**kw):
+                class Context:
+                    async def __aenter__(self): return Response()
+                    async def __aexit__(self,*a): pass
+                return Context()
+        for fmt in ('openai','anthropic'):
+            with self.subTest(format=fmt), patch.object(httpx,'AsyncClient',return_value=StreamClient()), patch.object(app,'process_memories_background',AsyncMock()) as persist:
+                iterator=app.stream_and_capture({}, {'messages':[]},'fixture','','fixture',api_url='https://relay.example/v1/chat/completions',api_format=fmt,api_key=KEY,mem_enabled=False)
+                chunks=[c async for c in app._with_ev_session(iterator,'fixture',False)]
+                text=b''.join(chunks).decode(); self.safe(text)
+                self.assertEqual(text.count('[DONE]'),1); self.assertNotIn('choices',text)
+                self.assertIn('http_502',text); persist.assert_not_awaited()
+
+    async def test_post_start_exception_and_embedded_error_frame(self):
+        async def broken():
+            yield b'data: {"choices":[]}\n\n'
+            raise httpx.ReadTimeout(KEY)
+        for generated in (True,False):
+            text=b''.join([c async for c in app._with_ev_session(broken(),'fixture',generated)]).decode()
+            self.safe(text); self.assertEqual(text.count('[DONE]'),1); self.assertIn('timeout',text)
+        import security
+        with self.assertRaises(security.UpstreamFailure):
+            security.require_success_event('data: '+json.dumps({'error':{'message':KEY}}))
+
+    async def test_anthropic_error_frame_is_stable(self):
+        from anthropic_adapter import anthropic_stream_to_openai
+        class Response:
+            async def aiter_bytes(self,**kw):
+                yield ('data: '+json.dumps({'type':'error','error':{'message':KEY}})+'\n\n').encode()
+        text=b''.join([c async for c in anthropic_stream_to_openai(Response(),'fixture')]).decode()
+        self.safe(text); self.assertNotIn('choices',text);self.assertEqual(text.count('[DONE]'),1)
+        class BrokenResponse:
+            async def aiter_bytes(self, **kw):
+                raise httpx.ReadTimeout(KEY)
+                yield b''
+        text=b''.join([c async for c in anthropic_stream_to_openai(BrokenResponse(),'fixture')]).decode()
+        self.safe(text); self.assertIn('timeout',text)
+        self.assertNotIn('choices',text); self.assertEqual(text.count('[DONE]'),1)
+
+    async def test_legacy_dream_errors_are_safe_on_read(self):
+        row={'id':1,'status':'error','dream_narrative':KEY,'started_at':None,'finished_at':None}
+        with patch.object(db,'get_dream_history',AsyncMock(return_value=[row])):
+            r=await self.client.get('/dream/history')
+        self.assertEqual(r.status_code,200);self.safe(r.json())
+        self.assertEqual(row['dream_narrative'],KEY) # no DB/history rewrite
+
+    async def test_returned_generator_error_maps_to_failure(self):
+        import daily_digest
+        with patch.object(daily_digest,'generate_day_page',AsyncMock(return_value={'error':KEY})):
+            r=await self.client.get('/admin/day-page')
+        self.assertEqual(r.status_code,502);self.safe(r.json());self.assertEqual(r.json()['error_code'],'upstream_error')
+
+    async def test_redirect_never_follows(self):
+        real_client=httpx.AsyncClient; calls=[]
+        def handler(req):
+            calls.append(req)
+            return httpx.Response(302,headers={'location':'https://other.example/steal'},text=KEY)
+        with patch.object(app,'get_all_providers',AsyncMock(return_value=[dict(ROW,api_base_url='https://openrouter.ai:9443/v1')])),patch.object(httpx,'AsyncClient',lambda **kw:real_client(transport=httpx.MockTransport(handler),**kw)):
+            r=await self.client.get('/admin/credits')
+        self.assertEqual(r.status_code,502);self.safe(r.json())
+        self.assertEqual(len(calls),1);self.assertEqual(calls[0].url.host,'openrouter.ai')
+
+    async def test_reasoning_dispatch_uses_real_hostname(self):
+        for base, native in [('https://relay.example/openrouter/v1/chat/completions',False),('https://openrouter.ai:9443/api/v1/chat/completions',True)]:
+            requests=[]
+            class Client:
+                async def __aenter__(self):return self
+                async def __aexit__(self,*a):pass
+                async def post(self,url,**kw):
+                    requests.append((url,kw))
+                    return httpx.Response(200,json={'choices':[{'message':{'content':'fixture'}}]})
+            with patch.object(httpx,'AsyncClient',return_value=Client()):
+                iterator=app._stream_with_tools([],[],{},'openai/gpt-5',0.7,[],'fixture','',False,api_url=base,api_key=KEY,record_events=False,extract_enabled=False,reasoning_effort='high')
+                chunks=[c async for c in iterator]
+            self.assertEqual(len(requests),1)
+            self.assertEqual('HTTP-Referer' in requests[0][1]['headers'],native)
+            self.assertEqual(app._detect_provider_type(base),'openrouter' if native else 'generic')
+
+    async def test_tool_loop_embedded_error_is_failure(self):
+        class Client:
+            async def __aenter__(self): return self
+            async def __aexit__(self,*a): pass
+            async def post(self,*a,**kw):
+                return httpx.Response(200,json={'error':{'message':KEY}})
+        with patch.object(httpx,'AsyncClient',return_value=Client()):
+            iterator=app._stream_with_tools([],[],{},'fixture',0.7,[],'fixture','',False,api_url='https://relay.example/v1/chat/completions',api_key=KEY,record_events=False,extract_enabled=False)
+            chunks=[c async for c in app._with_ev_session(iterator,'fixture',False)]
+        text=''.join(c.decode() if isinstance(c,bytes) else c for c in chunks)
+        self.safe(text); self.assertIn('upstream_error',text)
+        self.assertNotIn('choices',text); self.assertEqual(text.count('[DONE]'),1)
+
+    async def test_scope_has_no_raw_exception_returns(self):
+        # Completeness supplement; behavior is exercised above and by the PG suite.
+        names={'api_migrate_embeddings','api_embedding_stats','api_extract_now','api_get_config','api_set_config','api_get_providers','api_create_provider','api_update_provider','api_delete_provider','api_test_provider','api_get_provider_models','api_set_search_config','api_search_test','api_get_credits','api_process_file_chunks','api_sync_export','api_sync_import_backup','update_single_memory','add_memory_manual','api_daily_digest','api_generate_day_page','api_generate_week_summary','api_generate_month_summary','api_generate_quarter_summary','api_generate_year_summary','api_dream_status','api_dream_history','api_update_scene','api_get_all_saved_models','api_get_saved_models','api_add_saved_model','api_update_saved_model','api_delete_saved_model','api_update_profile_now'}
+        source=(ROOT/'main.py').read_text(encoding='utf-8')
+        found={n.name:n for n in ast.parse(source).body if getattr(n,'name',None) in names}
+        self.assertEqual(set(found),names)
+        for name,n in found.items():
+            with self.subTest(function=name):
+                for child in ast.walk(n):
+                    if isinstance(child,ast.Return):self.assertNotIn('str(e)',ast.get_source_segment(source,child))
 
 
 if __name__=='__main__': unittest.main(verbosity=2)

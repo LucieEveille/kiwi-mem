@@ -1,3 +1,4 @@
+import { providerLabel } from '../secret-fields.mjs';
 // 🔐 认证与安全 — 说明为主：访问密码已移除、密钥脱敏。只读列出供应商 key 预览。
 import { get, escHtml } from '../api.js';
 import { card, badge, emptyState, loadingBlock, toast } from '../ui.js';
@@ -37,7 +38,7 @@ export default {
         cls: 'mt16',
         body: `<p class="muted" style="line-height:1.7;margin:0">
           面板里所有供应商 / 搜索引擎的密钥<b>从不回显明文</b>。供应商接口只返回
-          <code>api_key_preview</code>（如 <code>sk-…abc</code>）。编辑时<b>留空表示保持原值不变</b>，
+          配置状态与符合长度门槛的末四位（如 <code>已配置 · 尾号 abcd</code>）。编辑时<b>留空表示保持原值不变</b>，
           填新值才会覆盖。下方为当前已配置供应商的脱敏预览，供你核对而不泄露密钥。
         </p>`,
       })}
@@ -59,14 +60,14 @@ export default {
         return;
       }
       el.innerHTML = list.map(p => {
-        const hasKey = !!p.api_key_preview;
+        const hasKey = !!p.has_credential;
         return `
         <div class="item">
           <div class="item-row">
             <div style="flex:1;min-width:0">
               <div class="item-title">${escHtml(p.name || '未命名')} ${badge(p.api_format || 'openai', p.api_format === 'anthropic' ? 'purple' : 'info')}</div>
               <div class="item-sub mono truncate">${escHtml(p.api_base_url || '')}</div>
-              <div class="item-sub">Key 预览：<span class="mono">${escHtml(p.api_key_preview || '（未设置）')}</span></div>
+              <div class="item-sub">Key 预览：<span class="mono">${escHtml(providerLabel(p))}</span></div>
             </div>
             <div class="item-actions">
               ${hasKey ? badge('🔒 已脱敏', 'accent') : badge('未设置密钥', 'muted')}

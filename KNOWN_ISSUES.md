@@ -59,3 +59,10 @@
   → 统一需新增配置项 + schema（属功能改动，非「顺手」），留待后续。
 - 后台任务兜底默认模型名硬编码 `anthropic/claude-haiku-4`（OpenRouter 命名风格），非 OpenRouter
   供应商上该 model_id 可能 404。→ 改默认值会影响零配置开箱体验，暂留。
+
+## KIWI-SEC-01a scope and remaining security work
+
+- No built-in authentication, env fallback and default upstream addresses are intentional public behavior. Credentials remain plaintext in DB/env; an actor with admin access can retarget a provider using its stored key. Protect the whole service.
+- This patch sanitizes the specified credential/model failure paths, not every exception in the repository. KIWI-ERR-01 retains the other 49 main.py error=str(e) exits, six daily_digest.py internal error dictionaries and unlisted MCP/tool failure channels. User-authored text and raw database dumps are not secret-filtered.
+- MCP Host/Origin setup and exact route mounting remain BUILD-01/SEC-01b work. Embedding versioning/rebuild remains EMB-01 work.
+- Compatibility changes and deployment guidance: [security model](docs/security-model.md).
