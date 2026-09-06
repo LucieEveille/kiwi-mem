@@ -1,6 +1,6 @@
 # Kiwi-Mem 安全模型与凭据边界
 
-本章记录 KIWI-SEC-01a 的公版行为（2026-09-07 P2 补丁更新）。Kiwi-Mem 默认没有认证，环境变量回落和默认上游地址仍然保留。
+本章记录 KIWI-SEC-01a 的公版行为（2026-09-07 P3 补丁更新）。Kiwi-Mem 默认没有认证，环境变量回落和默认上游地址仍然保留。
 
 ## 部署边界
 
@@ -36,7 +36,7 @@
 
 本票收口供应商、配置、搜索测试、嵌入、ZIP 导入导出，以及日历/整理/画像和 Dream 中关联的 HTTP 错误出口。HTTP 失败给稳定 `error` / `error_code`，不返回异常原文或上游错误正文。日志只记受控事件与错误分类。输入校验维持 400，资源不存在 404，内部失败 500，上游失败 502。
 
-SSE 已建流后用错误帧结束，`[DONE]` 恰一次；错误不作为助手正文保存。上游 HTTP 200 但返回非 SSE 原文时，事件循环与尾块都拒绝透传，以 parse_failed 错误帧结束；不依据 Content-Type 判定，保留 data/event/id/retry 和注释行。带 error:null 的正常帧继续通过，非空 error 或 type:error 才表示失败。SSE 上游 HTTP 错误体不读取、不缓冲。内部 embedding 失败依旧返回 None，批量返回等长 None 列表；聊天搜索仍可降级为空结果，搜索测试通过严格模式区分真正失败。Dream 新失败记录使用稳定码，历史 error 状态记录在公开读取时隐藏旧异常叙事，数据库原记录不被改写。
+SSE 已建流后用错误帧结束，`[DONE]` 恰一次；错误不作为助手正文保存。两分支（OpenAI 直连与 Anthropic 适配）遇到上游 HTTP 200 返回三种非 SSE 原文（JSON 错误、HTML、缓冲式成功 JSON）时，以 parse_failed 错误帧结束且不透传原文。OpenAI 在事件循环与尾块检查首行；Anthropic 适配器累计上游字节，收尾时若有字节但未成功解析任何 data 行，抛出 UpstreamFailure("parse_failed")，由最外层 safe_sse 映射为错误帧与唯一的 [DONE]。不依据 Content-Type 判定，保留正常流中的 data/event/id/retry 和注释行；空体保持既有结束行为，相关观察见 KNOWN_ISSUES。带 error:null 的正常帧继续通过，非空 error 或 type:error 才表示失败。SSE 上游 HTTP 错误体不读取、不缓冲。内部 embedding 失败依旧返回 None，批量返回等长 None 列表；聊天搜索仍可降级为空结果，搜索测试通过严格模式区分真正失败。Dream 新失败记录使用稳定码，历史 error 状态记录在公开读取时隐藏旧异常叙事，数据库原记录不被改写。
 
 ## 本票之后
 

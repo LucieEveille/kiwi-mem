@@ -362,6 +362,8 @@ async def anthropic_stream_to_openai(response, model: str = "") -> AsyncGenerato
     cache_creation = 0
     cache_read = 0
     done_sent = False
+    _saw_data = False
+    _bytes = 0
 
     # 迭代异常只发稳定错误帧和结束标记，诊断不进入助手正文。
     chunk_iter = response.aiter_bytes(chunk_size=256)
@@ -376,6 +378,7 @@ async def anthropic_stream_to_openai(response, model: str = "") -> AsyncGenerato
                 yield sse_error(exc).encode("utf-8")
                 yield b"data: [DONE]\n\n"
             return
+        _bytes += len(chunk)
         buffer += chunk.decode("utf-8", errors="ignore")
 
         while "\n" in buffer:
@@ -395,6 +398,7 @@ async def anthropic_stream_to_openai(response, model: str = "") -> AsyncGenerato
             except json.JSONDecodeError:
                 continue
 
+            _saw_data = True
             event_type = data.get("type", "")
 
             # ── message_start ──
@@ -493,6 +497,9 @@ async def anthropic_stream_to_openai(response, model: str = "") -> AsyncGenerato
     # 兜底：上游正常结束或被截断却没发 message_stop / error 时，补一个 [DONE] 收尾，
     # 否则下游（OpenAI SSE 消费方）会一直等不到结束标记。
     if not done_sent:
+        if not _saw_data and _bytes > 0:
+            from security import UpstreamFailure
+            raise UpstreamFailure("parse_failed")
         yield b"data: [DONE]\n\n"
 
 

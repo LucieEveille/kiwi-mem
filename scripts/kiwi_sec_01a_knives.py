@@ -52,6 +52,8 @@ CASES=[
  ('K-SEC-37','main.py','not isinstance(data, dict) or "clear" in data','not isinstance(data, dict)','test_clear_contract_and_not_found_status'),
  ('K-SEC-38','main.py','if resp2.status_code != 200:\n            raise UpstreamFailure(f"http_{resp2.status_code}")','if resp2.status_code != 200:\n            pass','test_second_credit_path_failure_is_not_success'),
  ('K-SEC-39','main.py','if resp2.status_code not in (200, 404):\n                raise UpstreamFailure(f"http_{resp2.status_code}")','if resp2.status_code not in (200, 404):\n                pass','test_second_credit_path_failure_is_not_success'),
+ ('K-SEC-40','anthropic_adapter.py','raise UpstreamFailure("parse_failed")','pass # mutation: swallow non-SSE body','test_adapted_stream_rejects_non_sse_event'),
+ ('K-SEC-41','main.py',' or resp_data.get("type") == "error"','','test_buffered_chat_200_error_is_not_success'),
 ]
 
 
