@@ -68,3 +68,5 @@
 - Compatibility changes and deployment guidance: [security model](docs/security-model.md).
 
 SEC-01a 补丁批复核记录：供应商新建空名称仍返回原有固定错误串；日历周期校验目前统一为 invalid_request，具体原因的机器码与面板提示留给 KIWI-ERR-01。
+
+SEC-01a P2 复核后留给 ERR-01：客户端坏 JSON 或备份成员坏 JSON 仍可能映射为 502 parse_failed；stable_error 未知码的正文与状态分类不完全一致；no_route 白名单项未使用；非 ZIP、空搜索 query 等固定错误字符串待统一。观察项暂保留：路径 U+200B 编码、Anthropic 稳定错误二次映射、256B 分块断流丢尾；依赖版本边界由 BUILD-01 处理。

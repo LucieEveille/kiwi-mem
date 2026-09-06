@@ -59,7 +59,7 @@ from database import (
     create_reminder, get_reminders, update_reminder, delete_reminder, get_due_reminders, fire_reminder,
 )
 from security import (
-    require_success_event, public_model_result, public_dream_record,
+    require_sse_event, require_success_event, public_model_result, public_dream_record,
     serialize_provider, serialize_config, credential_state, export_config, validate_backup_meta,
     secret_action, InvalidRequest, UpstreamFailure, exception_code, stable_error, stable_payload, safe_log,
     validate_upstream_url, upstream_origin, is_openrouter_url, sse_error, safe_sse,
@@ -3630,6 +3630,7 @@ async def stream_and_capture(headers: dict, body: dict, session_id: str, user_me
                             event = event.strip()
                             if not event or event == "data: [DONE]":
                                 continue
+                            require_sse_event(event)
                             require_success_event(event)
                             captured_reasoning, _ = _capture_openai_sse_event(event, full_response)
                             _usage_total = _accumulate_usage(_usage_total, _capture_stream_usage(event))
@@ -3637,6 +3638,7 @@ async def stream_and_capture(headers: dict, body: dict, session_id: str, user_me
                             yield (event + "\n\n").encode("utf-8")
                     _tail = _ev_buf.strip()
                     if _tail and _tail != "data: [DONE]":
+                        require_sse_event(_tail)
                         require_success_event(_tail)
                         captured_reasoning, _ = _capture_openai_sse_event(_tail, full_response)
                         _usage_total = _accumulate_usage(_usage_total, _capture_stream_usage(_tail))
@@ -3668,6 +3670,7 @@ async def stream_and_capture(headers: dict, body: dict, session_id: str, user_me
                             event = event.strip()
                             if not event or event == "data: [DONE]":
                                 continue
+                            require_sse_event(event)
                             require_success_event(event)
                             captured_reasoning, first_delta = _capture_openai_sse_event(event, full_response)
                             _usage_total = _accumulate_usage(_usage_total, _capture_stream_usage(event))
@@ -3687,6 +3690,7 @@ async def stream_and_capture(headers: dict, body: dict, session_id: str, user_me
                             yield (event + "\n\n").encode("utf-8")
                     _tail = buffer.strip()
                     if _tail and _tail != "data: [DONE]":
+                        require_sse_event(_tail)
                         require_success_event(_tail)
                         captured_reasoning, _ = _capture_openai_sse_event(_tail, full_response)
                         _usage_total = _accumulate_usage(_usage_total, _capture_stream_usage(_tail))
@@ -4903,7 +4907,10 @@ async def api_create_provider(request: Request):
         data = await request.json()
         name = data.get("name", "").strip()
         api_base_url = validate_upstream_url(data.get("api_base_url", "").strip())
-        api_key = data.get("api_key", "").strip()
+        api_key = data.get("api_key", "")
+        if not isinstance(api_key, str):
+            return stable_error("invalid_request")
+        api_key = api_key.strip()
         enabled = data.get("enabled", True)
 
         if not name:
@@ -5428,9 +5435,14 @@ async def _query_openrouter_credits(base_url: str, api_key: str):
 
 async def _query_generic_credits(base_url: str, api_key: str):
     """尝试 OpenAI 兼容的余额查询（/v1/dashboard/billing/subscription）"""
-    base = validate_upstream_url(base_url).rstrip("/").split("/chat/completions")[0].rstrip("/")
-    # 去掉末尾的 /v1 以拿到根域名
-    root = base.rsplit("/v1", 1)[0] if "/v1" in base else base
+    from urllib.parse import urlsplit
+    base = validate_upstream_url(base_url)
+    parts = urlsplit(base)
+    path = parts.path.rstrip("/").removesuffix("/chat/completions").rstrip("/")
+    segments = path.split("/")
+    if segments[-1] == "v1":
+        segments.pop()
+    root = upstream_origin(base) + "/".join(segments)
     result = {}
     async with httpx.AsyncClient(follow_redirects=False, timeout=10) as client:
         # 方式1：new-api / one-api 风格的 /v1/dashboard/billing/subscription

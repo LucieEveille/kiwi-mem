@@ -8073,6 +8073,44 @@ async def test_sec_01a_config(client) -> None:
     require(not await fixture_providers(), 'provider fixtures were not removed')
     passed('T-SEC-01a-04 real provider rows retain balances across one upstream failure')
 
+    begin('T-SEC-01a-05')
+    provider_ids.clear()
+    calls.clear()
+    bases = [('http://v1.example:8097/api','/api'), ('https://v10.example/openai','/openai'),
+             ('https://v1-api.example/svc','/svc'), ('https://api.example/openai/v1beta','/openai/v1beta'),
+             ('https://relay.example/v1',''), ('https://h.example:8443/v1/chat/completions','')]
+    def capture_destination(request):
+        calls.append(request)
+        return httpx.Response(200, json={'hard_limit_usd': 3, 'total_usage': 1})
+    try:
+        for base, _ in bases:
+            row = await database.create_provider('kiwi-sec-p2-fixture', base, key)
+            provider_ids.append(row['id'])
+        with patch.object(app_module, 'get_all_providers', fixture_providers), patch.object(
+            httpx, 'AsyncClient', lambda **kw: real_client(transport=httpx.MockTransport(capture_destination), **kw)
+        ):
+            response = await client.get('/admin/credits')
+        require(response.status_code == 200 and len(response.json()['providers']) == len(bases), 'credit rows missing')
+        require(len(calls) == 2 * len(bases), 'wrong credit request count')
+        for i, (base, prefix) in enumerate(bases):
+            origin = httpx.URL(base)
+            for request, suffix in zip(calls[i*2:i*2+2], ('subscription', 'usage')):
+                require((request.url.scheme,request.url.host,request.url.port) == (origin.scheme,origin.host,origin.port), 'credit destination changed origin')
+                require(request.url.path == prefix+'/v1/dashboard/billing/'+suffix, 'credit path segment changed')
+                require(request.headers['authorization'] == 'Bearer '+key, 'wrong fixture credential')
+    finally:
+        for provider_id in provider_ids:
+            await database.delete_provider(provider_id)
+    require(not await fixture_providers(), 'P2 provider fixtures remain')
+    passed('T-SEC-01a-05 stored provider URLs preserve origin and path segments')
+
+    begin('T-SEC-01a-06')
+    before = [p['id'] for p in await database.get_all_providers()]
+    response = await client.post('/admin/providers', json={'name':'kiwi-sec-p2-invalid','api_base_url':'https://relay.example/v1','api_key':None})
+    require(response.status_code == 400 and response.json()['error_code'] == 'invalid_request', 'null provider credential not rejected')
+    require([p['id'] for p in await database.get_all_providers()] == before, 'invalid provider credential inserted row')
+    passed('T-SEC-01a-06 null provider credential creates no row')
+
 
 async def run_suite(test_dsn: str) -> None:
     global database, config, app_module, memory_extractor

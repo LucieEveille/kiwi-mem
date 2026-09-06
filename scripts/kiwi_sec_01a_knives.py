@@ -34,6 +34,24 @@ CASES=[
  ('K-SEC-20','dream.py','error_msg = exception_code(e)','error_msg = f"模型调用出错: {e}"','test_dream_stores_stable_error'),
  ('K-SEC-21','main.py','entry["error_code"] = stable_payload(exception_code(exc))["error_code"]','raise exc','test_credits_failure_is_isolated_per_provider'),
  ('K-SEC-22','security.py',"(data.get('error') or data.get('type') == 'error')","('error' in data or data.get('type') == 'error')",'test_null_sse_error_is_not_failure'),
+ # K-SEC-23..39 map in order to independent review KX-01..17.
+ ('K-SEC-23','security.py',' or ord(c) < 32','','test_url_rejection_matrix_and_hostname_dispatch'),
+ ('K-SEC-24','security.py',"('\\\\', '?', '#')","('?', '#')",'test_url_rejection_matrix_and_hostname_dispatch'),
+ ('K-SEC-25','security.py',' or port == 0','','test_url_rejection_matrix_and_hostname_dispatch'),
+ ('K-SEC-26','security.py',"parsed.netloc.endswith(':') or ",'','test_url_rejection_matrix_and_hostname_dispatch'),
+ ('K-SEC-27','security.py',"return urlsplit(validate_upstream_url(url)).hostname == 'openrouter.ai'","return urlsplit(validate_upstream_url(url)).hostname.endswith('openrouter.ai')",'test_url_rejection_matrix_and_hostname_dispatch'),
+ ('K-SEC-28','security.py','if len(keys) != len(set(keys)): raise InvalidRequest()','pass # mutation: duplicate metadata allowed','test_invalid_meta_rejected_before_any_write'),
+ ('K-SEC-29','security.py',"set(meta) != {'format_version', 'secrets_configured'}","not {'format_version', 'secrets_configured'} <= set(meta)",'test_invalid_meta_rejected_before_any_write'),
+ ('K-SEC-30','security.py',"data['clear'] is not True or field in data","field in data",'test_clear_contract_and_not_found_status'),
+ ('K-SEC-31','security.py',"else 404 if code == 'not_found'","else 400 if code == 'not_found'",'test_clear_contract_and_not_found_status'),
+ ('K-SEC-32','main.py','require_success_event(event)','pass # mutation: skip in-band error check','test_direct_stream_inband_error_preserves_prior_content',2),
+ ('K-SEC-33','main.py',' or resp_data.get("error")','','test_buffered_chat_200_error_is_not_success'),
+ ('K-SEC-34','main.py','if is_openrouter_url(base):',"if 'openrouter' in base:",'test_url_rejection_matrix_and_hostname_dispatch'),
+ ('K-SEC-35','main.py','data["api_base_url"] = validate_upstream_url(data["api_base_url"])','data["api_base_url"] = data["api_base_url"]','test_provider_url_and_credential_inputs_reject_before_write'),
+ ('K-SEC-36','main.py','api_base_url = validate_upstream_url(data.get("api_base_url", "").strip())','api_base_url = data.get("api_base_url", "").strip()','test_provider_url_and_credential_inputs_reject_before_write'),
+ ('K-SEC-37','main.py','not isinstance(data, dict) or "clear" in data','not isinstance(data, dict)','test_clear_contract_and_not_found_status'),
+ ('K-SEC-38','main.py','if resp2.status_code != 200:\n            raise UpstreamFailure(f"http_{resp2.status_code}")','if resp2.status_code != 200:\n            pass','test_second_credit_path_failure_is_not_success'),
+ ('K-SEC-39','main.py','if resp2.status_code not in (200, 404):\n                raise UpstreamFailure(f"http_{resp2.status_code}")','if resp2.status_code not in (200, 404):\n                pass','test_second_credit_path_failure_is_not_success'),
 ]
 
 
@@ -49,12 +67,14 @@ def main():
     pre=subprocess.run(command,cwd=ROOT,capture_output=True,text=True,encoding='utf-8')
     if pre.returncode: raise SystemExit('Preflight not green; no mutations applied')
     results=[]
-    for knife,file,before,after,test in CASES:
+    for case in CASES:
+        knife,file,before,after,test = case[:5]
+        expected_count = case[5] if len(case) == 6 else 1
         path=ROOT/file; original=path.read_bytes(); source=original.decode('utf-8')
         if '\r\n' in source:
             before = before.replace('\n', '\r\n')
             after = after.replace('\n', '\r\n')
-        if source.count(before)!=1: raise SystemExit(f'{knife}: anchor count {source.count(before)}; no mutation applied')
+        if source.count(before)!=expected_count: raise SystemExit(f'{knife}: anchor count {source.count(before)}, expected {expected_count}; no mutation applied')
         try:
             path.write_bytes(source.replace(before,after).encode('utf-8'))
             r=subprocess.run(command+['SecurityTests.'+test],cwd=ROOT,capture_output=True,text=True,encoding='utf-8',timeout=45)

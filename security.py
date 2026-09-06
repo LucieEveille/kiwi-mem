@@ -87,7 +87,7 @@ def secret_action(data, field='value'):
 
 def validate_upstream_url(url):
     """Reject ambiguous base URLs before attaching credentials; preserve path/port."""
-    if (not isinstance(url, str) or not url or any(c.isspace() or ord(c) < 32 for c in url)
+    if (not isinstance(url, str) or not url or any(c.isspace() or ord(c) < 32 or c == '\x7f' for c in url)
             or any(c in url for c in ('\\', '?', '#'))):
         raise InvalidRequest()
     try:
@@ -150,6 +150,12 @@ def safe_log(event, error):
 def sse_error(error):
     code = exception_code(error) if isinstance(error, Exception) else error
     return 'data: ' + json.dumps(stable_payload(code)) + '\n\n'
+
+
+def require_sse_event(event):
+    """Reject non-SSE upstream bodies before forwarding either events or tails."""
+    if not event.splitlines()[0].startswith(('data:', 'event:', 'id:', 'retry:', ':')):
+        raise UpstreamFailure('parse_failed')
 
 
 def require_success_event(event):
