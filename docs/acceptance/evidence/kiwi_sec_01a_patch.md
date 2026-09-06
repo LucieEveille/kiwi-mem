@@ -6,7 +6,7 @@ This is patch-stage verification for Draft PR #80, not release authorization.
 - Tests-first patch commit: `a447276` (27 methods, 8 named assertion failures, no errors, on the previous implementation). Existing invalid-URL/redirect tests explicitly adopt the requested per-provider error receipt while preserving zero-outbound/zero-follow assertions.
 - Implementation and test source head: `3f43e284ef140dc6ab5c6c916e04e45bb678bfd9`.
 - Local Python: 27 test methods pass (22 previous + 5 new). Admin secret JS test and all 13 existing regression scripts pass; compileall and diff whitespace checks pass.
-- [22-knife ledger](kiwi_sec_01a_knives.json): all RED due to assertion failures, preflight and restored full suite exit 0. Every mutated file was restored byte-for-byte and its restore hash checked.
+- [22-knife ledger](https://github.com/LucieEveille/kiwi-mem/blob/b404e426ca9324bc3bd17d92b31855634ec1fe45/docs/acceptance/evidence/kiwi_sec_01a_knives.json): all RED due to assertion failures, preflight and restored full suite exit 0. Every mutated file was restored byte-for-byte and its restore hash checked.
 
 The ledger's `head` is the measured implementation commit, before the evidence-only commit that adds this file and the ledger. `source_blobs` identifies the exact code, test and knife files; those blobs remain unchanged by the evidence commit. Sentinel strings in assertion excerpts are synthetic test data.
 

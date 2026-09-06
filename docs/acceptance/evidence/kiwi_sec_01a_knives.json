@@ -1,13 +1,13 @@
 {
   "ticket": "KIWI-SEC-01a",
-  "head": "3f43e284ef140dc6ab5c6c916e04e45bb678bfd9",
+  "head": "b96ec0d0f05536b17588cb417c9804f9442fcb92",
   "source_blobs": {
     "config.py": "529b494a1c402a9ba8efb02d8ac8df8245f6bdbb",
     "dream.py": "2f2a66e29cae6c2d3387462567d72a2a82f289a8",
-    "main.py": "b0c05e4487136c45b58b8a79a4a331437e5184f8",
-    "scripts/kiwi_sec_01a_knives.py": "11d559649b6ccb2f10c1baa46de48393d16fcaa4",
-    "scripts/test_kiwi_sec_01a.py": "bc4473353a71f3c60c4211cf985d28a01938c53e",
-    "security.py": "fd782cfe2873daa5e76d3b4697ed95e1c4d01f65"
+    "main.py": "cf706e6f111f3ab8ef3912bb08076db323966ae5",
+    "scripts/kiwi_sec_01a_knives.py": "9eb5cc40d61a98a40a73994ddb25366aa640ae5d",
+    "scripts/test_kiwi_sec_01a.py": "1a21ee495a134f2665b6218871407d9ef24dffd0",
+    "security.py": "0a5af840104e3bd777e0e66f25db5e3320babbec"
   },
   "kind": "ASGI/functions; fake DB and HTTP; no external calls",
   "preflight": 0,
@@ -144,6 +144,108 @@
       "test": "test_null_sse_error_is_not_failure",
       "result": "RED",
       "reason": "AssertionError: error:null must preserve a normal SSE frame"
+    },
+    {
+      "knife": "K-SEC-23",
+      "test": "test_url_rejection_matrix_and_hostname_dispatch",
+      "result": "RED",
+      "reason": "AssertionError: InvalidRequest not raised"
+    },
+    {
+      "knife": "K-SEC-24",
+      "test": "test_url_rejection_matrix_and_hostname_dispatch",
+      "result": "RED",
+      "reason": "AssertionError: InvalidRequest not raised"
+    },
+    {
+      "knife": "K-SEC-25",
+      "test": "test_url_rejection_matrix_and_hostname_dispatch",
+      "result": "RED",
+      "reason": "AssertionError: InvalidRequest not raised"
+    },
+    {
+      "knife": "K-SEC-26",
+      "test": "test_url_rejection_matrix_and_hostname_dispatch",
+      "result": "RED",
+      "reason": "AssertionError: InvalidRequest not raised"
+    },
+    {
+      "knife": "K-SEC-27",
+      "test": "test_url_rejection_matrix_and_hostname_dispatch",
+      "result": "RED",
+      "reason": "AssertionError: True is not false"
+    },
+    {
+      "knife": "K-SEC-28",
+      "test": "test_invalid_meta_rejected_before_any_write",
+      "result": "RED",
+      "reason": "AssertionError: 200 != 400"
+    },
+    {
+      "knife": "K-SEC-29",
+      "test": "test_invalid_meta_rejected_before_any_write",
+      "result": "RED",
+      "reason": "AssertionError: 200 != 400"
+    },
+    {
+      "knife": "K-SEC-30",
+      "test": "test_clear_contract_and_not_found_status",
+      "result": "RED",
+      "reason": "AssertionError: 200 != 400"
+    },
+    {
+      "knife": "K-SEC-31",
+      "test": "test_clear_contract_and_not_found_status",
+      "result": "RED",
+      "reason": "AssertionError: 400 != 404"
+    },
+    {
+      "knife": "K-SEC-32",
+      "test": "test_direct_stream_inband_error_preserves_prior_content",
+      "result": "RED",
+      "reason": "AssertionError: 'Kiwi_' unexpectedly found in 'data: {\"choices\": [{\"delta\": {\"content\": \"part-one\"}}], \"error\": null}\\n\\ndata: {\"error\": {\"message\": \"Kiwi_Sentinel_6qV2wR9xJ3pL8zB4\"}}\\n\\ndata: [DONE]\\n\\n'"
+    },
+    {
+      "knife": "K-SEC-33",
+      "test": "test_buffered_chat_200_error_is_not_success",
+      "result": "RED",
+      "reason": "AssertionError: 200 != 502"
+    },
+    {
+      "knife": "K-SEC-34",
+      "test": "test_url_rejection_matrix_and_hostname_dispatch",
+      "result": "RED",
+      "reason": "AssertionError: False is not true"
+    },
+    {
+      "knife": "K-SEC-35",
+      "test": "test_provider_url_and_credential_inputs_reject_before_write",
+      "result": "RED",
+      "reason": "AssertionError: 200 != 400"
+    },
+    {
+      "knife": "K-SEC-36",
+      "test": "test_provider_url_and_credential_inputs_reject_before_write",
+      "result": "RED",
+      "reason": "AssertionError: 200 != 400"
+    },
+    {
+      "knife": "K-SEC-37",
+      "test": "test_clear_contract_and_not_found_status",
+      "result": "RED",
+      "reason": "AssertionError: 200 != 400"
+    },
+    {
+      "knife": "K-SEC-38",
+      "test": "test_second_credit_path_failure_is_not_success",
+      "result": "RED",
+      "reason": "AssertionError: Lists differ: [{'pr[32 chars]'fixture', 'usage': 1, 'limit': None, 'limit_remaining': None}] != [{'pr[32 chars]'fixture', 'error_code': 'http_500'}]"
+    },
+    {
+      "knife": "K-SEC-39",
+      "test": "test_second_credit_path_failure_is_not_success",
+      "result": "RED",
+      "reason": "AssertionError: Lists differ: [{'pr[14 chars] 'provider_name': 'fixture', 'total_credits': 3, 'balance': 3}] != [{'pr[14 chars] 'provider_name': 'fixture', 'error_code': 'http_500'}]"
     }
   ]
 }
