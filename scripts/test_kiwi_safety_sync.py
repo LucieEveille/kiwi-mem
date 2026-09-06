@@ -339,9 +339,12 @@ async def test_s1(client: httpx.AsyncClient) -> None:
     with zipfile.ZipFile(io.BytesIO(response.content)) as archive:
         settings_json = json.loads(archive.read("settings.json"))
         config_json = json.loads(archive.read("config.json"))
+        backup_meta = json.loads(archive.read("backup_meta.json"))
     require(tuple(settings_json.keys()) == SYNC_KEYS, "settings.json contract drifted")
-    require(config_json["search_api_key"] == dangerous_before["search_api_key"], "full backup lost config")
-    passed("T-S1-5 export keeps nine-key settings and full config backup")
+    # KIWI-SEC-01a explicitly reverses only the legacy secret-export contract.
+    require(config_json["search_api_key"] == "", "backup exported secret config")
+    require(backup_meta == {"format_version": 2, "secrets_configured": ["search_api_key"]}, "backup secret metadata drifted")
+    passed("T-S1-5 export keeps nine-key settings and excludes secret values")
     begin("T-S1-6")
 
     for key in SYNC_KEYS:
@@ -479,6 +482,8 @@ async def test_s2() -> None:
         await config.set_config("prompt_title_summary", prompt_secret)
     safe_log = output.getvalue()
     require(key_secret not in safe_log and prompt_secret not in safe_log, "set_config leaked a secret")
+    require(safe_log.splitlines()[0] == "⚙️  配置更新: search_api_key = 已设置", "secret log must contain only state")
+    require(all(key_secret[i:i+5] not in safe_log for i in range(len(key_secret)-4)), "secret fragment in log")
     require(str(len(prompt_secret)) in safe_log, "prompt redaction lost allowed length")
     passed("T-S2-4 existing set_config redaction remains active")
     begin("T-S2-5")
