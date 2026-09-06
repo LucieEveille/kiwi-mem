@@ -152,7 +152,9 @@ class SecurityTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(r.status_code,200); self.assertEqual(self.pool.values['search_api_key'],KEY)
 
     async def test_invalid_meta_rejected_before_any_write(self):
-        for meta in ({'format_version':3,'secrets_configured':[]},{'format_version':2,'secrets_configured':['not_secret']},[],{'format_version':True,'secrets_configured':[]}):
+        for meta in ({'format_version':3,'secrets_configured':[]},{'format_version':2,'secrets_configured':['not_secret']},[],{'format_version':True,'secrets_configured':[]},
+                     {'format_version':2,'secrets_configured':['search_api_key','search_api_key']},
+                     {'format_version':2,'secrets_configured':[],'extra':True}):
             with self.subTest(meta=meta),patch.object(app,'sync_upsert_project',AsyncMock()) as save:
                 r=await self.import_zip({'search_api_key':KEY},meta,[{'id':'test'}])
                 self.assertEqual(r.status_code,400); save.assert_not_awaited(); self.assertFalse(self.pool.writes)
@@ -395,6 +397,148 @@ class SecurityTests(unittest.IsolatedAsyncioTestCase):
         text=''.join(c.decode() if isinstance(c,bytes) else c for c in chunks)
         self.safe(text); self.assertIn('upstream_error',text)
         self.assertNotIn('choices',text); self.assertEqual(text.count('[DONE]'),1)
+
+    async def test_generic_credits_preserve_authority_and_path(self):
+        real_client=httpx.AsyncClient
+        cases=[('https://v1.example/api','/api'),('https://v10.example/openai','/openai'),
+               ('https://v1-api.example/svc','/svc'),('https://api.example/openai/v1beta','/openai/v1beta'),
+               ('https://relay.example/v1',''),('https://h.example:8443/v1/chat/completions',''),
+               ('http://v1.example:8097/api','/api'),('https://v1.example/api/chat/completions','/api'),
+               ('http://[::1]:8097/openai/v10','/openai/v10')]
+        for source in ('provider','env'):
+            for base,prefix in cases:
+                with self.subTest(source=source,base=base):
+                    calls=[]
+                    def handler(req):
+                        calls.append(req)
+                        return httpx.Response(200,json={'hard_limit_usd':3,'total_usage':1})
+                    with patch.object(app,'get_all_providers',AsyncMock(return_value=[dict(ROW,api_base_url=base)] if source=='provider' else [])),patch.object(app,'API_KEY',KEY),patch.object(app,'API_BASE_URL',base),patch.object(httpx,'AsyncClient',lambda **kw:real_client(transport=httpx.MockTransport(handler),**kw)):
+                        r=await self.client.get('/admin/credits')
+                    self.assertEqual(r.status_code,200);self.assertEqual(len(calls),2)
+                    origin=httpx.URL(base)
+                    for req in calls:
+                        self.assertEqual((req.url.scheme,req.url.host,req.url.port),(origin.scheme,origin.host,origin.port))
+                        self.assertEqual(req.headers['authorization'],'Bearer '+KEY)
+                    self.assertEqual([q.url.path for q in calls],[prefix+'/v1/dashboard/billing/'+p for p in ('subscription','usage')])
+
+    async def test_url_rejection_matrix_and_hostname_dispatch(self):
+        import security
+        for base in ('https://relay.example/a\x01b','https://relay.example/a\x7fb',
+                     'https://relay.example/a\\b','https://relay.example:0/v1','https://relay.example:/v1'):
+            with self.subTest(base=base),self.assertRaises(security.InvalidRequest):
+                security.validate_upstream_url(base)
+        real_client=httpx.AsyncClient
+        for base in ('https://evil-openrouter.ai/v1','https://openrouter.ai.evil.example/v1',
+                     'https://relay.example/openrouter.ai/v1'):
+            with self.subTest(base=base):
+                self.assertFalse(security.is_openrouter_url(base))
+                calls=[]
+                def handler(req):
+                    calls.append(req)
+                    return httpx.Response(200,json={'hard_limit_usd':3,'total_usage':1})
+                with patch.object(app,'get_all_providers',AsyncMock(return_value=[dict(ROW,api_base_url=base)])),patch.object(httpx,'AsyncClient',lambda **kw:real_client(transport=httpx.MockTransport(handler),**kw)):
+                    await self.client.get('/admin/credits')
+                self.assertEqual(len(calls),2)
+                self.assertTrue(calls[0].url.path.endswith('/v1/dashboard/billing/subscription'))
+                self.assertTrue(calls[1].url.path.endswith('/v1/dashboard/billing/usage'))
+
+    async def test_provider_url_and_credential_inputs_reject_before_write(self):
+        for method,path,write_name in (('POST','/admin/providers','create_provider'),('PUT','/admin/providers/7','update_provider')):
+            for base in ('https://user@relay.example/v1','https://relay.example:0/v1','https://relay.example/a\x01b'):
+                with self.subTest(method=method,base=base),patch.object(app,write_name,AsyncMock(return_value=ROW)) as write:
+                    r=await self.client.request(method,path,json={'name':'fixture','api_base_url':base,'api_key':KEY})
+                    self.assertEqual(r.status_code,400);self.assertEqual(r.json()['error_code'],'invalid_request');write.assert_not_awaited()
+        for key in (None,123,[],{},False):
+            with self.subTest(key=key),patch.object(app,'create_provider',AsyncMock(return_value=ROW)) as write:
+                r=await self.client.post('/admin/providers',json={'name':'fixture','api_base_url':ROW['api_base_url'],'api_key':key})
+                self.assertEqual(r.status_code,400);self.assertEqual(r.json()['error_code'],'invalid_request');write.assert_not_awaited()
+
+    async def test_clear_contract_and_not_found_status(self):
+        self.pool.values['search_api_key']=KEY
+        for path,payload in (('/admin/config/search_api_key',{'clear':False}),('/admin/search-config',{'clear':True,'engine':'tavily'})):
+            with self.subTest(path=path):
+                r=await self.client.put(path,json=payload)
+                self.assertEqual(r.status_code,400);self.assertEqual(r.json()['error_code'],'invalid_request')
+                self.assertEqual(self.pool.values['search_api_key'],KEY);self.assertFalse(self.pool.writes)
+        with patch.object(app,'get_provider',AsyncMock(return_value=None)):
+            r=await self.client.get('/admin/providers/999/models')
+        self.assertEqual(r.status_code,404);self.assertEqual(r.json(),{'error':'not_found','error_code':'not_found'})
+
+    async def test_second_credit_path_failure_is_not_success(self):
+        real_client=httpx.AsyncClient
+        for base in ('https://relay.example/v1','https://openrouter.ai:9443/api/v1'):
+            with self.subTest(base=base):
+                calls=[]
+                def handler(req):
+                    calls.append(req)
+                    return httpx.Response(500,text=KEY) if len(calls)==2 else httpx.Response(200,json={'hard_limit_usd':3,'data':{'usage':1}})
+                with patch.object(app,'get_all_providers',AsyncMock(return_value=[dict(ROW,api_base_url=base)])),patch.object(httpx,'AsyncClient',lambda **kw:real_client(transport=httpx.MockTransport(handler),**kw)):
+                    r=await self.client.get('/admin/credits')
+                self.assertEqual(len(calls),2);self.assertEqual(r.status_code,200)
+                self.assertEqual(r.json()['providers'],[{'provider_id':7,'provider_name':'fixture','error_code':'http_500'}]);self.safe(r.text)
+
+    async def chat_with_upstream(self,raw,*,stream=True,fmt='openai',adapted=None):
+        # Actual HTTP chat entry, fake DB reads and recorded upstream transport.
+        self.pool.values.update(memory_enabled='false',reminder_tools_enabled='false',mcp_mode='off')
+        real_client=httpx.AsyncClient; calls=[]
+        def handler(req):
+            calls.append(req)
+            return httpx.Response(200,content=raw.encode(),headers={'content-type':'application/octet-stream'})
+        with ExitStack() as stack:
+            provider=dict(ROW,provider_name='fixture',api_format=fmt)
+            for name,value in {'resolve_scope_snapshot':(True,None,'global',None,None),'get_reset_generation':0,'get_memory_enabled':False,'resolve_provider_for_model':provider}.items():
+                stack.enter_context(patch.object(app,name,AsyncMock(return_value=value)))
+            stack.enter_context(patch.object(httpx,'AsyncClient',lambda **kw:real_client(transport=httpx.MockTransport(handler),**kw)))
+            if adapted is not None:
+                async def adapter(*args,**kwargs): yield adapted.encode()
+                stack.enter_context(patch.object(app,'anthropic_stream_to_openai',adapter))
+            r=await self.client.post('/v1/chat/completions',json={'model':'fixture','stream':stream,'skip_system_prompt':True,'messages':[{'role':'user','content':'fixture'}]})
+        self.assertEqual(len(calls),1)
+        self.assertEqual(json.loads(calls[0].content)['stream'],stream)
+        return r
+
+    def assert_stream_error(self,response,code):
+        self.assertEqual(response.status_code,200);self.safe(response.text)
+        data=[json.loads(l[6:]) for l in response.text.splitlines() if l.startswith('data: ') and l!='data: [DONE]']
+        errors=[d for d in data if d.get('error_code')]
+        self.assertEqual(errors,[{'error':code,'error_code':code}])
+        self.assertEqual(response.text.count('[DONE]'),1)
+        self.assertTrue(response.text.endswith('data: [DONE]\n\n'))
+
+    async def test_direct_stream_rejects_non_sse_body(self):
+        bodies=[json.dumps({'error':{'message':KEY}}),'<html>'+KEY+'</html>',json.dumps({'choices':[{'message':{'content':KEY}}]})]
+        for raw in bodies:
+            for end in ('','\n\n'):
+                with self.subTest(raw=raw,end=end):
+                    r=await self.chat_with_upstream(raw+end)
+                    self.assert_stream_error(r,'parse_failed');self.assertNotIn('choices',r.text)
+
+    async def test_adapted_stream_rejects_non_sse_event(self):
+        for end in ('','\n\n'):
+            with self.subTest(end=end):
+                r=await self.chat_with_upstream('',fmt='anthropic',adapted='<html>'+KEY+'</html>'+end)
+                self.assert_stream_error(r,'parse_failed')
+
+    async def test_direct_stream_inband_error_preserves_prior_content(self):
+        normal='data: '+json.dumps({'choices':[{'delta':{'content':'part-one'}}],'error':None})+'\n\n'
+        for fmt in ('openai','anthropic'):
+            for end in ('','\n\n'):
+                with self.subTest(fmt=fmt,end=end):
+                    raw=normal+'data: '+json.dumps({'error':{'message':KEY}})+end
+                    r=await self.chat_with_upstream(raw,fmt=fmt,adapted=raw if fmt=='anthropic' else None)
+                    self.assert_stream_error(r,'upstream_error');self.assertIn('part-one',r.text)
+
+    async def test_direct_stream_preserves_sse_fields_and_null(self):
+        raw=': keepalive\n\nevent: message\nid: fixture\nretry: 1000\ndata: '+json.dumps({'choices':[{'delta':{'content':'fixture-ok'}}],'error':None})+'\n\ndata: [DONE]\n\n'
+        r=await self.chat_with_upstream(raw)
+        self.assertEqual(r.status_code,200);self.assertIn('fixture-ok',r.text);self.assertNotIn('error_code',r.text)
+        self.assertIn(': keepalive',r.text);self.assertIn('retry: 1000',r.text);self.assertEqual(r.text.count('[DONE]'),1)
+
+    async def test_buffered_chat_200_error_is_not_success(self):
+        for raw,code in ((json.dumps({'error':{'message':KEY}}),'upstream_error'),('<html>'+KEY+'</html>','parse_failed')):
+            with self.subTest(code=code):
+                r=await self.chat_with_upstream(raw,stream=False)
+                self.assertEqual(r.status_code,502);self.assertEqual(r.json(),{'error':code,'error_code':code});self.safe(r.text)
 
     async def test_scope_has_no_raw_exception_returns(self):
         # Completeness supplement; behavior is exercised above and by the PG suite.
