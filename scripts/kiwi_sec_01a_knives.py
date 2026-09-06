@@ -44,6 +44,9 @@ def main():
     results=[]
     for knife,file,before,after,test in CASES:
         path=ROOT/file; original=path.read_bytes(); source=original.decode('utf-8')
+        if '\r\n' in source:
+            before = before.replace('\n', '\r\n')
+            after = after.replace('\n', '\r\n')
         if source.count(before)!=1: raise SystemExit(f'{knife}: anchor count {source.count(before)}; no mutation applied')
         try:
             path.write_bytes(source.replace(before,after).encode('utf-8'))
