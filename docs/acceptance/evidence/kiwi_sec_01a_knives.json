@@ -1,12 +1,13 @@
 {
   "ticket": "KIWI-SEC-01a",
-  "head": "b96ec0d0f05536b17588cb417c9804f9442fcb92",
+  "head": "2550a5288165227f0319c4bd49873f4b03aff082",
   "source_blobs": {
+    "anthropic_adapter.py": "bcf29d0ddacfdcdf46322323d406a300624642d5",
     "config.py": "529b494a1c402a9ba8efb02d8ac8df8245f6bdbb",
     "dream.py": "2f2a66e29cae6c2d3387462567d72a2a82f289a8",
     "main.py": "cf706e6f111f3ab8ef3912bb08076db323966ae5",
-    "scripts/kiwi_sec_01a_knives.py": "9eb5cc40d61a98a40a73994ddb25366aa640ae5d",
-    "scripts/test_kiwi_sec_01a.py": "1a21ee495a134f2665b6218871407d9ef24dffd0",
+    "scripts/kiwi_sec_01a_knives.py": "e1a9f46606fca7de31b5f6e380a63a9a574a2ff0",
+    "scripts/test_kiwi_sec_01a.py": "5c6ed434c294a644d0d3c04f77a2bce3acd83791",
     "security.py": "0a5af840104e3bd777e0e66f25db5e3320babbec"
   },
   "kind": "ASGI/functions; fake DB and HTTP; no external calls",
@@ -246,6 +247,18 @@
       "test": "test_second_credit_path_failure_is_not_success",
       "result": "RED",
       "reason": "AssertionError: Lists differ: [{'pr[14 chars] 'provider_name': 'fixture', 'total_credits': 3, 'balance': 3}] != [{'pr[14 chars] 'provider_name': 'fixture', 'error_code': 'http_500'}]"
+    },
+    {
+      "knife": "K-SEC-40",
+      "test": "test_adapted_stream_rejects_non_sse_event",
+      "result": "RED",
+      "reason": "AssertionError: Lists differ: [] != [{'error': 'parse_failed', 'error_code': 'parse_failed'}]"
+    },
+    {
+      "knife": "K-SEC-41",
+      "test": "test_buffered_chat_200_error_is_not_success",
+      "result": "RED",
+      "reason": "AssertionError: 200 != 502"
     }
   ]
 }
