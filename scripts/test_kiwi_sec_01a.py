@@ -454,8 +454,10 @@ class SecurityTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(r.status_code,400);self.assertEqual(r.json()['error_code'],'invalid_request');write.assert_not_awaited()
 
     async def test_clear_contract_and_not_found_status(self):
-        self.pool.values['search_api_key']=KEY
         for path,payload in (('/admin/config/search_api_key',{'clear':False}),('/admin/search-config',{'clear':True,'engine':'tavily'})):
+            # A destructive mutation in one arm must not poison the next arm.
+            self.pool.values['search_api_key']=KEY
+            self.pool.writes.clear()
             with self.subTest(path=path):
                 r=await self.client.put(path,json=payload)
                 self.assertEqual(r.status_code,400);self.assertEqual(r.json()['error_code'],'invalid_request')
