@@ -479,7 +479,7 @@ class SecurityTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(len(calls),2);self.assertEqual(r.status_code,200)
                 self.assertEqual(r.json()['providers'],[{'provider_id':7,'provider_name':'fixture','error_code':'http_500'}]);self.safe(r.text)
 
-    async def chat_with_upstream(self,raw,*,stream=True,fmt='openai',adapted=None):
+    async def chat_with_upstream(self,raw,*,stream=True,fmt='openai'):
         # Actual HTTP chat entry, fake DB reads and recorded upstream transport.
         self.pool.values.update(memory_enabled='false',reminder_tools_enabled='false',mcp_mode='off')
         real_client=httpx.AsyncClient; calls=[]
@@ -491,12 +491,10 @@ class SecurityTests(unittest.IsolatedAsyncioTestCase):
             for name,value in {'resolve_scope_snapshot':(True,None,'global',None,None),'get_reset_generation':0,'get_memory_enabled':False,'resolve_provider_for_model':provider}.items():
                 stack.enter_context(patch.object(app,name,AsyncMock(return_value=value)))
             stack.enter_context(patch.object(httpx,'AsyncClient',lambda **kw:real_client(transport=httpx.MockTransport(handler),**kw)))
-            if adapted is not None:
-                async def adapter(*args,**kwargs): yield adapted.encode()
-                stack.enter_context(patch.object(app,'anthropic_stream_to_openai',adapter))
             r=await self.client.post('/v1/chat/completions',json={'model':'fixture','stream':stream,'skip_system_prompt':True,'messages':[{'role':'user','content':'fixture'}]})
         self.assertEqual(len(calls),1)
         self.assertEqual(json.loads(calls[0].content)['stream'],stream)
+        self.assertEqual(calls[0].url.path,'/v1/messages' if fmt=='anthropic' else '/v1/chat/completions')
         return r
 
     def assert_stream_error(self,response,code):
@@ -515,20 +513,48 @@ class SecurityTests(unittest.IsolatedAsyncioTestCase):
                     r=await self.chat_with_upstream(raw+end)
                     self.assert_stream_error(r,'parse_failed');self.assertNotIn('choices',r.text)
 
+    def anthropic_prefix(self):
+        def event(kind,**fields):
+            return 'event: '+kind+'\ndata: '+json.dumps({'type':kind,**fields})+'\n\n'
+        return (': keepalive\n\nid: fixture\nretry: 1000\n'+event('ping')+
+                event('message_start',message={'role':'assistant','usage':{}})+
+                event('content_block_delta',index=0,delta={'type':'text_delta','text':'part-'})+
+                event('content_block_delta',index=0,delta={'type':'text_delta','text':'one'}))
+
     async def test_adapted_stream_rejects_non_sse_event(self):
-        for end in ('','\n\n'):
-            with self.subTest(end=end):
-                r=await self.chat_with_upstream('',fmt='anthropic',adapted='<html>'+KEY+'</html>'+end)
-                self.assert_stream_error(r,'parse_failed')
+        # Raw upstream bytes pass through the real adapter and outer safe_sse.
+        bodies=[json.dumps({'error':{'message':KEY}}),'<html>'+KEY+'</html>',json.dumps({'choices':[{'message':{'content':KEY}}]})]
+        for raw in bodies:
+            for end in ('','\n\n'):
+                with self.subTest(raw=raw,end=end):
+                    r=await self.chat_with_upstream(raw+end,fmt='anthropic')
+                    self.assert_stream_error(r,'parse_failed');self.assertNotIn('choices',r.text)
+        with self.subTest(kind='valid_anthropic_stream'):
+            raw=self.anthropic_prefix()+'event: message_stop\ndata: {"type":"message_stop"}\n\n'
+            r=await self.chat_with_upstream(raw,fmt='anthropic')
+            self.assertEqual(r.status_code,200);self.assertNotIn('error_code',r.text)
+            data=[json.loads(l[6:]) for l in r.text.splitlines() if l.startswith('data: ') and l!='data: [DONE]']
+            content=''.join(c.get('delta',{}).get('content','') for d in data for c in d.get('choices',[]))
+            self.assertEqual(content,'part-one');self.assertEqual(r.text.count('[DONE]'),1)
+            self.assertTrue(r.text.endswith('data: [DONE]\n\n'))
+        with self.subTest(kind='empty_body_unchanged'):
+            r=await self.chat_with_upstream('',fmt='anthropic')
+            self.assertEqual(r.status_code,200);self.assertNotIn('choices',r.text)
+            self.assertNotIn('error_code',r.text);self.assertEqual(r.text.count('[DONE]'),1)
 
     async def test_direct_stream_inband_error_preserves_prior_content(self):
         normal='data: '+json.dumps({'choices':[{'delta':{'content':'part-one'}}],'error':None})+'\n\n'
         for fmt in ('openai','anthropic'):
-            for end in ('','\n\n'):
+            for end in (('','\n\n') if fmt=='openai' else ('\n','\n\n')):
                 with self.subTest(fmt=fmt,end=end):
-                    raw=normal+'data: '+json.dumps({'error':{'message':KEY}})+end
-                    r=await self.chat_with_upstream(raw,fmt=fmt,adapted=raw if fmt=='anthropic' else None)
-                    self.assert_stream_error(r,'upstream_error');self.assertIn('part-one',r.text)
+                    raw=(normal+'data: '+json.dumps({'error':{'message':KEY}})+end if fmt=='openai' else
+                         self.anthropic_prefix()+'event: error\ndata: '+json.dumps({'type':'error','error':{'message':KEY}})+end)
+                    r=await self.chat_with_upstream(raw,fmt=fmt)
+                    self.assert_stream_error(r,'upstream_error')
+                    data=[json.loads(l[6:]) for l in r.text.splitlines() if l.startswith('data: ') and l!='data: [DONE]']
+                    content=''.join(c.get('delta',{}).get('content','') for d in data for c in d.get('choices',[]))
+                    self.assertEqual(content,'part-one')
+                    self.assertLess(r.text.index('part-'),r.text.index('error_code'))
 
     async def test_direct_stream_preserves_sse_fields_and_null(self):
         raw=': keepalive\n\nevent: message\nid: fixture\nretry: 1000\ndata: '+json.dumps({'choices':[{'delta':{'content':'fixture-ok'}}],'error':None})+'\n\ndata: [DONE]\n\n'
@@ -537,7 +563,7 @@ class SecurityTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn(': keepalive',r.text);self.assertIn('retry: 1000',r.text);self.assertEqual(r.text.count('[DONE]'),1)
 
     async def test_buffered_chat_200_error_is_not_success(self):
-        for raw,code in ((json.dumps({'error':{'message':KEY}}),'upstream_error'),('<html>'+KEY+'</html>','parse_failed')):
+        for raw,code in ((json.dumps({'error':{'message':KEY}}),'upstream_error'),(json.dumps({'type':'error','error':None,'message':KEY}),'upstream_error'),('<html>'+KEY+'</html>','parse_failed')):
             with self.subTest(code=code):
                 r=await self.chat_with_upstream(raw,stream=False)
                 self.assertEqual(r.status_code,502);self.assertEqual(r.json(),{'error':code,'error_code':code});self.safe(r.text)
