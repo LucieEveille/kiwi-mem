@@ -1,0 +1,149 @@
+{
+  "ticket": "KIWI-SEC-01a",
+  "head": "3f43e284ef140dc6ab5c6c916e04e45bb678bfd9",
+  "source_blobs": {
+    "config.py": "529b494a1c402a9ba8efb02d8ac8df8245f6bdbb",
+    "dream.py": "2f2a66e29cae6c2d3387462567d72a2a82f289a8",
+    "main.py": "b0c05e4487136c45b58b8a79a4a331437e5184f8",
+    "scripts/kiwi_sec_01a_knives.py": "11d559649b6ccb2f10c1baa46de48393d16fcaa4",
+    "scripts/test_kiwi_sec_01a.py": "bc4473353a71f3c60c4211cf985d28a01938c53e",
+    "security.py": "fd782cfe2873daa5e76d3b4697ed95e1c4d01f65"
+  },
+  "kind": "ASGI/functions; fake DB and HTTP; no external calls",
+  "preflight": 0,
+  "restored_suite": 0,
+  "results": [
+    {
+      "knife": "K-SEC-01",
+      "test": "test_provider_three_exits",
+      "result": "RED",
+      "reason": "AssertionError: Items in the first set but not the second:"
+    },
+    {
+      "knife": "K-SEC-02",
+      "test": "test_provider_three_exits",
+      "result": "RED",
+      "reason": "AssertionError: '89012' != '9012'"
+    },
+    {
+      "knife": "K-SEC-03",
+      "test": "test_provider_three_exits",
+      "result": "RED",
+      "reason": "AssertionError: '8901' != ''"
+    },
+    {
+      "knife": "K-SEC-04",
+      "test": "test_provider_three_exits",
+      "result": "RED",
+      "reason": "AssertionError: '123456已配置' != '已配置'"
+    },
+    {
+      "knife": "K-SEC-05",
+      "test": "test_config_read_write_and_log",
+      "result": "RED",
+      "reason": "AssertionError: 'Kiwi' unexpectedly found in '⚙️  配置更新: search_api_key = Kiwi…zB4\\n'"
+    },
+    {
+      "knife": "K-SEC-06",
+      "test": "test_export_omits_secret_and_metadata_is_separate",
+      "result": "RED",
+      "reason": "AssertionError: 'Kiwi_Sentinel_6qV2wR9xJ3pL8zB4' != ''"
+    },
+    {
+      "knife": "K-SEC-07",
+      "test": "test_secret_empty_preserves_and_invalid_rejected",
+      "result": "RED",
+      "reason": "AssertionError: '' != 'Kiwi_Sentinel_6qV2wR9xJ3pL8zB4'"
+    },
+    {
+      "knife": "K-SEC-08",
+      "test": "test_secret_empty_preserves_and_invalid_rejected",
+      "result": "RED",
+      "reason": "AssertionError: 200 != 400"
+    },
+    {
+      "knife": "K-SEC-09",
+      "test": "test_credits_destination_and_both_paths",
+      "result": "RED",
+      "reason": "AssertionError: Tuples differ: ('https', 'openrouter.ai', None) != ('https', 'openrouter.ai', 9443)"
+    },
+    {
+      "knife": "K-SEC-10",
+      "test": "test_reasoning_dispatch_uses_real_hostname",
+      "result": "RED",
+      "reason": "AssertionError: True != False"
+    },
+    {
+      "knife": "K-SEC-11",
+      "test": "test_invalid_urls_never_send_credentials",
+      "result": "RED",
+      "reason": "AssertionError: 'internal_error' != 'invalid_request'"
+    },
+    {
+      "knife": "K-SEC-12",
+      "test": "test_invalid_urls_never_send_credentials",
+      "result": "RED",
+      "reason": "AssertionError: 'internal_error' != 'invalid_request'"
+    },
+    {
+      "knife": "K-SEC-13",
+      "test": "test_redirect_never_follows",
+      "result": "RED",
+      "reason": "AssertionError: 'network:RequestError' != 'http_302'"
+    },
+    {
+      "knife": "K-SEC-14",
+      "test": "test_provider_errors_are_stable",
+      "result": "RED",
+      "reason": "AssertionError: {'error': 'Kiwi_Sentinel_6qV2wR9xJ3pL8zB4', 'error_c[34 chars]zB4'} != {'error': 'internal_error', 'error_code': 'internal_error'}"
+    },
+    {
+      "knife": "K-SEC-15",
+      "test": "test_legacy_dream_errors_are_safe_on_read",
+      "result": "RED",
+      "reason": "AssertionError: 'Kiwi_' unexpectedly found in '{\"status\": \"ok\", \"history\": [{\"id\": 1, \"status\": \"error\", \"dream_narrative\": \"Kiwi_Sentinel_6qV2wR9xJ3pL8zB4\", \"started_at\": null, \"finished_at\": null}]}'"
+    },
+    {
+      "knife": "K-SEC-16",
+      "test": "test_post_start_exception_and_embedded_error_frame",
+      "result": "RED",
+      "reason": "AssertionError: 'timeout' not found in 'data: {\"ev_session\": {\"id\": \"fixture\", \"generated\": true}}\\n\\ndata: {\"choices\":[]}\\n\\ndata: {\"choices\":[{\"delta\":{\"content\":\"failed\"}}]}\\n\\ndata: [DONE]\\n\\n'"
+    },
+    {
+      "knife": "K-SEC-17",
+      "test": "test_invalid_meta_rejected_before_any_write",
+      "result": "RED",
+      "reason": "AssertionError: 200 != 400"
+    },
+    {
+      "knife": "K-SEC-18",
+      "test": "test_generic_redirect_never_follows",
+      "result": "RED",
+      "reason": "AssertionError: 21 != 1"
+    },
+    {
+      "knife": "K-SEC-19",
+      "test": "test_nonstream_upstream_error_is_stable",
+      "result": "RED",
+      "reason": "AssertionError: 401 != 502"
+    },
+    {
+      "knife": "K-SEC-20",
+      "test": "test_dream_stores_stable_error",
+      "result": "RED",
+      "reason": "AssertionError: '模型调用出错: Kiwi_Sentinel_6qV2wR9xJ3pL8zB4' != 'internal_error'"
+    },
+    {
+      "knife": "K-SEC-21",
+      "test": "test_credits_failure_is_isolated_per_provider",
+      "result": "RED",
+      "reason": "AssertionError: 502 != 200"
+    },
+    {
+      "knife": "K-SEC-22",
+      "test": "test_null_sse_error_is_not_failure",
+      "result": "RED",
+      "reason": "AssertionError: error:null must preserve a normal SSE frame"
+    }
+  ]
+}
