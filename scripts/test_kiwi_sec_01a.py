@@ -11,7 +11,7 @@ import os
 import sys
 import unittest
 import zipfile
-from contextlib import redirect_stdout
+from contextlib import ExitStack, redirect_stdout
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
@@ -179,7 +179,9 @@ class SecurityTests(unittest.IsolatedAsyncioTestCase):
         for base in ('https://user@openrouter.ai/v1','//openrouter.ai/v1','https://openrouter.ai:bad/v1','https://relay.example/v1?token=x','https://relay.example/v1#x'):
             with self.subTest(base=base),patch.object(app,'get_all_providers',AsyncMock(return_value=[dict(ROW,api_base_url=base)])),patch.object(httpx,'AsyncClient') as client:
                 r=await self.client.get('/admin/credits')
-                self.assertEqual(r.status_code,400); client.assert_not_called()
+                self.assertEqual(r.status_code,200)
+                self.assertEqual(r.json()['providers'][0]['error_code'],'invalid_request')
+                client.assert_not_called()
 
     async def test_provider_errors_are_stable(self):
         for name,path in [('get_all_providers','/admin/providers'),('get_provider','/admin/providers/7/models'),('get_all_providers','/admin/credits')]:
@@ -276,8 +278,94 @@ class SecurityTests(unittest.IsolatedAsyncioTestCase):
             return httpx.Response(302,headers={'location':'https://other.example/steal'},text=KEY)
         with patch.object(app,'get_all_providers',AsyncMock(return_value=[dict(ROW,api_base_url='https://openrouter.ai:9443/v1')])),patch.object(httpx,'AsyncClient',lambda **kw:real_client(transport=httpx.MockTransport(handler),**kw)):
             r=await self.client.get('/admin/credits')
-        self.assertEqual(r.status_code,502);self.safe(r.json())
+        self.assertEqual(r.status_code,200);self.safe(r.json())
+        self.assertEqual(r.json()['providers'][0]['error_code'],'http_302')
         self.assertEqual(len(calls),1);self.assertEqual(calls[0].url.host,'openrouter.ai')
+
+    async def test_credits_failure_is_isolated_per_provider(self):
+        real_client=httpx.AsyncClient
+        for bad_base in ('https://bad.example/v1','https://openrouter.ai:9443/api/v1'):
+            for failure in ('http_500','timeout'):
+                calls=[]
+                def handler(req):
+                    calls.append(req.url.host)
+                    if req.url.host in ('bad.example','openrouter.ai'):
+                        if failure=='timeout': raise httpx.ReadTimeout(KEY,request=req)
+                        return httpx.Response(500,text=KEY)
+                    return httpx.Response(200,json={'hard_limit_usd':3,'total_usage':1})
+                rows=[dict(ROW,id=i,name='provider-'+str(i),api_base_url=base) for i,base in enumerate(('https://one.example/v1',bad_base,'https://three.example/v1'),1)]
+                with self.subTest(base=bad_base,failure=failure),patch.object(app,'get_all_providers',AsyncMock(return_value=rows)),patch.object(httpx,'AsyncClient',lambda **kw:real_client(transport=httpx.MockTransport(handler),**kw)):
+                    r=await self.client.get('/admin/credits')
+                self.assertEqual(r.status_code,200); self.safe(r.json())
+                entries=r.json()['providers']
+                self.assertEqual([e['provider_id'] for e in entries],[1,2,3])
+                self.assertEqual(entries[1]['error_code'],failure)
+                self.assertIn('total_credits',entries[0]); self.assertIn('total_credits',entries[2])
+                self.assertEqual(len(calls),5); self.assertEqual(calls[-2:],['three.example']*2)
+                with patch.object(app,'get_all_providers',AsyncMock(return_value=[])),patch.object(app,'API_KEY',KEY),patch.object(app,'API_BASE_URL',bad_base),patch.object(httpx,'AsyncClient',lambda **kw:real_client(transport=httpx.MockTransport(handler),**kw)):
+                    r=await self.client.get('/admin/credits')
+                self.assertEqual(r.status_code,200); self.safe(r.json())
+                self.assertEqual(r.json()['providers'][0]['error_code'],failure)
+
+    async def test_null_sse_error_is_not_failure(self):
+        import security
+        normal={'choices':[{'delta':{'content':'fixture'}}],'error':None}
+        try:
+            security.require_success_event('data: '+json.dumps(normal))
+        except security.UpstreamFailure:
+            self.fail('error:null must preserve a normal SSE frame')
+        for event in ({'error':{'message':KEY}}, {'type':'error','error':None}):
+            with self.assertRaises(security.UpstreamFailure):
+                security.require_success_event('data: '+json.dumps(event))
+
+    async def test_generic_redirect_never_follows(self):
+        real_client=httpx.AsyncClient; calls=[]
+        def handler(req):
+            calls.append(req)
+            return httpx.Response(302,headers={'location':'https://other.example/steal'},text=KEY)
+        with patch.object(app,'get_all_providers',AsyncMock(return_value=[ROW])),patch.object(httpx,'AsyncClient',lambda **kw:real_client(transport=httpx.MockTransport(handler),**kw)):
+            r=await self.client.get('/admin/credits')
+        self.safe(r.json()); self.assertEqual(len(calls),1)
+        self.assertEqual(calls[0].url.host,'relay.example')
+        self.assertEqual(calls[0].headers['authorization'],'Bearer '+KEY)
+
+    async def test_nonstream_upstream_error_is_stable(self):
+        real_client=httpx.AsyncClient
+        for status in (401,500):
+            for raw in (False,True):
+                calls=[]
+                def handler(req):
+                    calls.append(req)
+                    return httpx.Response(status,text=KEY) if raw else httpx.Response(status,json={'error':{'message':KEY}})
+                with ExitStack() as stack:
+                    for name,value in {'resolve_scope_snapshot':(True,None,'global',None,None),'get_reset_generation':0,'get_memory_enabled':False,'resolve_provider_for_model':None}.items():
+                        stack.enter_context(patch.object(app,name,AsyncMock(return_value=value)))
+                    stack.enter_context(patch.object(app,'API_KEY',KEY))
+                    stack.enter_context(patch.object(app,'API_BASE_URL','https://relay.example/v1/chat/completions'))
+                    stack.enter_context(patch.object(httpx,'AsyncClient',lambda **kw:real_client(transport=httpx.MockTransport(handler),**kw)))
+                    r=await self.client.post('/v1/chat/completions',json={'model':'fixture','stream':False,'skip_system_prompt':True,'messages':[{'role':'user','content':'fixture'}]})
+                self.assertEqual(len(calls),1);self.assertEqual(r.status_code,502)
+                self.assertEqual(r.json(),{'error':f'http_{status}','error_code':f'http_{status}'})
+                self.safe(r.text)
+
+    async def test_dream_stores_stable_error(self):
+        import dream
+        real_client=httpx.AsyncClient
+        def handler(req): raise RuntimeError(KEY)
+        saved=AsyncMock()
+        with ExitStack() as stack:
+            stack.enter_context(patch.object(dream,'_dream_running',False))
+            stack.enter_context(patch.object(dream,'_dream_cancelled',False))
+            stack.enter_context(patch.object(dream,'_dream_lock',asyncio.Lock()))
+            for name,value in {'create_dream_log':1,'get_calendar_range':[{'date':'2026-09-01','diary':'fixture'}],'get_unprocessed_memories':[],'get_aging_memories':[],'get_active_scenes':[],'get_permanent_memories':[],'resolve_model_endpoint':('https://relay.example/v1/chat/completions',KEY,'openai')}.items():
+                stack.enter_context(patch.object(db,name,AsyncMock(return_value=value)))
+            stack.enter_context(patch.object(db,'update_dream_log',saved))
+            stack.enter_context(patch.object(httpx,'AsyncClient',lambda **kw:real_client(transport=httpx.MockTransport(handler),**kw)))
+            events=[e async for e in dream.run_dream(model_override='fixture')]
+        saved.assert_awaited_once()
+        self.assertEqual(saved.await_args.kwargs['status'],'error')
+        self.assertEqual(saved.await_args.kwargs['dream_narrative'],'internal_error')
+        self.safe(str(saved.await_args.kwargs));self.safe(events)
 
     async def test_reasoning_dispatch_uses_real_hostname(self):
         for base, native in [('https://relay.example/openrouter/v1/chat/completions',False),('https://openrouter.ai:9443/api/v1/chat/completions',True)]:
