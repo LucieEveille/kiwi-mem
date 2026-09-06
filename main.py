@@ -61,7 +61,7 @@ from database import (
 from security import (
     require_success_event, public_model_result, public_dream_record,
     serialize_provider, serialize_config, credential_state, export_config, validate_backup_meta,
-    secret_action, InvalidRequest, UpstreamFailure, stable_error, stable_payload, safe_log,
+    secret_action, InvalidRequest, UpstreamFailure, exception_code, stable_error, stable_payload, safe_log,
     validate_upstream_url, upstream_origin, is_openrouter_url, sse_error, safe_sse,
 )
 from config import (
@@ -5449,7 +5449,7 @@ async def _query_generic_credits(base_url: str, api_key: str):
                     result["total_credits"] = hard_limit
         except Exception as e:
             if isinstance(e, UpstreamFailure): raise
-            raise UpstreamFailure("upstream_error") from None
+            raise UpstreamFailure(exception_code(e)) from None
         
         # 方式2：/v1/dashboard/billing/usage
         try:
@@ -5468,13 +5468,31 @@ async def _query_generic_credits(base_url: str, api_key: str):
                 result["total_usage"] = round(usage_cents / 100, 6) if usage_cents > 1 else usage_cents
         except Exception as e:
             if isinstance(e, UpstreamFailure): raise
-            raise UpstreamFailure("upstream_error") from None
+            raise UpstreamFailure(exception_code(e)) from None
         
         if "total_credits" in result:
             total_usage = result.get("total_usage", 0)
             result["balance"] = round(result["total_credits"] - total_usage, 6)
     
     return result
+
+
+async def _query_credits_entry(base, key, entry):
+    """Keep one provider's failure local; never hide provider-list DB failures."""
+    try:
+        if is_openrouter_url(base):
+            if "provider_id" not in entry:
+                entry["provider_name"] = "OpenRouter"
+            data = await _query_openrouter_credits(base, key)
+        else:
+            data = await _query_generic_credits(base, key)
+    except Exception as exc:
+        entry["error_code"] = stable_payload(exception_code(exc))["error_code"]
+        return entry
+    if data:
+        entry.update(data)
+        return entry
+    return None
 
 
 @app.get("/admin/credits")
@@ -5488,14 +5506,8 @@ async def api_get_credits():
             # 没有配置供应商，用全局环境变量兜底（向后兼容）。
             # 非 OpenRouter 的环境变量供应商也走通用查询，不再只认 OpenRouter。
             if API_KEY:
-                if is_openrouter_url(API_BASE_URL):
-                    result = await _query_openrouter_credits(API_BASE_URL, API_KEY)
-                    name = "OpenRouter"
-                else:
-                    result = await _query_generic_credits(API_BASE_URL, API_KEY)
-                    name = "环境变量供应商"
+                result = await _query_credits_entry(API_BASE_URL, API_KEY, {"provider_name": "环境变量供应商"})
                 if result:
-                    result["provider_name"] = name
                     return {"providers": [result]}
             return {"providers": []}
         
@@ -5506,15 +5518,8 @@ async def api_get_credits():
             if not key:
                 continue
             
-            entry = {"provider_id": p["id"], "provider_name": p["name"]}
-            
-            if is_openrouter_url(base):
-                data = await _query_openrouter_credits(base, key)
-            else:
-                data = await _query_generic_credits(base, key)
-            
-            entry.update(data)
-            if data:  # 只返回有数据的
+            entry = await _query_credits_entry(base, key, {"provider_id": p["id"], "provider_name": p["name"]})
+            if entry:  # 返回数据或该供应商的稳定错误；不支持查询仍省略
                 results.append(entry)
         
         return {"providers": results}

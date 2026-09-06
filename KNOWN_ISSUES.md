@@ -66,3 +66,5 @@
 - This patch sanitizes the specified credential/model failure paths, not every exception in the repository. KIWI-ERR-01 retains the other 49 main.py error=str(e) exits, six daily_digest.py internal error dictionaries and unlisted MCP/tool failure channels. User-authored text and raw database dumps are not secret-filtered.
 - MCP Host/Origin setup and exact route mounting remain BUILD-01/SEC-01b work. Embedding versioning/rebuild remains EMB-01 work.
 - Compatibility changes and deployment guidance: [security model](docs/security-model.md).
+
+SEC-01a 补丁批复核记录：供应商新建空名称仍返回原有固定错误串；日历周期校验目前统一为 invalid_request，具体原因的机器码与面板提示留给 KIWI-ERR-01。

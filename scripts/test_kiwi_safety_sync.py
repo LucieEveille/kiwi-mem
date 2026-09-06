@@ -8041,6 +8041,38 @@ async def test_sec_01a_config(client) -> None:
         require(response.status_code == 400 and await _config_row("search_api_key") is None, "invalid secret became a DB value")
     passed("T-SEC-01a-03 invalid secret inputs create no row")
 
+    begin("T-SEC-01a-04")
+    provider_ids = []
+    calls = []
+    real_client = httpx.AsyncClient
+    async def fixture_providers():
+        return sorted((p for p in await database.get_all_providers() if p['id'] in provider_ids), key=lambda p: p['id'])
+    def upstream(request):
+        calls.append(request.url.host)
+        if request.url.host == 'openrouter.ai':
+            return httpx.Response(500, text=key)
+        return httpx.Response(200, json={'hard_limit_usd': 3, 'total_usage': 1})
+    try:
+        for base in ('https://one.example/v1', 'https://openrouter.ai/api/v1', 'https://three.example/v1'):
+            row = await database.create_provider('kiwi-sec-p-fixture', base, key)
+            provider_ids.append(row['id'])
+        with patch.object(app_module, 'get_all_providers', fixture_providers), patch.object(
+            httpx, 'AsyncClient', lambda **kw: real_client(transport=httpx.MockTransport(upstream), **kw)
+        ):
+            response = await client.get('/admin/credits')
+        require(response.status_code == 200, 'one provider failure aborted all credits')
+        entries = response.json()['providers']
+        require([e['provider_id'] for e in entries] == provider_ids, 'lost successful provider after failure')
+        require(entries[1]['error_code'] == 'http_500', 'missing stable per-provider error')
+        require('total_credits' in entries[0] and 'total_credits' in entries[2], 'successful balances missing')
+        require(calls == ['one.example'] * 2 + ['openrouter.ai'] + ['three.example'] * 2, 'not all providers queried')
+        require(key not in response.text, 'upstream credential leaked')
+    finally:
+        for provider_id in provider_ids:
+            await database.delete_provider(provider_id)
+    require(not await fixture_providers(), 'provider fixtures were not removed')
+    passed('T-SEC-01a-04 real provider rows retain balances across one upstream failure')
+
 
 async def run_suite(test_dsn: str) -> None:
     global database, config, app_module, memory_extractor

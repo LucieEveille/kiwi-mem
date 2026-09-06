@@ -159,7 +159,7 @@ def require_success_event(event):
         if raw == '[DONE]': continue
         try: data = json.loads(raw)
         except (ValueError, TypeError): continue
-        if isinstance(data, dict) and ('error' in data or data.get('type') == 'error'):
+        if isinstance(data, dict) and (data.get('error') or data.get('type') == 'error'):
             raise UpstreamFailure()
 
 

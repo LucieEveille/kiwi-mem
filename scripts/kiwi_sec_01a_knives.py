@@ -29,6 +29,11 @@ CASES=[
  ('K-SEC-15','security.py',"        record['dream_narrative'] = 'upstream_error'","        record['dream_narrative'] = record['dream_narrative']",'test_legacy_dream_errors_are_safe_on_read'),
  ('K-SEC-16','security.py',"        yield sse_error(exc).encode('utf-8')","        yield b'data: {\"choices\":[{\"delta\":{\"content\":\"failed\"}}]}\\n\\n'",'test_post_start_exception_and_embedded_error_frame'),
  ('K-SEC-17','security.py',"or meta['format_version'] != 2","or meta['format_version'] not in (2, 3)",'test_invalid_meta_rejected_before_any_write'),
+ ('K-SEC-18','main.py','async with httpx.AsyncClient(follow_redirects=False, timeout=10) as client:\n        # 方式1','async with httpx.AsyncClient(follow_redirects=True, timeout=10) as client:\n        # 方式1','test_generic_redirect_never_follows'),
+ ('K-SEC-19','main.py','return JSONResponse(status_code=502, content=stable_payload(f"http_{response.status_code}"),','return JSONResponse(status_code=response.status_code, content=response.json(),','test_nonstream_upstream_error_is_stable'),
+ ('K-SEC-20','dream.py','error_msg = exception_code(e)','error_msg = f"模型调用出错: {e}"','test_dream_stores_stable_error'),
+ ('K-SEC-21','main.py','entry["error_code"] = stable_payload(exception_code(exc))["error_code"]','raise exc','test_credits_failure_is_isolated_per_provider'),
+ ('K-SEC-22','security.py',"(data.get('error') or data.get('type') == 'error')","('error' in data or data.get('type') == 'error')",'test_null_sse_error_is_not_failure'),
 ]
 
 
@@ -38,6 +43,8 @@ def main():
     parser.add_argument('--output',type=Path,required=True)
     args=parser.parse_args()
     base=subprocess.check_output(['git','-c',f'safe.directory={ROOT.as_posix()}','rev-parse','HEAD'],cwd=ROOT,text=True).strip()
+    source_files=sorted({case[1] for case in CASES} | {'scripts/test_kiwi_sec_01a.py', 'scripts/kiwi_sec_01a_knives.py'})
+    source_blobs={file:subprocess.check_output(['git','-c',f'safe.directory={ROOT.as_posix()}','rev-parse',f'{base}:{file}'],cwd=ROOT,text=True).strip() for file in source_files}
     command=[sys.executable,'-X','utf8',str(ROOT/'scripts/test_kiwi_sec_01a.py')]
     pre=subprocess.run(command,cwd=ROOT,capture_output=True,text=True,encoding='utf-8')
     if pre.returncode: raise SystemExit('Preflight not green; no mutations applied')
@@ -61,7 +68,7 @@ def main():
             if hashlib.sha256(path.read_bytes()).digest()!=hashlib.sha256(original).digest():
                 raise SystemExit(f'{knife}: restore hash mismatch')
     post=subprocess.run(command,cwd=ROOT,capture_output=True,text=True,encoding='utf-8')
-    ledger={'ticket':'KIWI-SEC-01a','head':base,'kind':'ASGI/functions; fake DB and HTTP; no external calls','preflight':pre.returncode,'restored_suite':post.returncode,'results':results}
+    ledger={'ticket':'KIWI-SEC-01a','head':base,'source_blobs':source_blobs,'kind':'ASGI/functions; fake DB and HTTP; no external calls','preflight':pre.returncode,'restored_suite':post.returncode,'results':results}
     args.output.write_text(json.dumps(ledger,ensure_ascii=False,indent=2),encoding='utf-8')
     return 0 if post.returncode==0 and all(r['result']=='RED' for r in results) else 1
 

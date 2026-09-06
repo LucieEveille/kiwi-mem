@@ -536,3 +536,5 @@ You may use, copy, modify, and distribute this project. If you modify kiwi-mem a
 ### Credential boundaries
 
 Provider and search credentials expose configured state and, for sufficiently long keys, only the last four characters. ZIP exports omit schema-marked secret values. Authentication is still deployment-owned: protect the entire service. Empty secret updates preserve existing values; explicit clearing removes the database override and may reveal an env credential. API base URLs containing userinfo, query strings or fragments are rejected. See the [security model](docs/security-model.md) for backup compatibility and the scoped error-handling contract.
+
+The search-config PUT accepts `max_results` only as a JSON integer from 1 to 20, and `engine` as a supported ID or an empty string. Credit aggregation reports individual provider failures via `error_code` while continuing to query the others.
