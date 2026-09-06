@@ -144,7 +144,7 @@ Visit `http://localhost:8080` — if you see `{"status":"running"}`, you're good
 - Point your chat client's API endpoint to `http://localhost:8080/v1`
 - Works with any OpenAI-format frontend: ChatBox, NextChat, SillyTavern, or your own
 
-> 🔓 **kiwi-mem has no built-in authentication.** If you expose it to the public Internet, protect the entire service with Cloudflare Access, reverse-proxy Basic Auth, or an IP allowlist. Pay special attention to `/admin`, `/sync/export` (which may export API keys in the full configuration backup), and `/sync/import-backup` (which restores the full configuration). These endpoints are not authenticated by kiwi-mem itself.
+> 🔓 **kiwi-mem has no built-in authentication.** If you expose it to the public Internet, protect the entire service with Cloudflare Access, reverse-proxy Basic Auth, or an IP allowlist. Pay special attention to `/admin`, `/sync/export` (which exports conversations and configuration but excludes schema-marked secret values), and `/sync/import-backup` (which restores the full configuration). These endpoints are not authenticated by kiwi-mem itself.
 
 > 💡 80+ parameters can be changed at runtime via the admin panel — no restart needed.
 
@@ -532,3 +532,9 @@ You may use, copy, modify, and distribute this project. If you modify kiwi-mem a
 > *"Memory is not storage — it's understanding."*
 
 *Built with love, for anyone who wants their AI to truly remember.*
+
+### Credential boundaries
+
+Provider and search credentials expose configured state and, for sufficiently long keys, only the last four characters. ZIP exports omit schema-marked secret values. Authentication is still deployment-owned: protect the entire service. Empty secret updates preserve existing values; explicit clearing removes the database override and may reveal an env credential. API base URLs containing userinfo, query strings or fragments are rejected. See the [security model](docs/security-model.md) for backup compatibility and the scoped error-handling contract.
+
+The search-config PUT accepts `max_results` only as a JSON integer from 1 to 20, and `engine` as a supported ID or an empty string. Credit aggregation reports individual provider failures via `error_code` while continuing to query the others.

@@ -362,17 +362,23 @@ async def anthropic_stream_to_openai(response, model: str = "") -> AsyncGenerato
     cache_creation = 0
     cache_read = 0
     done_sent = False
+    _saw_data = False
+    _bytes = 0
 
-    # 手动迭代上游 SSE：流被截断 / 协议异常时 aiter_bytes 可能直接抛错，这里捕获后
-    # 跳出循环，由循环结束后的兜底逻辑补发 [DONE]，避免下游一直挂着等结束信号。
+    # 迭代异常只发稳定错误帧和结束标记，诊断不进入助手正文。
     chunk_iter = response.aiter_bytes(chunk_size=256)
     while True:
         try:
             chunk = await chunk_iter.__anext__()
         except StopAsyncIteration:
             break
-        except Exception:
-            break
+        except Exception as exc:
+            if not done_sent:
+                from security import sse_error
+                yield sse_error(exc).encode("utf-8")
+                yield b"data: [DONE]\n\n"
+            return
+        _bytes += len(chunk)
         buffer += chunk.decode("utf-8", errors="ignore")
 
         while "\n" in buffer:
@@ -392,6 +398,7 @@ async def anthropic_stream_to_openai(response, model: str = "") -> AsyncGenerato
             except json.JSONDecodeError:
                 continue
 
+            _saw_data = True
             event_type = data.get("type", "")
 
             # ── message_start ──
@@ -477,17 +484,22 @@ async def anthropic_stream_to_openai(response, model: str = "") -> AsyncGenerato
             elif event_type == "message_stop":
                 done_sent = True
                 yield b"data: [DONE]\n\n"
+                return
 
             # ── error ──
             elif event_type == "error":
-                err_msg = data.get("error", {}).get("message", "Unknown error")
-                yield _sse(msg_id, model, {"content": f"⚠️ {err_msg}"})
+                from security import sse_error
+                yield sse_error("upstream_error").encode("utf-8")
                 done_sent = True
                 yield b"data: [DONE]\n\n"
+                return
 
     # 兜底：上游正常结束或被截断却没发 message_stop / error 时，补一个 [DONE] 收尾，
     # 否则下游（OpenAI SSE 消费方）会一直等不到结束标记。
     if not done_sent:
+        if not _saw_data and _bytes > 0:
+            from security import UpstreamFailure
+            raise UpstreamFailure("parse_failed")
         yield b"data: [DONE]\n\n"
 
 

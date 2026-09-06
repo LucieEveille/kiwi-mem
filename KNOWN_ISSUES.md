@@ -59,3 +59,16 @@
   → 统一需新增配置项 + schema（属功能改动，非「顺手」），留待后续。
 - 后台任务兜底默认模型名硬编码 `anthropic/claude-haiku-4`（OpenRouter 命名风格），非 OpenRouter
   供应商上该 model_id 可能 404。→ 改默认值会影响零配置开箱体验，暂留。
+
+## KIWI-SEC-01a scope and remaining security work
+
+- No built-in authentication, env fallback and default upstream addresses are intentional public behavior. Credentials remain plaintext in DB/env; an actor with admin access can retarget a provider using its stored key. Protect the whole service.
+- This patch sanitizes the specified credential/model failure paths, not every exception in the repository. KIWI-ERR-01 retains the other 49 main.py error=str(e) exits, six daily_digest.py internal error dictionaries and unlisted MCP/tool failure channels. User-authored text and raw database dumps are not secret-filtered.
+- MCP Host/Origin setup and exact route mounting remain BUILD-01/SEC-01b work. Embedding versioning/rebuild remains EMB-01 work.
+- Compatibility changes and deployment guidance: [security model](docs/security-model.md).
+
+SEC-01a 补丁批复核记录：供应商新建空名称仍返回原有固定错误串；日历周期校验目前统一为 invalid_request，具体原因的机器码与面板提示留给 KIWI-ERR-01。
+
+SEC-01a P2 复核后留给 ERR-01：客户端坏 JSON 或备份成员坏 JSON 仍可能映射为 502 parse_failed；stable_error 未知码的正文与状态分类不完全一致；no_route 白名单项未使用；非 ZIP、空搜索 query 等固定错误字符串待统一。观察项暂保留：路径 U+200B 编码、Anthropic 稳定错误二次映射、256B 分块断流丢尾；依赖版本边界由 BUILD-01 处理。
+
+SEC-01a P3 复核登记（本批未改，后续 ERR-01 / 观察）：OpenAI 的 `data:[DONE]` 无空格变体可能与兜底形成两个 DONE；首行合法、次行垃圾的畸形块可能透传；`data: <html>` 等 SSE 包装的非 JSON 载荷仍可能透传，这两类不在三种裸非 SSE 体拒绝保证内。两分支上游 200 空体仍静默结束；通用账单根路径不剥 `/v1/messages` 后缀（同源但可能路径不兼容）。合法 `id:` / `retry:` / 注释块在 OpenAI 直连流中可原样透传，属协议观察，不当作泄漏修复。

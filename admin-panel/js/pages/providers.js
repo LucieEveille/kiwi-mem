@@ -1,3 +1,4 @@
+import { providerLabel } from '../secret-fields.mjs';
 // 🔌 供应商与模型 — CRUD + 连接测试 + 模型管理（决定 /v1/models 与聊天路由）+ 额度 + 默认模型
 import { get, post, put, del, escHtml, escAttr } from '../api.js';
 import { badge, emptyState, loadingBlock, toast, modal, confirmDialog, delegate, setBusy, ctl } from '../ui.js';
@@ -45,7 +46,7 @@ export default {
             <div style="flex:1;min-width:0">
               <div class="item-title">${escHtml(p.name)} ${badge(p.api_format || 'openai', p.api_format === 'anthropic' ? 'purple' : 'info')}</div>
               <div class="item-sub mono truncate">${escHtml(p.api_base_url || '')}</div>
-              <div class="item-sub">Key：${escHtml(p.api_key_preview || '（未设置）')}</div>
+              <div class="item-sub">Key：${escHtml(providerLabel(p))}</div>
             </div>
             <div class="item-actions">
               <button class="btn btn-xs btn-primary" data-act="models" data-id="${p.id}">模型</button>
@@ -70,7 +71,7 @@ export default {
           <div class="field"><label>API 格式</label>${ctl.select('api_format', p?.api_format || 'openai', [{ value: 'openai', label: 'OpenAI 格式' }, { value: 'anthropic', label: 'Anthropic 格式' }])}</div>
         </div>
         <div class="field"><label>API Base URL</label>${ctl.text('api_base_url', p?.api_base_url || '', 'https://api.deepseek.com/v1/chat/completions')}</div>
-        <div class="field"><label>API Key${isNew ? '' : '（留空＝不修改）'}</label>${ctl.pass('api_key', '', 'sk-…')}</div>`,
+        <div class="field"><label>API Key${isNew ? '' : '（留空＝不修改）'}</label>${ctl.pass('api_key', '', p ? providerLabel(p) : 'sk-…')}</div>`,
       footer: `<button class="btn btn-secondary" data-cancel>取消</button><button class="btn btn-primary" data-save>保存</button>`,
     });
     mod.root.querySelector('[data-cancel]').onclick = () => mod.close();
@@ -88,6 +89,7 @@ export default {
       try {
         if (isNew) await post('/admin/providers', body);
         else await put(`/admin/providers/${p.id}`, body);
+        mod.root.querySelector('[data-key="api_key"]').value = '';
         toast('已保存'); mod.close(); this.load();
       } catch (e) { toast('保存失败：' + e.message, 'err'); setBusy(ev.currentTarget, false); }
     };

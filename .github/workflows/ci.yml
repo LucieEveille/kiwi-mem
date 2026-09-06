@@ -57,6 +57,11 @@ jobs:
       - name: 安装运行依赖
         run: pip install -r requirements.txt
 
+      - name: 运行 SEC-01a 凭据边界守卫
+        run: |
+          python scripts/test_kiwi_sec_01a.py
+          node scripts/test_admin_secrets.mjs
+
       - name: 运行既有开源回归脚本
         run: |
           python scripts/test_drawer_stability.py

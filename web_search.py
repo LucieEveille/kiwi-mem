@@ -15,6 +15,7 @@ API 搜索（需要 API Key）：
   - Baidu
 """
 
+from security import UpstreamFailure, InvalidRequest, exception_code, safe_log
 import re
 import json
 import httpx
@@ -84,11 +85,16 @@ async def web_search(
     engine: str = "tavily",
     api_key: str = "",
     max_results: int = 5,
+    *, strict: bool = False,
 ) -> list[SearchResult]:
     """
     统一搜索接口
     engine: tavily / zhipu / bocha / querit / bing / google / baidu
     """
+    if strict and (engine not in SEARCH_ENGINES or type(max_results) is not int or not isinstance(query, str)):
+        raise InvalidRequest()
+    if strict and SEARCH_ENGINES[engine]["needs_key"] and not api_key:
+        raise InvalidRequest()
     max_results = max(1, min(max_results, 20))  # 限制在 1-20 范围内
     try:
         if engine == "tavily":
@@ -108,21 +114,13 @@ async def web_search(
         else:
             print(f"⚠️ 未知搜索引擎: {engine}")
             return []
-    except httpx.TimeoutException as e:
-        print(f"⏰ 搜索超时 [{engine}]: {e}")
-        return []
-    except httpx.HTTPStatusError as e:
-        print(f"❌ 搜索 HTTP 错误 [{engine}] status={e.response.status_code}: {e}")
-        return []
-    except httpx.RequestError as e:
-        print(f"❌ 搜索网络错误 [{engine}]: {e}")
-        return []
-    except (KeyError, AttributeError, TypeError, ValueError) as e:
-        # 通常是引擎返回 schema 变化导致的解析失败
-        print(f"❌ 搜索结果解析失败 [{engine}] (可能是 API schema 变化): {type(e).__name__}: {e}")
-        return []
     except Exception as e:
-        print(f"❌ 搜索失败 [{engine}] {type(e).__name__}: {e}")
+        code = exception_code(e)
+        if code == "internal_error" and isinstance(e, (KeyError, AttributeError, TypeError, ValueError)):
+            code = "parse_failed"
+        safe_log("search_failed", code)
+        if strict:
+            raise UpstreamFailure(code if code != "internal_error" else "upstream_error") from None
         return []
 
 

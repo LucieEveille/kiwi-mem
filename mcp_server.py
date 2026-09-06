@@ -27,7 +27,6 @@ from mcp.server.fastmcp import FastMCP
 
 GATEWAY_PORT = int(os.getenv("PORT", "8080"))
 GATEWAY_BASE = f"http://127.0.0.1:{GATEWAY_PORT}"
-MCP_AUTH_TOKEN = os.getenv("MCP_AUTH_TOKEN", "")
 
 # kiwi-mem 网关已移除访问密码，内部调用无需带认证头
 GATEWAY_HEADERS = {}

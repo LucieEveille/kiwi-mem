@@ -339,9 +339,12 @@ async def test_s1(client: httpx.AsyncClient) -> None:
     with zipfile.ZipFile(io.BytesIO(response.content)) as archive:
         settings_json = json.loads(archive.read("settings.json"))
         config_json = json.loads(archive.read("config.json"))
+        backup_meta = json.loads(archive.read("backup_meta.json"))
     require(tuple(settings_json.keys()) == SYNC_KEYS, "settings.json contract drifted")
-    require(config_json["search_api_key"] == dangerous_before["search_api_key"], "full backup lost config")
-    passed("T-S1-5 export keeps nine-key settings and full config backup")
+    # KIWI-SEC-01a explicitly reverses only the legacy secret-export contract.
+    require(config_json["search_api_key"] == "", "backup exported secret config")
+    require(backup_meta == {"format_version": 2, "secrets_configured": ["search_api_key"]}, "backup secret metadata drifted")
+    passed("T-S1-5 export keeps nine-key settings and excludes secret values")
     begin("T-S1-6")
 
     for key in SYNC_KEYS:
@@ -479,6 +482,8 @@ async def test_s2() -> None:
         await config.set_config("prompt_title_summary", prompt_secret)
     safe_log = output.getvalue()
     require(key_secret not in safe_log and prompt_secret not in safe_log, "set_config leaked a secret")
+    require(safe_log.splitlines()[0] == "⚙️  配置更新: search_api_key = 已设置", "secret log must contain only state")
+    require(all(key_secret[i:i+5] not in safe_log for i in range(len(key_secret)-4)), "secret fragment in log")
     require(str(len(prompt_secret)) in safe_log, "prompt redaction lost allowed length")
     passed("T-S2-4 existing set_config redaction remains active")
     begin("T-S2-5")
@@ -8011,6 +8016,102 @@ async def test_empty_response_resilience_contracts() -> None:
     passed("T-ER-K-04 both diagnostic arms are body-free and timeout stays separate")
 
 
+async def test_sec_01a_config(client) -> None:
+    """Real SQL tests for override removal and secret import/export semantics."""
+    key = "KIWI_PG_SENTINEL_8vR6nB2qL4sT9xZ3"
+    begin("T-SEC-01a-01")
+    response = await client.put("/admin/config/search_api_key", json={"value": key})
+    require(response.status_code == 200, "secret write failed")
+    require(await _config_row("search_api_key") == key, "secret did not reach DB")
+    for payload in ({}, {"value": ""}, {"value": "   "}):
+        response = await client.put("/admin/config/search_api_key", json=payload)
+        require(response.status_code == 200 and await _config_row("search_api_key") == key, "empty secret overwrote DB")
+    passed("T-SEC-01a-01 secret blank updates preserve stored value")
+    begin("T-SEC-01a-02")
+    with patch.dict(os.environ, {"SEARCH_API_KEY": key}):
+        response = await client.put("/admin/config/search_api_key", json={"clear": True})
+        require(response.status_code == 200, "clear failed")
+        require(await _config_row("search_api_key") is None, "clear must delete override row")
+        require(await config.get_config("search_api_key") == key, "env fallback was shadowed")
+        require(response.json()["config"]["source"] == "env", "wrong effective source")
+    passed("T-SEC-01a-02 clear deletes row and reveals env")
+    begin("T-SEC-01a-03")
+    for value in (None, 12, [], {}):
+        response = await client.put("/admin/config/search_api_key", json={"value": value})
+        require(response.status_code == 400 and await _config_row("search_api_key") is None, "invalid secret became a DB value")
+    passed("T-SEC-01a-03 invalid secret inputs create no row")
+
+    begin("T-SEC-01a-04")
+    provider_ids = []
+    calls = []
+    real_client = httpx.AsyncClient
+    async def fixture_providers():
+        return sorted((p for p in await database.get_all_providers() if p['id'] in provider_ids), key=lambda p: p['id'])
+    def upstream(request):
+        calls.append(request.url.host)
+        if request.url.host == 'openrouter.ai':
+            return httpx.Response(500, text=key)
+        return httpx.Response(200, json={'hard_limit_usd': 3, 'total_usage': 1})
+    try:
+        for base in ('https://one.example/v1', 'https://openrouter.ai/api/v1', 'https://three.example/v1'):
+            row = await database.create_provider('kiwi-sec-p-fixture', base, key)
+            provider_ids.append(row['id'])
+        with patch.object(app_module, 'get_all_providers', fixture_providers), patch.object(
+            httpx, 'AsyncClient', lambda **kw: real_client(transport=httpx.MockTransport(upstream), **kw)
+        ):
+            response = await client.get('/admin/credits')
+        require(response.status_code == 200, 'one provider failure aborted all credits')
+        entries = response.json()['providers']
+        require([e['provider_id'] for e in entries] == provider_ids, 'lost successful provider after failure')
+        require(entries[1]['error_code'] == 'http_500', 'missing stable per-provider error')
+        require('total_credits' in entries[0] and 'total_credits' in entries[2], 'successful balances missing')
+        require(calls == ['one.example'] * 2 + ['openrouter.ai'] + ['three.example'] * 2, 'not all providers queried')
+        require(key not in response.text, 'upstream credential leaked')
+    finally:
+        for provider_id in provider_ids:
+            await database.delete_provider(provider_id)
+    require(not await fixture_providers(), 'provider fixtures were not removed')
+    passed('T-SEC-01a-04 real provider rows retain balances across one upstream failure')
+
+    begin('T-SEC-01a-05')
+    provider_ids.clear()
+    calls.clear()
+    bases = [('http://v1.example:8097/api','/api'), ('https://v10.example/openai','/openai'),
+             ('https://v1-api.example/svc','/svc'), ('https://api.example/openai/v1beta','/openai/v1beta'),
+             ('https://relay.example/v1',''), ('https://h.example:8443/v1/chat/completions','')]
+    def capture_destination(request):
+        calls.append(request)
+        return httpx.Response(200, json={'hard_limit_usd': 3, 'total_usage': 1})
+    try:
+        for base, _ in bases:
+            row = await database.create_provider('kiwi-sec-p2-fixture', base, key)
+            provider_ids.append(row['id'])
+        with patch.object(app_module, 'get_all_providers', fixture_providers), patch.object(
+            httpx, 'AsyncClient', lambda **kw: real_client(transport=httpx.MockTransport(capture_destination), **kw)
+        ):
+            response = await client.get('/admin/credits')
+        require(response.status_code == 200 and len(response.json()['providers']) == len(bases), 'credit rows missing')
+        require(len(calls) == 2 * len(bases), 'wrong credit request count')
+        for i, (base, prefix) in enumerate(bases):
+            origin = httpx.URL(base)
+            for request, suffix in zip(calls[i*2:i*2+2], ('subscription', 'usage')):
+                require((request.url.scheme,request.url.host,request.url.port) == (origin.scheme,origin.host,origin.port), 'credit destination changed origin')
+                require(request.url.path == prefix+'/v1/dashboard/billing/'+suffix, 'credit path segment changed')
+                require(request.headers['authorization'] == 'Bearer '+key, 'wrong fixture credential')
+    finally:
+        for provider_id in provider_ids:
+            await database.delete_provider(provider_id)
+    require(not await fixture_providers(), 'P2 provider fixtures remain')
+    passed('T-SEC-01a-05 stored provider URLs preserve origin and path segments')
+
+    begin('T-SEC-01a-06')
+    before = [p['id'] for p in await database.get_all_providers()]
+    response = await client.post('/admin/providers', json={'name':'kiwi-sec-p2-invalid','api_base_url':'https://relay.example/v1','api_key':None})
+    require(response.status_code == 400 and response.json()['error_code'] == 'invalid_request', 'null provider credential not rejected')
+    require([p['id'] for p in await database.get_all_providers()] == before, 'invalid provider credential inserted row')
+    passed('T-SEC-01a-06 null provider credential creates no row')
+
+
 async def run_suite(test_dsn: str) -> None:
     global database, config, app_module, memory_extractor
 
@@ -8078,6 +8179,7 @@ async def run_suite(test_dsn: str) -> None:
         await test_w2_05_scale_snapshot_and_privacy()
         await test_memory_notice_contracts()
         await test_empty_response_resilience_contracts()
+        await test_sec_01a_config(client)
 
 
 async def async_main() -> int:

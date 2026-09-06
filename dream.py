@@ -14,6 +14,7 @@ Dream 记忆整合模块 —— AI 的睡眠与记忆整合
 v5.1 初版
 """
 
+from security import exception_code
 import os
 import json
 import re
@@ -410,7 +411,7 @@ async def run_dream(trigger_type: str = "manual", model_override: str = None):
                 text = data.get("choices", [{}])[0].get("message", {}).get("content", "")
 
         except Exception as e:
-            error_msg = f"模型调用出错: {str(e)}"
+            error_msg = exception_code(e)
             await update_dream_log(dream_id, status="error", finished_at=datetime.now(TZ_CST),
                                     dream_narrative=error_msg)
             yield {"type": "error", "data": error_msg}

@@ -1,5 +1,5 @@
 // 💾 备份与数据 — 整体备份导出/导入 + 危险区重置（不做内容浏览，内容浏览交给客户端）
-import { del, download, API } from '../api.js';
+import { del, download, API, escHtml } from '../api.js';
 import { loadingBlock, errorBlock, toast, confirmDialog, delegate, setBusy } from '../ui.js';
 
 export default {
@@ -12,7 +12,7 @@ export default {
 
       <div class="card">
         <div class="card-title">📦 整体备份</div>
-        <div class="card-desc">导出 zip：对话、项目、记忆、配置、同步设置。导入会按备份内容合并恢复。</div>
+        <div class="card-desc">导出 zip：对话、项目、记忆、配置、同步设置，密钥配置值不包含在备份中。导入会按备份内容合并恢复。</div>
         <div class="btn-row mt8">
           <button class="btn btn-secondary" data-act="export">⬇️ 导出备份（zip）</button>
           <button class="btn btn-primary" data-act="import">⬆️ 导入备份</button>
@@ -63,9 +63,11 @@ export default {
       const res = await fetch(API + '/sync/import-backup', { method: 'POST', body: fd });
       const data = await res.json().catch(() => ({}));
       if (!res.ok || data.error) throw new Error(data.error || `服务器错误 (${res.status})`);
-      const n = (k) => data[k] ?? 0;
+      const n = (k) => Number.isFinite(data[k]) ? data[k] : 0;
+      const missing = Array.isArray(data.secrets_requiring_input) ? data.secrets_requiring_input.filter(k => k === 'search_api_key') : [];
       resultEl.innerHTML = `<div class="banner banner-info"><span>✅</span><div>
         导入完成：对话 ${n('conversations')} · 消息 ${n('messages')} · 项目 ${n('projects')} · 记忆 ${n('memories')} · 设置 ${n('settings')} · 配置 ${n('config')}
+        ${missing.length ? `<p>需重新配置：${missing.map(escHtml).join('、')}</p>` : ''}
       </div></div>`;
       toast('备份导入成功');
     } catch (e) {

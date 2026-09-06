@@ -1,7 +1,7 @@
 // ⚙️ 全部配置 — 兜底全量视图：遍历所有页分组 + orphan 兜底，一次 wireConfig 即时保存
 import { escHtml } from '../api.js';
 import { card, cfgRow, badge, loadingBlock, toast } from '../ui.js';
-import { loadConfig, renderConfigGroups, wireConfig, ensureModelDatalist } from '../config.js';
+import { controlFor, loadConfig, renderConfigGroups, wireConfig, ensureModelDatalist } from '../config.js';
 import { CONFIG_META, CONFIG_PAGES, RESTORABLE_PROMPTS, orphanKeys } from '../config-schema.js';
 
 // 各页的中文小标题（仅本兜底页展示用；页 key 来自 CONFIG_PAGES）
@@ -24,6 +24,7 @@ const PAGE_TITLES = {
 // 为 orphan key 生成与 config.js 一致的控件（带 data-cfg + data-key 供 wireConfig 自动保存）。
 // 不引入 config.js 私有函数，按 input 类型自行拼装。
 function orphanControl(key, val) {
+  if (val?.type === 'secret') return controlFor(key, val);
   const m = CONFIG_META[key] || { input: 'text' };
   const v = val ?? '';
   const attr = `data-cfg data-key="${escHtml(key)}"`;
