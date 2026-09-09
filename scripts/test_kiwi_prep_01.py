@@ -307,22 +307,23 @@ class UpdateGuards(unittest.TestCase):
                 self.assertEqual(f.head(),f.prev)
                 self.assertFalse((f.repo/'.update-state.json').exists())
 
-    @unittest.skipIf(os.name == 'nt', 'POSIX host and compose matrix runs in Linux CI')
     def test_T_PREP_01_13_port_environment(self):
         forms=[('plain',b'PORT=9000\n','9000'),
                ('quoted',b'PORT="9000"\n','9000'),
                ('bom',b'\xef\xbb\xbfPORT=9300\n','9300'),
                ('crlf',b'PORT=9000\r\n','9000'),('missing',b'', '8080')]
-        cases=[(host,env,form,False) for host in ('python','jq','none')
+        hosts=('python',) if os.name=='nt' else ('python','jq','none')
+        if os.name=='nt': print('BLOCKED locally: jq / helper-free matrix requires Linux CI')
+        cases=[(host,env,form,False) for host in hosts
                for env in (None,'9400','') for form in forms]
         cases += [(host,None,('last',b'PORT=8081\n  PORT=9090\r\n','9090'),False)
-                  for host in ('python','jq','none')]
-        cases += [('none',None,('invalid',b'PORT=invalid\n','8080'),False)]
-        cases += [(host,'9400',forms[0],True) for host in ('python','jq')]
+                  for host in hosts]
+        if os.name!='nt': cases += [('none',None,('invalid',b'PORT=invalid\n','8080'),False)]
+        cases += [(host,'9400',forms[0],True) for host in hosts if host!='none']
         for host,env,(kind,raw,parsed),revised in cases:
             with self.subTest(host=host,env=env,form=kind,resume=revised):
                 f=self.fixture()
-                f.restrict_runtime(python=host=='python',http='curl')
+                if os.name!='nt': f.restrict_runtime(python=host=='python',http='curl')
                 if host=='none': (f.bin/'jq').unlink()
                 target=f.target(False,revised)
                 (f.repo/'.env').write_bytes(raw)
