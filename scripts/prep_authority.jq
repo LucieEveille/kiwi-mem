@@ -1,6 +1,6 @@
 # Dependency-free jq fallback for hosts without Python. No values are printed.
 def ipv4:
-  split(".") as $p | ($p|length)==4 and all($p[]; test("^[0-9]{1,3}$") and (tonumber <= 255));
+  split(".") as $p | ($p|length)==4 and all($p[]; test("^(0|[1-9][0-9]{0,2})$") and (tonumber <= 255));
 def ipv6:
   . as $raw |
   (if contains(".") then

@@ -263,6 +263,16 @@ class UpdateGuards(unittest.TestCase):
 
     @unittest.skipIf(os.name == 'nt', 'minimal POSIX PATH matrix runs in Linux CI')
     def test_fallback_runtime_paths(self):
+        from mcp_access import valid_host
+        values=['x.example','x.example:*','localhost','127.0.0.1','[::1]',
+                '[::1]:8080','[2001:db8::1]:*','[::ffff:192.0.2.1]',
+                '[::ffff:01.2.3.4]','[:::]','[1:2:3:4:5:6:7:8:9]',
+                'x:0','x:65535','x:65536','x:','*.evil','bad host',
+                'https://example.com','user@host','host/path','host.','host..','']
+        checked=subprocess.run(['jq','-c','-L',str(ROOT/'scripts'),
+                'include "prep_authority"; map(validhost)'],input=json.dumps(values),
+                capture_output=True,text=True,check=True)
+        self.assertEqual(json.loads(checked.stdout),[bool(valid_host(v)) for v in values])
         for python, http in ((False,'curl'),(False,'wget'),(True,'wget')):
             with self.subTest(python=python,http=http):
                 f=self.fixture(compose_fail=True)
