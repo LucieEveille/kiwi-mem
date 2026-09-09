@@ -37,8 +37,9 @@ MUTATIONS = {
  18: ('scripts/update_support.py',"'--max-time', '5', ", "",'UpdateGuards.test_T_PREP_01_10_initialize_probe'),
  19: ('requirements.txt','starlette==1.3.1\n','', 'DeliveryGuards.test_T_PREP_01_11_delivery_contract'),
  20: ('scripts/upgrade_gates.json','"mcp_access_control":false','"mcp_access_control":true','DeliveryGuards.test_T_PREP_01_11_delivery_contract'),
- 21: ('mcp_server.py','import os\n','import os\n# mutation\n','DeliveryGuards.test_T_PREP_01_11_delivery_contract'),
+ 21: ('mcp_server.py','FastMCP("Memory Garden", stateless_http=True)','FastMCP("Memory Garden", stateless_http=True, transport_security=None)','DeliveryGuards.test_T_PREP_01_11_delivery_contract'),
  22: ('mcp_access.py','import ipaddress','from mcp.server.transport_security import TransportSecuritySettings\nimport ipaddress','DeliveryGuards.test_T_PREP_01_12_no_protection_wiring'),
+ 23: ('scripts/update.sh','        PORT="$PORT_FALLBACK"','        PORT=8080','UpdateGuards.test_fallback_runtime_paths'),
 }
 
 
@@ -106,15 +107,16 @@ KNIVES = [
     (18, "10", "Remove MCP probe timeout"),
     (19, "11", "Remove Starlette pin"),
     (20, "11", "Enable upgrade gate early"),
-    (21, "11", "Change mcp_server.py baseline blob"),
+    (21, "11", "Wire transport_security into a FastMCP constructor"),
     (22, "12", "Import transport protection in production"),
+    (23, "fallback", "Discard helper-free dotenv port fallback"),
 ]
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--list", action="store_true")
     parser.add_argument('--output')
-    parser.add_argument('--only',help='comma-separated knife numbers; omitted means all 22')
+    parser.add_argument('--only',help='comma-separated knife numbers; omitted means all 23')
     args = parser.parse_args()
     if not args.list:
         if not args.output: parser.error('--output is required; write outside the checkout')

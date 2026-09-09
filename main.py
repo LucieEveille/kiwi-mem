@@ -74,6 +74,7 @@ from anthropic_adapter import (
     to_anthropic_request, to_anthropic_headers, get_anthropic_url,
     from_anthropic_response, anthropic_stream_to_openai,
 )
+from mcp_access import observe_mcp_access, mcp_access_status, log_mcp_access_preview
 
 # ============================================================
 # 配置项 —— 全部从环境变量读取，部署时在云平台面板里设置
@@ -81,8 +82,6 @@ from anthropic_adapter import (
 
 # 版本号。管理面板顶栏/侧栏读 GET / 的 version 字段显示，
 # 只此一处定义，避免两处字符串各说各话。
-from mcp_access import observe_mcp_access, mcp_access_status, log_mcp_access_preview
-
 VERSION = "1.7.0"
 
 # 你的 API Key（OpenRouter / OpenAI / 其他兼容服务）

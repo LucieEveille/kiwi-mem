@@ -197,6 +197,13 @@ if [ "${#SUPPORT[@]}" -gt 0 ]; then
     "${SUPPORT[@]}" preflight "$LATEST" "$COMPOSE" "$PORT"
     PRECHECK=$?
 else
+    # No JSON helper: read only PORT as data, taking the last matching line.
+    PORT_FALLBACK="$(awk '/^[[:space:]]*PORT[[:space:]]*=/ {
+        sub(/^[[:space:]]*PORT[[:space:]]*=/, ""); value=$0
+    } END {gsub(/^[[:space:]]+|[[:space:]]+$/, "", value); print value}' .env 2>/dev/null)"
+    if [[ "$PORT_FALLBACK" =~ ^[0-9]{1,5}$ ]] && [ "$((10#$PORT_FALLBACK))" -ge 1 ] && [ "$((10#$PORT_FALLBACK))" -le 65535 ]; then
+        PORT="$PORT_FALLBACK"
+    fi
     PRECHECK=0
     warn "预检跳过：无法读取升级门（缺少 python3 / jq）"
 fi
