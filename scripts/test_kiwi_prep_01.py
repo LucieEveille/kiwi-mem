@@ -224,6 +224,7 @@ class ApplicationGuards(unittest.TestCase):
                     self.assertEqual(list(after.headers.multi_items()), list(before.headers.multi_items()))
                     self.assertEqual(after.content, before.content)
         # A failed observation store must also leave the protocol available.
+        module._next_write = 0
         self.db.broken = True
         with self.client("/memory", wrapper) as client:
             response = client.post("/memory/mcp", json=INIT,
@@ -259,6 +260,38 @@ class UpdateGuards(unittest.TestCase):
         f = UpdateFixture(**control)
         self.addCleanup(f.close)
         return f
+
+    @unittest.skipIf(os.name == 'nt', 'minimal POSIX PATH matrix runs in Linux CI')
+    def test_fallback_runtime_paths(self):
+        for python, http in ((False,'curl'),(False,'wget'),(True,'wget')):
+            with self.subTest(python=python,http=http):
+                f=self.fixture(compose_fail=True)
+                f.restrict_runtime(python=python,http=http)
+                target=f.target(True,True)
+                sentinel=f.root/'PWNED'
+                (f.repo/'.env').write_text('MCP_ALLOWED_HOSTS=$(touch "'+sentinel.as_posix()+'")\n')
+                r=f.run('--auto')
+                self.assertEqual(r.returncode,3,r.stdout)
+                self.assertFalse(sentinel.exists())
+                self.assertEqual(f.head(),f.prev)
+                (f.repo/'.env').write_text('MCP_ALLOWED_HOSTS="[2001:db8::1]:*"\r\n')
+                r=f.run('--auto')
+                self.assertEqual(r.returncode,0,r.stdout)
+                self.assertEqual(f.head(),target)
+                self.assertEqual((f.root/'executed').read_text().splitlines(),['new-script'])
+                self.assertEqual(sum(c[1][:2]==['compose','exec'] for c in f.calls()),1)
+                self.assertFalse((f.repo/'.update-state.json').exists())
+                calls=[c[1] for c in f.calls(http) if any(x.endswith('/memory/mcp') for x in c[1])]
+                self.assertEqual(len(calls),1)
+                self.assertIn('--max-time' if http=='curl' else '-T',calls[0])
+                self.assertTrue(any('initialize' in x for x in calls[0]))
+                f=self.fixture(foreign=False,mcp_code=405)
+                f.restrict_runtime(python=python,http=http)
+                f.target(False,True)
+                r=f.run('--auto')
+                self.assertEqual(r.returncode,1,r.stdout)
+                self.assertEqual(f.head(),f.prev)
+                self.assertFalse((f.repo/'.update-state.json').exists())
 
     def test_T_PREP_01_06_three_conditions(self):
         f = self.fixture(); f.target()

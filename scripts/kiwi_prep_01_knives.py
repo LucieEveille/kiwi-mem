@@ -21,7 +21,7 @@ MUTATIONS = {
  2: ('mcp_access.py',"            host = parse_authority(authority)","            print(authority)\n            host = parse_authority(authority)",'ApplicationGuards.test_T_PREP_01_02_observation'),
  3: ('mcp_access.py',"return {'protection': 'preview',", "return {'last_host': 'configured', 'protection': 'preview',",'ApplicationGuards.test_T_PREP_01_01_status_shape'),
  4: ('mcp_access.py',"'protection': 'preview'", "'protection': 'enabled'",'ApplicationGuards.test_T_PREP_01_01_status_shape'),
- 5: ('mcp_access.py','return parse_authority(value, wildcard_port=True) is not None','return value.startswith("*.") or parse_authority(value, wildcard_port=True) is not None','ApplicationGuards.test_T_PREP_01_01_status_shape'),
+ 5: ('mcp_access.py','return value.isascii() and parse_authority(value, wildcard_port=True) is not None','return value.startswith("*.") or parse_authority(value, wildcard_port=True) is not None','ApplicationGuards.test_T_PREP_01_01_status_shape'),
  6: ('mcp_access.py','        await app(scope, receive, send)',"        from starlette.responses import Response\n        await Response(status_code=400)(scope, receive, send)",'ApplicationGuards.test_T_PREP_01_03_passthrough'),
  7: ('database.py','id SMALLINT PRIMARY KEY DEFAULT 1 CHECK (id = 1)','id SMALLINT PRIMARY KEY DEFAULT 1','PG'),
  8: ('scripts/update_support.py','    if not gate:','    if False:','UpdateGuards.test_T_PREP_01_06_three_conditions'),
@@ -33,7 +33,7 @@ MUTATIONS = {
  14: ('scripts/update.sh','    PORT="${STATE_FIELDS[3]}"','    PORT="${STATE_FIELDS[3]}"\n    $COMPOSE exec -T db sh -c pg_dump >/dev/null','UpdateGuards.test_T_PREP_01_09_resume'),
  15: ('scripts/update.sh','if [ "$RESUMED" = "0" ] && [ -n "$(git diff','if [ -n "$(git diff','UpdateGuards.test_T_PREP_01_09_resume'),
  16: ('scripts/update_support.py',"'/memory/mcp','POST'", "'/memory/mcp','GET'",'UpdateGuards.test_T_PREP_01_10_initialize_probe'),
- 17: ('scripts/update_support.py',"result.stdout != '200'", "result.stdout not in ('200', '405')",'UpdateGuards.test_T_PREP_01_10_initialize_probe'),
+ 17: ('scripts/update_support.py',"code != '200'", "code not in ('200', '405')",'UpdateGuards.test_T_PREP_01_10_initialize_probe'),
  18: ('scripts/update_support.py',"'--max-time', '5', ", "",'UpdateGuards.test_T_PREP_01_10_initialize_probe'),
  19: ('requirements.txt','starlette==1.3.1\n','', 'DeliveryGuards.test_T_PREP_01_11_delivery_contract'),
  20: ('scripts/upgrade_gates.json','"mcp_access_control":false','"mcp_access_control":true','DeliveryGuards.test_T_PREP_01_11_delivery_contract'),
@@ -69,7 +69,7 @@ def execute(output, selected):
                 path.write_text(text.replace(before,after,1),encoding='utf-8',newline='\n')
                 result=run_tests(method)
                 reasons=re.findall(r'^AssertionError: (.*)$',result.stdout,re.M)
-                crashed=bool(re.search(r'^ERROR:|errors=[1-9]',result.stdout,re.M))
+                crashed=bool(re.search(r'^ERROR:|errors=[1-9]|update fixture exceeded 35s',result.stdout,re.M))
                 status='RED' if result.returncode and reasons and not crashed else ('SURVIVED' if result.returncode==0 else 'CRASH')
                 if method=='PG' and 'BEGIN T-PREP-01-PG-01' not in result.stdout: status='CRASH'
                 results.append(dict(knife=f'K-PREP-{number}',variant=variant,test=method,status=status,reason=reasons,exit_code=result.returncode))
@@ -79,7 +79,7 @@ def execute(output, selected):
                 if path.read_bytes()!=original: raise RuntimeError('restoration failed')
     restored=run_tests()
     head=subprocess.check_output(['git','rev-parse','HEAD'],cwd=ROOT,text=True).strip()
-    files=sorted({v[0] for v in MUTATIONS.values()}|{'main.py','scripts/test_kiwi_prep_01.py','scripts/test_kiwi_safety_sync.py','scripts/prep_update_fixture.py'})
+    files=sorted({v[0] for v in MUTATIONS.values()}|{'main.py','scripts/test_kiwi_prep_01.py','scripts/test_kiwi_safety_sync.py','scripts/prep_update_fixture.py','scripts/update_support_jq.sh','scripts/prep_authority.jq','scripts/kiwi_prep_01_knives.py','scripts/test_prep_framework_compat.py','scripts/check_prep_audit.py'})
     blobs={p:subprocess.check_output(['git','rev-parse',head+':'+p],cwd=ROOT,text=True).strip() for p in files}
     ledger=dict(head=head,source_blobs=blobs,preflight=preflight.returncode,restored=restored.returncode,results=results)
     Path(output).write_text(json.dumps(ledger,ensure_ascii=False,indent=2)+'\n',encoding='utf-8')

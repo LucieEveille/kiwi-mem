@@ -6,6 +6,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import shutil
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from mcp_access import valid_host
@@ -36,8 +37,15 @@ def request(url, method='GET', body=None):
         args = ['curl', '-sS', '--max-time', '5', '-o', output, '-w', '%{http_code}', '-X', method]
         if body is not None:
             args += ['-H', 'Accept: application/json, text/event-stream', '-H', 'Content-Type: application/json', '--data', json.dumps(body)]
+        using_curl = shutil.which('curl') is not None
+        if not using_curl:
+            args = ['wget','-q','-T','5','-t','1','--max-redirect=0','--server-response','-O',output]
+            if body is not None:
+                args += ['--header=Accept: application/json, text/event-stream','--header=Content-Type: application/json','--post-data='+json.dumps(body)]
         result = subprocess.run(['sh','-c','exec "$@"','kiwi-probe',*args,url], capture_output=True, text=True, timeout=7)
-        if result.returncode or result.stdout != '200':
+        codes = re.findall(r'HTTP/\S+\s+(\d{3})',result.stderr)
+        code = result.stdout if using_curl else (codes[-1] if codes else '')
+        if result.returncode or code != '200':
             return None
         raw = Path(output).read_text(encoding='utf-8')
         try:

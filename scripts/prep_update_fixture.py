@@ -28,7 +28,7 @@ if kind=='docker':
     if args[:2]==['compose','up']: sys.exit(0)
     sys.exit(0)
 if kind=='sleep': sys.exit(0)
-if kind=='curl':
+if kind in ('curl','wget'):
     url=next((x for x in args if x.startswith('http://')), '')
     status=200; body='{"status":"ok"}'
     if url.endswith('/admin/mcp-access-status'):
@@ -37,11 +37,14 @@ if kind=='curl':
         status=c.get('mcp_code',200); body=c.get('mcp_body','{"jsonrpc":"2.0","id":1,"result":{}}')
     elif c.get('root_fail'): status=503
     if status==0: sys.exit(28)
-    if '-o' in args: pathlib.Path(args[args.index('-o')+1]).write_text(body)
+    if kind=='wget' and '--server-response' in args: print('  HTTP/1.1 '+str(status)+' fixture',file=sys.stderr)
+    if kind=='wget' and '-O' in args and args[args.index('-O')+1]!='-': pathlib.Path(args[args.index('-O')+1]).write_text(body)
+    elif '-o' in args: pathlib.Path(args[args.index('-o')+1]).write_text(body)
     elif '--output' in args: pathlib.Path(args[args.index('--output')+1]).write_text(body)
     else: sys.stdout.write(body)
     if '-w' in args or '--write-out' in args: sys.stdout.write(str(status))
     if any(x in args for x in ['-f','-fsS','-sf'] ) and status>=400: sys.exit(22)
+    if kind=='wget' and status>=400: sys.exit(8)
 '''
 
 
@@ -63,7 +66,7 @@ class UpdateFixture:
                         GIT_AUTHOR_NAME='PREP fixture', GIT_AUTHOR_EMAIL='fixture@example.invalid',
                         GIT_COMMITTER_NAME='PREP fixture', GIT_COMMITTER_EMAIL='fixture@example.invalid')
         self.bash = 'C:/Program Files/Git/bin/bash.exe' if os.name=='nt' else shutil.which('bash')
-        for kind in ('docker','curl','sleep'):
+        for kind in ('docker','curl','wget','sleep'):
             path=self.bin/kind
             path.write_text('#!/usr/bin/env bash\nexec "'+sys.executable.replace('\\','/')+'" "'+str(self.root/'fake.py').replace('\\','/')+'" '+kind+' "$@"\n',encoding='utf-8',newline='\n')
             path.chmod(0o755)
@@ -74,7 +77,7 @@ class UpdateFixture:
         self.git(self.root,'init','--bare',str(self.remote))
         self.git(self.root,'init','-b','main',str(self.source))
         (self.source/'scripts').mkdir()
-        for rel in ('scripts/update.sh','scripts/update_support.py','mcp_access.py'):
+        for rel in ('scripts/update.sh','scripts/update_support.py','scripts/update_support_jq.sh','scripts/prep_authority.jq','mcp_access.py'):
             if (ROOT/rel).exists():
                 (self.source/rel).write_text((ROOT/rel).read_text(encoding='utf-8'),encoding='utf-8',newline='\n')
         (self.source/'docker-compose.yml').write_text('services: {}\n')
@@ -93,6 +96,18 @@ class UpdateFixture:
         return subprocess.check_output(['git','-c','safe.directory='+str(cwd),'-c','core.autocrlf=false',*args],cwd=cwd,env=self.env if hasattr(self,'env') else None,stderr=subprocess.DEVNULL,text=True).strip()
 
     def head(self): return self.git(self.repo,'rev-parse','HEAD')
+
+    def restrict_runtime(self, python=False, http='curl'):
+        """Linux: actual PATH without Python/curl, not a production test switch."""
+        assert os.name != 'nt'
+        for name in ('bash','sh','git','awk','head','seq','dirname','date','sed','gzip',
+                     'du','cut','ls','tail','xargs','rm','mkdir','tr','wc','mktemp','mv','jq'):
+            source=shutil.which(name)
+            if not source: raise RuntimeError('fixture requires '+name)
+            (self.bin/name).symlink_to(source)
+        if python: (self.bin/'python3').symlink_to(sys.executable)
+        (self.bin/('wget' if http=='curl' else 'curl')).unlink()
+        self.env['PATH']=str(self.bin)
 
     def target(self, gate=True, revised=False):
         if gate is not None:

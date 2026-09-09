@@ -76,9 +76,15 @@ git rev-parse --git-dir >/dev/null 2>&1 || die "这个目录不是 git 仓库，
 
 PYTHON=""
 command -v python3 >/dev/null 2>&1 && PYTHON=python3
+SUPPORT=()
+if [ -n "$PYTHON" ]; then
+    SUPPORT=("$PYTHON" scripts/update_support.py)
+elif command -v jq >/dev/null 2>&1; then
+    SUPPORT=(bash scripts/update_support_jq.sh)
+fi
 if [ "$RESUMED" = "1" ]; then
-    [ -n "$PYTHON" ] || die "缺少 python3，无法安全读取续跑状态。"
-    STATE_VALUES="$("$PYTHON" scripts/update_support.py load "$RESUME_STATE" | tr -d '\r')" || die "续跑状态无效。"
+    [ "${#SUPPORT[@]}" -gt 0 ] || die "缺少 python3 / jq，无法安全读取续跑状态。"
+    STATE_VALUES="$("${SUPPORT[@]}" load "$RESUME_STATE" | tr -d '\r')" || die "续跑状态无效。"
     mapfile -t STATE_FIELDS <<< "$STATE_VALUES"
     PREV_COMMIT="${STATE_FIELDS[0]}"
     COMPOSE="${STATE_FIELDS[2]}"
@@ -186,13 +192,13 @@ else
 fi
 
 PORT=8080
-if [ -n "$PYTHON" ]; then
-    PORT="$("$PYTHON" scripts/update_support.py port | tr -d '\r')"
-    "$PYTHON" scripts/update_support.py preflight "$LATEST" "$COMPOSE" "$PORT"
+if [ "${#SUPPORT[@]}" -gt 0 ]; then
+    PORT="$("${SUPPORT[@]}" port | tr -d '\r')"
+    "${SUPPORT[@]}" preflight "$LATEST" "$COMPOSE" "$PORT"
     PRECHECK=$?
 else
     PRECHECK=0
-    warn "预检跳过：无法读取升级门（缺少 python3）"
+    warn "预检跳过：无法读取升级门（缺少 python3 / jq）"
 fi
 if [ "$PRECHECK" = "3" ]; then
     cat <<'PREP_NOTICE'
@@ -250,7 +256,7 @@ ok "代码已更新到 $(git log -1 --format='%h %s')"
 fi # normal entry; resumed entry skips fetch, merge and backup
 
 if [ "$RESUMED" = "0" ] && [ -n "$(git diff --name-only "$PREV_COMMIT" HEAD -- scripts/update.sh)" ]; then
-    if [ -z "$PYTHON" ] || ! "$PYTHON" scripts/update_support.py save "$PREV_COMMIT" "$(git rev-parse HEAD)" "$COMPOSE" "$PORT" "$BACKUP_FILE" "${ORIGINAL_ARGS[@]}"; then
+    if [ "${#SUPPORT[@]}" -eq 0 ] || ! "${SUPPORT[@]}" save "$PREV_COMMIT" "$(git rev-parse HEAD)" "$COMPOSE" "$PORT" "$BACKUP_FILE" "${ORIGINAL_ARGS[@]}"; then
         git reset --hard "$PREV_COMMIT" --quiet
         die "无法保存续跑状态，代码已回滚；容器尚未改动。"
     fi
@@ -289,13 +295,13 @@ if [ ${#PROBE[@]} -gt 0 ]; then
     done
     if [ "$HEALTHY" = "1" ]; then
         # Bounded initialize proves the local process/mount only, not remote Host access.
-        if [ -n "$PYTHON" ] && command -v curl >/dev/null 2>&1; then
-            if ! "$PYTHON" scripts/update_support.py probe "$PORT"; then
+        if [ "${#SUPPORT[@]}" -gt 0 ] && { command -v curl >/dev/null 2>&1 || command -v wget >/dev/null 2>&1; }; then
+            if ! "${SUPPORT[@]}" probe "$PORT"; then
                 warn "MCP 端点未响应"
                 HEALTHY=0
             fi
         else
-            warn "缺少 python3 / curl，MCP 协议健康检查未能验证。"
+            warn "缺少 JSON 处理器 / HTTP 工具，MCP 协议健康检查未能验证。"
         fi
     fi
     if [ "$HEALTHY" = "0" ]; then

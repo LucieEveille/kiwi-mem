@@ -49,7 +49,7 @@ def parse_authority(value, wildcard_port=False):
 
 
 def valid_host(value):
-    return parse_authority(value, wildcard_port=True) is not None
+    return value.isascii() and parse_authority(value, wildcard_port=True) is not None
 
 
 def valid_origin(value):
