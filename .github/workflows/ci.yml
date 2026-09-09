@@ -55,6 +55,7 @@ jobs:
           cache: pip
 
       - name: 安装运行依赖
+        id: prep-dependencies
         run: pip install -r requirements.txt
 
       - name: 运行既有开源回归脚本
@@ -75,3 +76,7 @@ jobs:
 
       - name: 运行 S1-S6 永久真库行为守卫
         run: python scripts/test_kiwi_safety_sync.py
+
+      - name: 运行 PREP-01 应用侧守卫
+        if: ${{ !cancelled() && steps.prep-dependencies.outcome == 'success' }}
+        run: python scripts/test_kiwi_prep_01.py
