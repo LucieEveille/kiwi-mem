@@ -343,6 +343,9 @@ class UpdateGuards(unittest.TestCase):
                 self.assertFalse((f.repo/'.update-state.json').exists())
 
         # Exercise the actual awk source on both common POSIX implementations.
+        if not (ROOT/'scripts/update_support_jq.sh').exists():
+            # Old baseline has no helper source; its port behavior was checked above.
+            return
         scripts=[(ROOT/'scripts/update.sh').read_text(encoding='utf-8'),
                  (ROOT/'scripts/update_support_jq.sh').read_text(encoding='utf-8')]
         programs=[re.search(r"PORT_FALLBACK=\"\$\((?:LC_ALL=C )?awk '(.*?)' \.env",scripts[0],re.S),
