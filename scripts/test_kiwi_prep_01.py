@@ -11,6 +11,7 @@ import importlib
 import importlib.util
 import io
 import logging
+import re
 import ast
 import shutil
 import subprocess
@@ -306,20 +307,76 @@ class UpdateGuards(unittest.TestCase):
                 self.assertEqual(f.head(),f.prev)
                 self.assertFalse((f.repo/'.update-state.json').exists())
 
-        for configured, expected in (('9090', '9090'), ('invalid', '8080')):
-            with self.subTest(no_helpers=True, valid_port=configured.isdigit()):
+    @unittest.skipIf(os.name == 'nt', 'POSIX host and compose matrix runs in Linux CI')
+    def test_T_PREP_01_13_port_environment(self):
+        forms=[('plain',b'PORT=9000\n','9000'),
+               ('quoted',b'PORT="9000"\n','9000'),
+               ('bom',b'\xef\xbb\xbfPORT=9300\n','9300'),
+               ('crlf',b'PORT=9000\r\n','9000'),('missing',b'', '8080')]
+        cases=[(host,env,form,False) for host in ('python','jq','none')
+               for env in (None,'9400','') for form in forms]
+        cases += [(host,None,('last',b'PORT=8081\n  PORT=9090\r\n','9090'),False)
+                  for host in ('python','jq','none')]
+        cases += [('none',None,('invalid',b'PORT=invalid\n','8080'),False)]
+        cases += [(host,'9400',forms[0],True) for host in ('python','jq')]
+        for host,env,(kind,raw,parsed),revised in cases:
+            with self.subTest(host=host,env=env,form=kind,resume=revised):
                 f=self.fixture()
-                f.restrict_runtime(python=False, http='curl')
-                (f.bin/'jq').unlink()
-                target=f.target(False)
-                (f.repo/'.env').write_text('PORT=8081\n  PORT='+configured+'\r\n')
-                r=f.run('--auto')
-                self.assertEqual(r.returncode,0,r.stdout)
+                f.restrict_runtime(python=host=='python',http='curl')
+                if host=='none': (f.bin/'jq').unlink()
+                target=f.target(False,revised)
+                (f.repo/'.env').write_bytes(raw)
+                if env is not None: f.env['PORT']=env
+                result=f.run('--auto')
+                self.assertEqual(result.returncode,0,result.stdout)
                 self.assertEqual(f.head(),target)
-                urls=[arg for call in f.calls('curl') for arg in call[1]
-                      if arg.startswith('http://')]
-                self.assertEqual(urls,['http://127.0.0.1:'+expected+'/'],
-                                 'helper-free root probe must use pending dotenv port')
+                up=[row for row in f.calls() if row[1][:2]==['compose','up']]
+                self.assertEqual(len(up),1)
+                self.assertEqual(up[0][3],{'PORT_set':env is not None,'PORT':env},
+                                 'compose_saw_PORT must equal the operator environment')
+                published=(env or '8080') if env is not None else parsed
+                urls=[arg for row in f.calls('curl') for arg in row[1] if arg.startswith('http://')]
+                self.assertTrue(urls)
+                self.assertTrue(all(url.startswith('http://127.0.0.1:'+published+'/') for url in urls),
+                                'probe port differs from compose published port: '+repr(urls))
+                self.assertFalse((f.repo/'.update-state.json').exists())
+
+        # Exercise the actual awk source on both common POSIX implementations.
+        scripts=[(ROOT/'scripts/update.sh').read_text(encoding='utf-8'),
+                 (ROOT/'scripts/update_support_jq.sh').read_text(encoding='utf-8')]
+        programs=[re.search(r"PORT_FALLBACK=\"\$\((?:LC_ALL=C )?awk '(.*?)' \.env",scripts[0],re.S),
+                  re.search(r"awk -v key=\"\$1\" '(.*?)' \.env",scripts[1],re.S)]
+        self.assertTrue(all(programs),'awk parser seams must exist')
+        for name in ('gawk','mawk','busybox'):
+            binary=shutil.which(name)
+            if not binary:
+                print('BLOCKED: optional awk runtime unavailable: '+name)
+                continue
+            for program in programs:
+                for _,raw,want in forms[:4]+[('single',b"PORT='9000'\n",'9000'),('last',b'PORT=8081\n PORT=9090\r\n','9090')]:
+                    args=[binary]+(['awk'] if name=='busybox' else [])+['-v','key=PORT',program[1]]
+                    result=subprocess.run(args,input=raw,capture_output=True,env=dict(os.environ,LC_ALL='C'),check=True)
+                    self.assertEqual(result.stdout.strip().decode(),want,name+' parser mismatch')
+            print('PASS: awk implementation '+name)
+
+        # Real compose config is read-only; never start a real service here.
+        docker=shutil.which('docker')
+        if docker:
+            with tempfile.TemporaryDirectory(prefix='kiwi-prep-compose-') as tmp:
+                d=Path(tmp)
+                (d/'compose.yaml').write_text('services:\n  kiwi-mem:\n    image: busybox\n    ports:\n      - "${PORT:-8080}:8080"\n')
+                clean=dict(os.environ); clean.pop('PORT',None)
+                for env in (None,'9400',''):
+                    for _,raw,parsed in forms:
+                        (d/'.env').write_bytes(raw)
+                        selected=dict(clean)
+                        if env is not None: selected['PORT']=env
+                        r=subprocess.run([docker,'compose','config','--format','json'],cwd=d,env=selected,
+                                         capture_output=True,text=True,check=True,timeout=15)
+                        actual=json.loads(r.stdout)['services']['kiwi-mem']['ports'][0]['published']
+                        self.assertEqual(str(actual),(env or '8080') if env is not None else parsed)
+                print('PASS: real compose config 15 port cases')
+        else: print('BLOCKED: real compose config unavailable locally')
 
     def test_T_PREP_01_06_three_conditions(self):
         f = self.fixture(); f.target()

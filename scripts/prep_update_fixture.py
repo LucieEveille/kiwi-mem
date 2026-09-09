@@ -16,7 +16,7 @@ p=pathlib.Path(os.environ['PREP_FIXTURE'])
 c=json.loads((p/'control.json').read_text(encoding='utf-8'))
 kind=sys.argv[1]; args=sys.argv[2:]
 head=subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip()
-with (p/'calls.jsonl').open('a') as f: f.write(json.dumps([kind,args,head])+'\n')
+with (p/'calls.jsonl').open('a') as f: f.write(json.dumps([kind,args,head,{'PORT_set':'PORT' in os.environ,'PORT':os.environ.get('PORT')}])+'\n')
 if kind=='docker':
     if args[:2]==['compose','version']: print('Docker Compose version fixture'); sys.exit(0)
     if args[:2]==['compose','config']:
@@ -60,6 +60,7 @@ class UpdateFixture:
         self.save()
         (self.root/'fake.py').write_text(FAKE, encoding='utf-8')
         self.env = dict(os.environ)
+        self.env.pop('PORT', None)
         self.env.pop('MCP_ALLOWED_HOSTS', None)
         self.env.pop('MCP_ALLOWED_ORIGINS', None)
         self.env.update(PREP_FIXTURE=str(self.root), GIT_CONFIG_NOSYSTEM='1', PYTHONIOENCODING='utf-8',
@@ -101,7 +102,7 @@ class UpdateFixture:
         """Linux: actual PATH without Python/curl, not a production test switch."""
         assert os.name != 'nt'
         for name in ('bash','sh','git','awk','head','seq','dirname','date','sed','gzip',
-                     'du','cut','ls','tail','xargs','rm','mkdir','tr','wc','mktemp','mv','jq','timeout'):
+                     'du','cut','ls','tail','xargs','rm','mkdir','tr','wc','mktemp','mv','jq','timeout','grep'):
             source=shutil.which(name)
             if not source: raise RuntimeError('fixture requires '+name)
             (self.bin/name).symlink_to(source)
