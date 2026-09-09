@@ -33,6 +33,20 @@ Zeabur 可在环境变量中登记 `MCP_ALLOWED_HOSTS=${ZEABUR_WEB_DOMAIN}`；�
 
 ## 临时隧道
 
+## 更新探针端口与配置边界
+
+更新脚本保留操作员传入的 `PORT` 环境变量（包括未设置与显式空值的区别），内部探针使用 `LISTEN_PORT`。Python、jq、无助手三条路径都按 shell `PORT` → `.env` 最后一条 `PORT` → 8080 取值；显式空值及无效端口回退 8080。支持 UTF-8 BOM、CRLF、成对单/双引号，端口须为 1～65535 的十进制整数。续跑沿用已保存的探针端口，仍保留操作员环境。
+
+这里限定的是更新辅助解析器支持的数据格式，不是完整的 Compose dotenv 语法：行尾注释、`export PORT=...` 前缀、变量插值不在支持范围。请将端口写为独立的 `PORT=9000` 行；不会执行 `.env` 中的 shell 表达式。Compose 本身可能接受更广的语法；非法端口也可能被 Compose 拒绝，不能把探针的 8080 回退当成部署配置已验证。
+
+Starlette 升级还使 `/admin` 静态资源支持 HTTP Range：有效范围可返回 206，越界范围可返回 416，并增加 `Accept-Ranges`。这是标准 HTTP 静态文件行为变化，未新增访问控制。
+
+The updater preserves the operator's `PORT` environment, including unset versus explicitly empty values, and uses `LISTEN_PORT` internally. Python, jq and helper-free paths use shell `PORT`, then the last dotenv definition, then 8080; empty or invalid values fall back to 8080. UTF-8 BOM, CRLF and paired quotes are supported. Resume retains the saved probe port and the original environment. Trailing comments, an `export` prefix and interpolation are outside the helper's supported dotenv subset; use a standalone `PORT=9000` line. This is not a claim of complete Compose grammar compatibility or successful deployment validation.
+
+After the Starlette upgrade, `/admin` static resources support Range responses (206 for valid ranges, 416 for unsatisfiable ranges) and `Accept-Ranges`. This is a standard HTTP behavior change, not a new access restriction.
+
+## 临时隧道使用说明
+
 Cloudflare Quick Tunnel 官方不支持 SSE，聊天流式与 MCP 不保证可用。仅作为试用方式，正式部署使用自有域名或平台域名。参见 [Quick Tunnels 文档](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/do-more-with-tunnels/trycloudflare/)。
 
 ## 1.7.0 限时风险例外

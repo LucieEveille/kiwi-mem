@@ -88,7 +88,7 @@ if [ "$RESUMED" = "1" ]; then
     mapfile -t STATE_FIELDS <<< "$STATE_VALUES"
     PREV_COMMIT="${STATE_FIELDS[0]}"
     COMPOSE="${STATE_FIELDS[2]}"
-    PORT="${STATE_FIELDS[3]}"
+    LISTEN_PORT="${STATE_FIELDS[3]}"
     BACKUP_FILE="${STATE_FIELDS[4]:-}"
     QUIET=0
 fi
@@ -191,18 +191,30 @@ else
     die "找不到 docker compose 命令。先装 Docker：curl -fsSL https://get.docker.com | sh"
 fi
 
-PORT=8080
+# PORT belongs to the operator/compose environment; never assign or unset it.
+# LISTEN_PORT is an internal probe value, never explicitly exported.
+LISTEN_PORT=8080
 if [ "${#SUPPORT[@]}" -gt 0 ]; then
-    PORT="$("${SUPPORT[@]}" port | tr -d '\r')"
-    "${SUPPORT[@]}" preflight "$LATEST" "$COMPOSE" "$PORT"
+    LISTEN_PORT="$("${SUPPORT[@]}" port | tr -d '\r')"
+    "${SUPPORT[@]}" preflight "$LATEST" "$COMPOSE" "$LISTEN_PORT"
     PRECHECK=$?
 else
     # No JSON helper: read only PORT as data, taking the last matching line.
-    PORT_FALLBACK="$(awk '/^[[:space:]]*PORT[[:space:]]*=/ {
+    if [ -n "${PORT+set}" ]; then
+        PORT_FALLBACK="$PORT"
+    else
+    PORT_FALLBACK="$(LC_ALL=C awk '
+    NR==1 && substr($0,1,3)=="\357\273\277" { $0=substr($0,4) }
+    /^[[:space:]]*PORT[[:space:]]*=/ {
         sub(/^[[:space:]]*PORT[[:space:]]*=/, ""); value=$0
-    } END {gsub(/^[[:space:]]+|[[:space:]]+$/, "", value); print value}' .env 2>/dev/null)"
+    } END {gsub(/^[[:space:]]+|[[:space:]]+$/, "", value);
+        if ((substr(value,1,1)=="\"" && substr(value,length(value),1)=="\"") ||
+            (substr(value,1,1)==sprintf("%c",39) && substr(value,length(value),1)==sprintf("%c",39)))
+          value=substr(value,2,length(value)-2);
+        gsub(/^[[:space:]]+|[[:space:]]+$/, "", value); print value}' .env 2>/dev/null)"
+    fi
     if [[ "$PORT_FALLBACK" =~ ^[0-9]{1,5}$ ]] && [ "$((10#$PORT_FALLBACK))" -ge 1 ] && [ "$((10#$PORT_FALLBACK))" -le 65535 ]; then
-        PORT="$PORT_FALLBACK"
+        LISTEN_PORT="$PORT_FALLBACK"
     fi
     PRECHECK=0
     warn "预检跳过：无法读取升级门（缺少 python3 / jq）"
@@ -263,7 +275,7 @@ ok "代码已更新到 $(git log -1 --format='%h %s')"
 fi # normal entry; resumed entry skips fetch, merge and backup
 
 if [ "$RESUMED" = "0" ] && [ -n "$(git diff --name-only "$PREV_COMMIT" HEAD -- scripts/update.sh)" ]; then
-    if [ "${#SUPPORT[@]}" -eq 0 ] || ! "${SUPPORT[@]}" save "$PREV_COMMIT" "$(git rev-parse HEAD)" "$COMPOSE" "$PORT" "$BACKUP_FILE" "${ORIGINAL_ARGS[@]}"; then
+    if [ "${#SUPPORT[@]}" -eq 0 ] || ! "${SUPPORT[@]}" save "$PREV_COMMIT" "$(git rev-parse HEAD)" "$COMPOSE" "$LISTEN_PORT" "$BACKUP_FILE" "${ORIGINAL_ARGS[@]}"; then
         git reset --hard "$PREV_COMMIT" --quiet
         die "无法保存续跑状态，代码已回滚；容器尚未改动。"
     fi
@@ -283,7 +295,7 @@ if ! $COMPOSE up -d --build; then
 fi
 
 # ---- 健康检查 ----
-HEALTH_URL="http://127.0.0.1:$PORT/"
+HEALTH_URL="http://127.0.0.1:$LISTEN_PORT/"
 
 if command -v curl >/dev/null 2>&1; then
     PROBE=(curl -fsS --max-time 5 "$HEALTH_URL")
@@ -303,7 +315,7 @@ if [ ${#PROBE[@]} -gt 0 ]; then
     if [ "$HEALTHY" = "1" ]; then
         # Bounded initialize proves the local process/mount only, not remote Host access.
         if [ "${#SUPPORT[@]}" -gt 0 ] && { command -v curl >/dev/null 2>&1 || command -v wget >/dev/null 2>&1; }; then
-            if ! "${SUPPORT[@]}" probe "$PORT"; then
+            if ! "${SUPPORT[@]}" probe "$LISTEN_PORT"; then
                 warn "MCP 端点未响应"
                 HEALTHY=0
             fi

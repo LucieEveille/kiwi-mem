@@ -2,7 +2,8 @@
 """PREP-01 mutation runner: exact anchors, restoration and explicit RED/CRASH.
 
 Run on a clean committed tree with output outside the checkout. K-2 has
-stdout and logging variants. K-7 needs the disposable PostgreSQL test DSN.
+stdout and logging variants; K-26 tests both awk parsers independently.
+K-7 needs the disposable PostgreSQL test DSN.
 """
 import argparse
 import json
@@ -14,6 +15,7 @@ import subprocess
 import sys
 
 ROOT = Path(__file__).resolve().parents[1]
+BOM_RULE = r'NR==1 && substr($0,1,3)=="\357\273\277" { $0=substr($0,4) }'
 
 # Each anchor must occur exactly once. Tuple: file, before, after, test method.
 MUTATIONS = {
@@ -27,10 +29,10 @@ MUTATIONS = {
  8: ('scripts/update_support.py','    if not gate:','    if False:','UpdateGuards.test_T_PREP_01_06_three_conditions'),
  9: ('scripts/update_support.py','return 0 if registered else 3','return 3','UpdateGuards.test_T_PREP_01_07_configuration'),
  10: ('scripts/update_support.py','def dotenv(key):',"def dotenv(key):\n    subprocess.run(['sh', '-c', '. ./.env'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)",'UpdateGuards.test_T_PREP_01_07_configuration'),
- 11: ('scripts/update.sh','PORT=8080','git reset --hard "$LATEST" --quiet\nPORT=8080','UpdateGuards.test_T_PREP_01_08_preflight_before_mutation'),
+ 11: ('scripts/update.sh','LISTEN_PORT=8080','git reset --hard "$LATEST" --quiet\nLISTEN_PORT=8080','UpdateGuards.test_T_PREP_01_08_preflight_before_mutation'),
  12: ('scripts/update.sh','[ "$AUTO_MODE" = "1" ] && exit 3','[ "$AUTO_MODE" = "1" ] && exit 0','UpdateGuards.test_T_PREP_01_06_three_conditions'),
  13: ('scripts/update.sh','PREV_COMMIT="${STATE_FIELDS[0]}"','PREV_COMMIT="${STATE_FIELDS[1]}"','UpdateGuards.test_T_PREP_01_09_resume'),
- 14: ('scripts/update.sh','    PORT="${STATE_FIELDS[3]}"','    PORT="${STATE_FIELDS[3]}"\n    $COMPOSE exec -T db sh -c pg_dump >/dev/null','UpdateGuards.test_T_PREP_01_09_resume'),
+ 14: ('scripts/update.sh','    LISTEN_PORT="${STATE_FIELDS[3]}"','    LISTEN_PORT="${STATE_FIELDS[3]}"\n    $COMPOSE exec -T db sh -c pg_dump >/dev/null','UpdateGuards.test_T_PREP_01_09_resume'),
  15: ('scripts/update.sh','if [ "$RESUMED" = "0" ] && [ -n "$(git diff','if [ -n "$(git diff','UpdateGuards.test_T_PREP_01_09_resume'),
  16: ('scripts/update_support.py',"'/memory/mcp','POST'", "'/memory/mcp','GET'",'UpdateGuards.test_T_PREP_01_10_initialize_probe'),
  17: ('scripts/update_support.py',"code != '200'", "code not in ('200', '405')",'UpdateGuards.test_T_PREP_01_10_initialize_probe'),
@@ -39,7 +41,11 @@ MUTATIONS = {
  20: ('scripts/upgrade_gates.json','"mcp_access_control":false','"mcp_access_control":true','DeliveryGuards.test_T_PREP_01_11_delivery_contract'),
  21: ('mcp_server.py','FastMCP("Memory Garden", stateless_http=True)','FastMCP("Memory Garden", stateless_http=True, transport_security=None)','DeliveryGuards.test_T_PREP_01_11_delivery_contract'),
  22: ('mcp_access.py','import ipaddress','from mcp.server.transport_security import TransportSecuritySettings\nimport ipaddress','DeliveryGuards.test_T_PREP_01_12_no_protection_wiring'),
- 23: ('scripts/update.sh','        PORT="$PORT_FALLBACK"','        PORT=8080','UpdateGuards.test_fallback_runtime_paths'),
+ 23: ('scripts/update.sh','        LISTEN_PORT="$PORT_FALLBACK"','        LISTEN_PORT=8080','UpdateGuards.test_T_PREP_01_13_port_environment'),
+ 24: ('scripts/update.sh','LISTEN_PORT=8080','PORT=8080\nLISTEN_PORT=8080','UpdateGuards.test_T_PREP_01_13_port_environment'),
+ 25: ('scripts/update.sh','value=substr(value,2,length(value)-2);','value=value;','UpdateGuards.test_T_PREP_01_13_port_environment'),
+ 26: ('scripts/update_support_jq.sh',BOM_RULE,'# mutation: omit BOM handling','UpdateGuards.test_T_PREP_01_13_port_environment'),
+ 27: ('scripts/update.sh','if [ -n "${PORT+set}" ]; then','if false; then','UpdateGuards.test_T_PREP_01_13_port_environment'),
 }
 
 
@@ -59,9 +65,10 @@ def execute(output, selected):
         raise RuntimeError('preflight failed: '+preflight.stdout[-3000:])
     results=[]
     for number in selected:
-        variants=['stdout','logging'] if number==2 else ['default']
+        variants=['stdout','logging'] if number==2 else (['jq','no-helper'] if number==26 else ['default'])
         for variant in variants:
             filename,before,after,method=MUTATIONS[number]
+            if variant=='no-helper': filename='scripts/update.sh'
             if variant=='logging': after="            import logging\n            logging.getLogger('mcp').warning(authority)\n            host = parse_authority(authority)"
             path=ROOT/filename; original=path.read_bytes()
             text=original.decode('utf-8').replace('\r\n','\n')
@@ -109,14 +116,18 @@ KNIVES = [
     (20, "11", "Enable upgrade gate early"),
     (21, "11", "Wire transport_security into a FastMCP constructor"),
     (22, "12", "Import transport protection in production"),
-    (23, "fallback", "Discard helper-free dotenv port fallback"),
+    (23, "13", "Discard helper-free dotenv port fallback"),
+    (24, "13", "Overwrite the operator PORT environment"),
+    (25, "13", "Remove helper-free paired quote trimming"),
+    (26, "13", "Remove BOM handling from each awk parser"),
+    (27, "13", "Ignore shell PORT on the helper-free path"),
 ]
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--list", action="store_true")
     parser.add_argument('--output')
-    parser.add_argument('--only',help='comma-separated knife numbers; omitted means all 23')
+    parser.add_argument('--only',help='comma-separated knife numbers; omitted means all 27')
     args = parser.parse_args()
     if not args.list:
         if not args.output: parser.error('--output is required; write outside the checkout')

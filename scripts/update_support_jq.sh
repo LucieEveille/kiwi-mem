@@ -4,7 +4,8 @@ set -uo pipefail
 BASE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 read_env() {
     local value
-    value="$(awk -v key="$1" '
+    value="$(LC_ALL=C awk -v key="$1" '
+      NR==1 && substr($0,1,3)=="\357\273\277" { $0=substr($0,4) }
       $0 ~ "^[[:space:]]*" key "[[:space:]]*=" {
         sub("^[[:space:]]*" key "[[:space:]]*=", ""); value=$0
       }
