@@ -10,6 +10,11 @@ from __future__ import annotations
 import importlib
 import importlib.util
 import io
+import logging
+import ast
+import shutil
+import subprocess
+import tempfile
 import json
 import os
 import sys
@@ -82,6 +87,14 @@ class ApplicationGuards(unittest.TestCase):
         self.output = io.StringIO()
         self.enterContext(redirect_stdout(self.output))
         self.enterContext(redirect_stderr(self.output))
+        self.log_output = io.StringIO()
+        for logger in (logging.getLogger(), logging.getLogger("mcp")):
+            handler = logging.StreamHandler(self.log_output)
+            old_level = logger.level
+            logger.addHandler(handler)
+            logger.setLevel(logging.DEBUG)
+            self.addCleanup(logger.removeHandler, handler)
+            self.addCleanup(logger.setLevel, old_level)
         self.enterContext(patch.dict(os.environ, {
             "MCP_ALLOWED_HOSTS": "", "MCP_ALLOWED_ORIGINS": ""}))
         self.db = ObservationDB()
@@ -113,7 +126,7 @@ class ApplicationGuards(unittest.TestCase):
         return TestClient(app)
 
     def no_values(self, *values):
-        evidence = self.output.getvalue() + json.dumps(
+        evidence = self.output.getvalue() + self.log_output.getvalue() + json.dumps(
             {"row": self.db.row, "calls": self.db.calls}, default=str)
         for value in values:
             self.assertNotIn(value, evidence)
@@ -173,6 +186,20 @@ class ApplicationGuards(unittest.TestCase):
             self.assertEqual(len(writes), 1, "at most one observation write per 60 seconds")
             self.no_values(SENTINEL)
 
+        for host in ("", "[SENTINEL-malformed-7f3a", "bad host"):
+            with self.subTest(malformed=bool(host)):
+                self.db.row = None
+                self.db.calls.clear()
+                module = self.module()
+                with self.client("/memory", module.observe_mcp_access) as client:
+                    response = client.post("/memory/mcp", json=INIT,
+                                           headers={**HEADERS, "Host": host})
+                    self.assertEqual(response.status_code, 200)
+                self.assertIsNotNone(self.db.row, "malformed/empty Host must count foreign")
+                self.assertIs(self.db.row["foreign_host_seen"], True)
+                self.no_values("SENTINEL-malformed-7f3a", "bad host")
+
+
     def test_T_PREP_01_03_passthrough(self):
         module = self.module()
         wrapper = getattr(module, "observe_mcp_access", None)
@@ -213,6 +240,125 @@ class ApplicationGuards(unittest.TestCase):
             self.assertEqual(self.output.getvalue().count(
                 f"event=mcp_allowlist_invalid_item field={field} increment=1"), 1)
         self.no_values("a.example", "b.example", "bad item", "null")
+
+
+from prep_update_fixture import UpdateFixture
+
+
+class UpdateGuards(unittest.TestCase):
+    def fixture(self, **control):
+        f = UpdateFixture(**control)
+        self.addCleanup(f.close)
+        return f
+
+    def test_T_PREP_01_06_three_conditions(self):
+        f = self.fixture(); f.target()
+        r = f.run('--auto')
+        self.assertEqual(r.returncode, 3, r.stdout)
+        self.assertIn('MCP_ALLOWED_HOSTS', r.stdout)
+        self.assertEqual(f.head(), f.prev)
+        self.assertTrue(all(c[1][:2] in (['compose','version'],['compose','config']) for c in f.calls()))
+        for args, reply, expected in [((), 'n\n', False), ((), 'y\ny\n', True)]:
+            f = self.fixture(); target = f.target()
+            r = f.run(*args, input=reply)
+            self.assertEqual(r.returncode, 0, r.stdout)
+            self.assertEqual(f.head(), target if expected else f.prev)
+        for control, gate in [({'status_code':0},True),({'foreign':False},True),({},False),({},None),({'status_body':'not json'},True)]:
+            f = self.fixture(**control); target=f.target(gate)
+            r=f.run('--auto'); self.assertEqual(r.returncode,0,r.stdout); self.assertEqual(f.head(),target)
+
+    def test_T_PREP_01_07_configuration(self):
+        for control, env, shell in [({'hosts':'x.example'},'',None),({'compose_fail':True},'MCP_ALLOWED_HOSTS="y.example"\r\n',None),({'compose_fail':True},'MCP_ALLOWED_HOSTS=\n','z.example')]:
+            f=self.fixture(**control); target=f.target()
+            (f.repo/'.env').write_text(env)
+            if shell is not None: f.env['MCP_ALLOWED_HOSTS']=shell
+            r=f.run('--auto'); self.assertEqual(r.returncode,0,r.stdout); self.assertEqual(f.head(),target)
+        f=self.fixture(compose_fail=True); f.target()
+        sentinel=f.root/'PWNED'
+        (f.repo/'.env').write_text('MCP_ALLOWED_HOSTS=$(touch "'+sentinel.as_posix()+'")\n')
+        r=f.run('--auto')
+        self.assertFalse(sentinel.exists(), 'dotenv was executed')
+        self.assertEqual(r.returncode,3,r.stdout)
+        # Real user flow: change only pending dotenv, then retry.
+        (f.repo/'.env').write_text('MCP_ALLOWED_HOSTS=wrong-but-valid.example\n')
+        r=f.run('--auto'); self.assertEqual(r.returncode,0,r.stdout)
+        self.assertNotIn('wrong-but-valid.example',r.stdout)
+
+    def test_T_PREP_01_08_preflight_before_mutation(self):
+        f=self.fixture(); f.target()
+        r=f.run('--auto')
+        self.assertEqual(r.returncode,3,r.stdout)
+        self.assertEqual(f.head(),f.prev)
+        self.assertFalse((f.repo/'.update-state.json').exists())
+        self.assertFalse((f.repo/'backups').exists())
+        self.assertTrue(all(c[1][:2] in (['compose','version'],['compose','config']) for c in f.calls()))
+
+    def test_T_PREP_01_09_resume(self):
+        for broken in (False,True):
+            f=self.fixture(foreign=False,root_fail=broken); target=f.target(False,True)
+            r=f.run(input='y\n')
+            self.assertEqual(r.returncode,1 if broken else 0,r.stdout)
+            self.assertEqual(f.head(),f.prev if broken else target)
+            marker=f.root/'executed'
+            self.assertTrue(marker.exists(),'updated script must execute')
+            self.assertEqual(marker.read_text(encoding='utf-8').splitlines(),['new-script'])
+            calls=f.calls(); builds=[c for c in calls if c[1][:2]==['compose','up']]
+            self.assertEqual(len(builds),2 if broken else 1)
+            self.assertEqual(builds[0][2],target)
+            if broken: self.assertEqual(builds[-1][2],f.prev)
+            self.assertEqual(sum(c[1][:2]==['compose','exec'] for c in calls),1)
+            self.assertEqual(r.stdout.count('现在更新吗'),1)
+            self.assertFalse((f.repo/'.update-state.json').exists())
+        f=self.fixture(); f.target(False,True)
+        r=f.run('--check'); self.assertEqual(r.returncode,0,r.stdout)
+        self.assertEqual(f.head(),f.prev); self.assertEqual(f.calls(),[])
+
+    def test_T_PREP_01_10_initialize_probe(self):
+        for code in (200,405,0):
+            f=self.fixture(foreign=False,mcp_code=code); target=f.target(False)
+            r=f.run('--auto')
+            self.assertEqual(r.returncode,0 if code==200 else 1,r.stdout)
+            self.assertEqual(f.head(),target if code==200 else f.prev)
+            calls=[c[1] for c in f.calls('curl') if any(x.endswith('/memory/mcp') for x in c[1])]
+            self.assertEqual(len(calls),1,'must issue exactly one bounded MCP initialize')
+            args=calls[0]
+            self.assertIn('POST',args); self.assertIn('--max-time',args)
+            self.assertEqual(args[args.index('--max-time')+1],'5')
+            self.assertIn('Accept: application/json, text/event-stream',args)
+            self.assertTrue(any('"initialize"' in x for x in args))
+
+
+class DeliveryGuards(unittest.TestCase):
+    def test_T_PREP_01_11_delivery_contract(self):
+        for path, tokens in {
+            'docs/UPGRADING.md':['不改变任何访问行为','不支持 SSE','up -d --build','${ZEABUR_WEB_DOMAIN}','CVE-2025-66416','CVE-2026-52869','CVE-2026-59950','BUILD-01'],
+            'CHANGELOG.md':['1.7.0','CVE-2026-59950'],
+            'README.md':['不支持流式与 MCP'], 'README_EN.md':['2.0 notice'],
+            '.env.example':['MCP_ALLOWED_HOSTS','MCP_ALLOWED_ORIGINS'],
+            'docker-compose.yml':['MCP_ALLOWED_HOSTS','MCP_ALLOWED_ORIGINS'],
+            'requirements.txt':['fastapi==0.141.1','starlette==1.3.1','mcp>=1.8.0','httpx==0.27.0','uvicorn==0.30.0'],
+        }.items():
+            with self.subTest(file=path):
+                self.assertTrue((ROOT/path).exists(),path+' missing')
+                text=(ROOT/path).read_text(encoding='utf-8')
+                for token in tokens: self.assertIn(token,text)
+        p=ROOT/'scripts/upgrade_gates.json'; self.assertTrue(p.exists())
+        self.assertIs(json.loads(p.read_text(encoding='utf-8'))['gates']['mcp_access_control'],False)
+        text=(ROOT/'main.py').read_text(encoding='utf-8')
+        self.assertIn('VERSION = "1.7.0"',text); self.assertIn('version="1.7.0"',text)
+        before=subprocess.check_output(['git','show','98e7d5c:mcp_server.py'],cwd=ROOT)
+        self.assertEqual(before.replace(b'\r\n',b'\n'),(ROOT/'mcp_server.py').read_bytes().replace(b'\r\n',b'\n'))
+
+    def test_T_PREP_01_12_no_protection_wiring(self):
+        self.assertFalse((ROOT/'security.py').exists())
+        for p in ROOT.glob('*.py'):
+            tree=ast.parse(p.read_text(encoding='utf-8-sig'))
+            for node in ast.walk(tree):
+                if isinstance(node,(ast.Import,ast.ImportFrom)):
+                    names=[a.name for a in node.names]+[getattr(node,'module','') or '']
+                    self.assertFalse(any('transport_security' in n or 'TransportSecuritySettings' in n for n in names),str(p))
+                if isinstance(node,ast.Call):
+                    self.assertFalse(any(k.arg=='transport_security' for k in node.keywords),str(p))
 
 
 if __name__ == "__main__":
