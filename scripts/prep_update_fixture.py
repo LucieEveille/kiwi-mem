@@ -101,7 +101,7 @@ class UpdateFixture:
         """Linux: actual PATH without Python/curl, not a production test switch."""
         assert os.name != 'nt'
         for name in ('bash','sh','git','awk','head','seq','dirname','date','sed','gzip',
-                     'du','cut','ls','tail','xargs','rm','mkdir','tr','wc','mktemp','mv','jq'):
+                     'du','cut','ls','tail','xargs','rm','mkdir','tr','wc','mktemp','mv','jq','timeout'):
             source=shutil.which(name)
             if not source: raise RuntimeError('fixture requires '+name)
             (self.bin/name).symlink_to(source)

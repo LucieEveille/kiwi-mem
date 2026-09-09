@@ -29,7 +29,8 @@ probe() {
     if command -v curl >/dev/null 2>&1; then
         code="$("${args[@]}" "http://127.0.0.1:$port$path" 2>/dev/null)" || code=0
     else
-        args=(wget -q -T 5 -t 1 --max-redirect=0 --server-response -O "$tmp")
+        # wget's -T is an idle timeout; cap the entire response as well.
+        args=(timeout 7 wget -q -T 5 -t 1 --max-redirect=0 --server-response -O "$tmp")
         [ -z "$payload" ] || args+=(--header='Accept: application/json, text/event-stream' --header='Content-Type: application/json' --post-data="$payload")
         if "${args[@]}" "http://127.0.0.1:$port$path" 2>"$tmp.headers"; then
             code="$(sed -n 's/.*HTTP\/[^ ]* \([0-9][0-9][0-9]\).*/\1/p' "$tmp.headers" | tail -n 1)"
