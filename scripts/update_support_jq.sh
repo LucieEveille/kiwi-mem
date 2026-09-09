@@ -79,7 +79,7 @@ case "$command" in
       select((.prev|test("^[0-9a-f]{40,64}$")) and (.target|test("^[0-9a-f]{40,64}$"))) |
       select(.compose=="docker compose" or .compose=="docker-compose") |
       select((.port|test("^[0-9]{1,5}$")) and (.port|tonumber)>=1 and (.port|tonumber)<=65535) |
-      select((.backup_file|type)=="string" and (.backup_file|test("[\\r\\n\\u0000]")|not)) |
+      select((.backup_file|type)=="string" and (.backup_file|test("[\r\n\u0000]")|not)) |
       select((.args|type)=="array" and all(.args[];type=="string")) |
       .prev,.target,.compose,.port,.backup_file' "$1" ;;
  probe)
