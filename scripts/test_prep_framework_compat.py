@@ -14,6 +14,7 @@ if __name__=='__main__':
         print('PASS: two fresh application lifespans, static admin, multipart upload, CORS')
     else:
         os.environ['MEMORY_ENABLED']='false'
+        os.environ['CORS_ORIGINS']='https://fixture.example'
         os.environ['DATABASE_URL']='postgresql://unused:unused@127.0.0.1:1/unused'
         from fastapi.testclient import TestClient
         import main
