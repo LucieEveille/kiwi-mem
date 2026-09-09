@@ -380,6 +380,12 @@ class UpdateGuards(unittest.TestCase):
                         actual=json.loads(r.stdout)['services']['kiwi-mem']['ports'][0]['published']
                         self.assertEqual(str(actual),(env or '8080') if env is not None else parsed)
                 print('PASS: real compose config 15 port cases')
+                # Observe Compose's wider grammar without asserting helper support.
+                (d/'.env').write_text('export PORT=9000\n')
+                r=subprocess.run([docker,'compose','config','--format','json'],cwd=d,env=clean,
+                                 capture_output=True,text=True,check=True,timeout=15)
+                actual=json.loads(r.stdout)['services']['kiwi-mem']['ports'][0]['published']
+                print('OBSERVATION: real compose export prefix published='+str(actual))
         else: print('BLOCKED: real compose config unavailable locally')
 
     def test_T_PREP_01_06_three_conditions(self):
