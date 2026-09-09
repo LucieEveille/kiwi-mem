@@ -11,6 +11,8 @@
 #   bash scripts/update.sh --install-cron # 装上「每天凌晨 4 点自动更新」
 #   bash scripts/update.sh --force        # 本地改过文件时，丢弃改动强制更新
 #   bash scripts/update.sh --no-backup    # 跳过数据库备份（不推荐）
+#   更新前预检 MCP 登记；有破坏性标记且未准备时提示或拦截。
+#   --resume-state <file>                # 内部续跑参数，请勿手动使用
 #
 # 脚本做的事：备份数据库 → 拉最新代码 → 重建容器 → 健康检查。
 # 任何一步失败都会自动回滚到更新前的版本，服务不会挂在半路。
@@ -27,6 +29,15 @@ AUTO_MODE=0
 FORCE=0
 DO_BACKUP=1
 INSTALL_CRON=0
+ORIGINAL_ARGS=("$@")
+RESUME_STATE=""
+RESUMED=0
+if [ "${1:-}" = "--resume-state" ]; then
+    [ "$#" = "2" ] || exit 2
+    RESUME_STATE="$2"
+    RESUMED=1
+    set --
+fi
 
 for arg in "$@"; do
     case "$arg" in
@@ -63,6 +74,20 @@ cd "$REPO_DIR" || die "进不去 kiwi-mem 目录：$REPO_DIR"
 git rev-parse --git-dir >/dev/null 2>&1 || die "这个目录不是 git 仓库，没法自动更新。
 请重新用 git clone https://github.com/LucieEveille/kiwi-mem.git 部署一次。"
 
+PYTHON=""
+command -v python3 >/dev/null 2>&1 && PYTHON=python3
+if [ "$RESUMED" = "1" ]; then
+    [ -n "$PYTHON" ] || die "缺少 python3，无法安全读取续跑状态。"
+    STATE_VALUES="$("$PYTHON" scripts/update_support.py load "$RESUME_STATE" | tr -d '\r')" || die "续跑状态无效。"
+    mapfile -t STATE_FIELDS <<< "$STATE_VALUES"
+    PREV_COMMIT="${STATE_FIELDS[0]}"
+    COMPOSE="${STATE_FIELDS[2]}"
+    PORT="${STATE_FIELDS[3]}"
+    BACKUP_FILE="${STATE_FIELDS[4]:-}"
+    QUIET=0
+fi
+
+if [ "$RESUMED" = "0" ]; then
 # ---- 装定时任务 ----
 if [ "$INSTALL_CRON" = "1" ]; then
     command -v crontab >/dev/null 2>&1 || die "服务器上没有 crontab，装不了定时任务。"
@@ -160,6 +185,27 @@ else
     die "找不到 docker compose 命令。先装 Docker：curl -fsSL https://get.docker.com | sh"
 fi
 
+PORT=8080
+if [ -n "$PYTHON" ]; then
+    PORT="$("$PYTHON" scripts/update_support.py port | tr -d '\r')"
+    "$PYTHON" scripts/update_support.py preflight "$LATEST" "$COMPOSE" "$PORT"
+    PRECHECK=$?
+else
+    PRECHECK=0
+    warn "预检跳过：无法读取升级门（缺少 python3）"
+fi
+if [ "$PRECHECK" = "3" ]; then
+    cat <<'PREP_NOTICE'
+⛔ 检测到有远程地址访问过 MCP，但待部署配置里尚未登记 MCP_ALLOWED_HOSTS。目标版本起，未登记的远程 MCP 访问会被拒绝。请先在 .env 登记（示例：MCP_ALLOWED_HOSTS=kiwi.example.com；Zeabur 用 MCP_ALLOWED_HOSTS=${ZEABUR_WEB_DOMAIN}），然后重新运行本脚本。登记项存在不等于正确——请核对与你实际访问 MCP 的域名一致；浏览器类客户端还需登记 MCP_ALLOWED_ORIGINS。详见 docs/UPGRADING.md
+PREP_NOTICE
+    [ "$AUTO_MODE" = "1" ] && exit 3
+    printf "仍要更新吗？[y/N] "
+    read -r reply
+    case "$reply" in [Yy]*) ASSUME_YES=1 ;; *) exit 0 ;; esac
+elif [ "$PRECHECK" != "0" ]; then
+    warn "预检：未能验证，仅提示，请核对 MCP 登记。"
+fi
+
 if [ "$ASSUME_YES" = "0" ]; then
     printf "现在更新吗？更新过程大约 1-3 分钟，期间服务会短暂中断。[Y/n] "
     read -r reply
@@ -201,6 +247,16 @@ else
 可以用 bash scripts/update.sh --force 强制更新到最新版。"
 fi
 ok "代码已更新到 $(git log -1 --format='%h %s')"
+fi # normal entry; resumed entry skips fetch, merge and backup
+
+if [ "$RESUMED" = "0" ] && [ -n "$(git diff --name-only "$PREV_COMMIT" HEAD -- scripts/update.sh)" ]; then
+    if [ -z "$PYTHON" ] || ! "$PYTHON" scripts/update_support.py save "$PREV_COMMIT" "$(git rev-parse HEAD)" "$COMPOSE" "$PORT" "$BACKUP_FILE" "${ORIGINAL_ARGS[@]}"; then
+        git reset --hard "$PREV_COMMIT" --quiet
+        die "无法保存续跑状态，代码已回滚；容器尚未改动。"
+    fi
+    exec bash scripts/update.sh --resume-state .update-state.json
+fi
+trap 'rm -f -- .update-state.json' EXIT
 
 # ---- 重建并启动 ----
 log "重建容器并启动（第一次会久一点，耐心等）…"
@@ -214,8 +270,6 @@ if ! $COMPOSE up -d --build; then
 fi
 
 # ---- 健康检查 ----
-PORT="$(grep -E '^\s*PORT=' .env 2>/dev/null | tail -n 1 | cut -d= -f2 | tr -d ' \r')"
-[ -n "${PORT:-}" ] || PORT=8080
 HEALTH_URL="http://127.0.0.1:$PORT/"
 
 if command -v curl >/dev/null 2>&1; then
@@ -233,6 +287,17 @@ if [ ${#PROBE[@]} -gt 0 ]; then
         if "${PROBE[@]}" >/dev/null 2>&1; then HEALTHY=1; break; fi
         sleep 3
     done
+    if [ "$HEALTHY" = "1" ]; then
+        # Bounded initialize proves the local process/mount only, not remote Host access.
+        if [ -n "$PYTHON" ] && command -v curl >/dev/null 2>&1; then
+            if ! "$PYTHON" scripts/update_support.py probe "$PORT"; then
+                warn "MCP 端点未响应"
+                HEALTHY=0
+            fi
+        else
+            warn "缺少 python3 / curl，MCP 协议健康检查未能验证。"
+        fi
+    fi
     if [ "$HEALTHY" = "0" ]; then
         warn "服务起不来，正在回滚到更新前的版本…"
         git reset --hard "$PREV_COMMIT" --quiet

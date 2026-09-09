@@ -6,6 +6,8 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
+import signal
 
 ROOT = Path(__file__).resolve().parents[1]
 FAKE = r'''
@@ -57,7 +59,7 @@ class UpdateFixture:
         self.env = dict(os.environ)
         self.env.pop('MCP_ALLOWED_HOSTS', None)
         self.env.pop('MCP_ALLOWED_ORIGINS', None)
-        self.env.update(PREP_FIXTURE=str(self.root), GIT_CONFIG_NOSYSTEM='1',
+        self.env.update(PREP_FIXTURE=str(self.root), GIT_CONFIG_NOSYSTEM='1', PYTHONIOENCODING='utf-8',
                         GIT_AUTHOR_NAME='PREP fixture', GIT_AUTHOR_EMAIL='fixture@example.invalid',
                         GIT_COMMITTER_NAME='PREP fixture', GIT_COMMITTER_EMAIL='fixture@example.invalid')
         self.bash = 'C:/Program Files/Git/bin/bash.exe' if os.name=='nt' else shutil.which('bash')
@@ -98,7 +100,7 @@ class UpdateFixture:
         (self.source/'revision.txt').write_text('new')
         if revised:
             p=self.source/'scripts/update.sh'
-            s=p.read_text(encoding='utf-8'); s=s.replace('set -uo pipefail','set -uo pipefail\nprintf "new-script\\n" >> "$PREP_FIXTURE/executed"',1)
+            s=p.read_text(encoding='utf-8'); s=s.replace('set -uo pipefail','set -uo pipefail\nprintf "new-script\\n" >> "$PREP_FIXTURE/executed"\n[ "$(wc -l < "$PREP_FIXTURE/executed")" -le 1 ] || exit 91',1)
             p.write_text(s,encoding='utf-8',newline='\n')
         self.git(self.source,'add','.'); self.git(self.source,'commit','-m','target version')
         self.git(self.source,'push','origin','main')
@@ -110,14 +112,14 @@ class UpdateFixture:
         prefix='$(cygpath -u "$PREP_BIN")' if os.name=='nt' else '$PREP_BIN'
         command=[self.bash,'-c','export PATH="'+prefix+':$PATH"; exec bash scripts/update.sh "$@"','prep',*args]
         with output.open('w',encoding='utf-8') as out, stdin.open() as inp:
-            process=subprocess.Popen(command,cwd=self.repo,env=self.env,stdin=inp,stdout=out,stderr=subprocess.STDOUT)
+            process=subprocess.Popen(command,cwd=self.repo,env=self.env,stdin=inp,stdout=out,stderr=subprocess.STDOUT,start_new_session=os.name!='nt')
             try:
                 code=process.wait(timeout=35)
             except subprocess.TimeoutExpired:
                 if os.name=='nt':
                     subprocess.run(['taskkill','/PID',str(process.pid),'/T','/F'],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
                 else:
-                    process.kill()
+                    os.killpg(process.pid, signal.SIGKILL)
                 process.wait()
                 raise AssertionError('update fixture exceeded 35s: '+output.read_text(errors='replace'))
         return subprocess.CompletedProcess(command,code,output.read_text(encoding='utf-8',errors='replace'))

@@ -1,0 +1,44 @@
+# 1.7.0 准备版与 2.0 升级预告
+
+本页为 2.0 预告；1.7.0 不改变任何访问行为：不启用 Host / Origin 保护，保留现有无认证与环境变量回落。框架安全修补仍可能改变恶意或畸形请求的错误处理；正常部署的访问规则保持不变。
+
+Zeabur Auto Deploy 不经过 update.sh；长期未更新的用户可能从 1.6.2 直接跳过准备版。两类用户请在升级 2.0 前自行完成下列登记。观察数据只记录是否见过远程域名与最近时间，不存地址；未观察到访问不能证明无人使用。
+
+## 提前登记 MCP 访问地址
+
+2.0 计划只接受登记的 MCP 访问地址。本机与 IP 直连无需域名登记（IP 自动放行仍须通过 BUILD-01 对抗验证）；这里的零配置只适用于不发送 Origin 的工具客户端。浏览器类客户端仍须登记 Origin，Host 登记不代替 Origin 登记，也不代替认证。
+
+Docker Compose 部署，在宿主机 .env 添加：
+
+```dotenv
+MCP_ALLOWED_HOSTS=kiwi.example.com
+MCP_ALLOWED_ORIGINS=https://kiwi.example.com
+```
+
+再运行 `docker compose up -d --build`。单独 `restart` 不会刷新容器环境变量。多个条目用逗号分隔；Host 可带端口（例如 `kiwi.example.com:8080`）或 `:*`，IPv6 用方括号；不支持 `*` 或子域通配。Origin 要包含 http/https 协议及实际端口。
+
+Zeabur 可在环境变量中登记 `MCP_ALLOWED_HOSTS=${ZEABUR_WEB_DOMAIN}`；浏览器来源按实际 Origin 登记。原生 Python 启动不自动加载 .env，请先 `export MCP_ALLOWED_HOSTS=kiwi.example.com` 等变量，再启动程序。临时域名变化后也需更新登记。
+
+## 更新脚本如何处理
+
+预检发生在工作树更新、备份与容器操作之前。只有“已观察到远程访问、待部署配置无合法 Host 登记、目标 commit 带访问规则破坏性标记”同时成立才拦截：`--auto` 返回 3；手动运行默认取消，也可明确继续。改好 .env 后重新运行即可。
+
+脚本优先读 `docker compose config --format json` 的渲染值；不可用时把 .env 当数据解析，shell 环境变量优先。登记项存在不等于正确，填错域名仍可能通过预检。状态不可达、非 JSON、未观察到远程访问或升级门无法判定时仅告警继续，这不是防止访问中断的保证。
+
+脚本更新后会携带原 commit、目标 commit、备份与阶段状态重新执行；成功或回滚后删除 `.update-state.json`。健康检查在首页之外发有时限的 MCP initialize POST，只证明本地进程与挂载可用，不证明远程地址可达。
+
+从 1.6.2 升 1.7.0 时仍由旧脚本运行，旧脚本不具备续跑或 MCP 探针。本票不宣称能追溯修复旧脚本。
+
+## 临时隧道
+
+Cloudflare Quick Tunnel 官方不支持 SSE，聊天流式与 MCP 不保证可用。仅作为试用方式，正式部署使用自有域名或平台域名。参见 [Quick Tunnels 文档](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/do-more-with-tunnels/trycloudflare/)。
+
+## 1.7.0 限时风险例外
+
+1.7.0 暂留 `mcp==1.12.4`，其三条公告 CVE-2025-66416 / CVE-2026-52869 / CVE-2026-59950 仍在。理由：升 mcp ≥ 1.23 会让 SDK 对本机 host 自动开启 Host / Origin 保护、远程 MCP 在准备版就被拒，违背“先提醒再改规则”。解除条件：KIWI-BUILD-01 合入 `release/kiwi-sync` 并随 2.0.0 发布。负责票：BUILD-01。本例外不豁免其他任何扫描结果。
+
+## English: 2.0 notice
+
+1.7.0 previews MCP address registration without enabling access controls. Register your deployment hostname in `MCP_ALLOWED_HOSTS`; browser clients also need `MCP_ALLOWED_ORIGINS`. Compose users must recreate containers with `docker compose up -d --build`; native Python users must export the variables. Zeabur can reference `${ZEABUR_WEB_DOMAIN}`.
+
+The updater blocks automatic upgrades only when remote access was observed, no valid hostname is configured, and the target enables the breaking-change gate. A registered hostname may still be wrong. Missing observations or failed checks are not evidence of readiness. Zeabur auto-deploy and users skipping 1.7.0 bypass this preflight. Quick Tunnel does not support SSE. The temporary MCP security exception above remains until BUILD-01 ships with 2.0.0; no other audit findings are exempt.

@@ -233,13 +233,13 @@ class ApplicationGuards(unittest.TestCase):
         self.output.seek(0)
         self.output.truncate()
         with patch.dict(os.environ, {"MCP_ALLOWED_HOSTS": "a.example, bad item",
-                                    "MCP_ALLOWED_ORIGINS": "https://b.example, null"}):
+                                    "MCP_ALLOWED_ORIGINS": "https://b.example, SENTINEL-invalid-origin"}):
             preview()
         self.assertIn("event=mcp_allowlist_preview hosts=1 origins=1 increment=1", self.output.getvalue())
         for field in ("hosts", "origins"):
             self.assertEqual(self.output.getvalue().count(
                 f"event=mcp_allowlist_invalid_item field={field} increment=1"), 1)
-        self.no_values("a.example", "b.example", "bad item", "null")
+        self.no_values("a.example", "b.example", "bad item", "SENTINEL-invalid-origin")
 
 
 from prep_update_fixture import UpdateFixture

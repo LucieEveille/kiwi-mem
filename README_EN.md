@@ -150,6 +150,10 @@ Visit `http://localhost:8080` — if you see `{"status":"running"}`, you're good
 
 ### Staying up to date
 
+#### 2.0 notice
+
+1.7.0 previews registration without enabling access controls. Configure `MCP_ALLOWED_HOSTS` for domain-based MCP access and `MCP_ALLOWED_ORIGINS` for browser clients before 2.0. Compose users must run `docker compose up -d --build`. On Zeabur, hosts may reference `${ZEABUR_WEB_DOMAIN}`; Auto Deploy bypasses the updater. See [UPGRADING](docs/UPGRADING.md) for limitations and examples.
+
 kiwi-mem ships updates regularly. Once deployed, keeping up requires no technical knowledge, and nothing is lost.
 
 This assumes you cloned upstream directly, as in the quick start — the script then pulls new code straight

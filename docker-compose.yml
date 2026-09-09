@@ -41,6 +41,8 @@ services:
       JIEBA_CUSTOM_WORDS: ${JIEBA_CUSTOM_WORDS:-}
       EXTRA_REFERER: ${EXTRA_REFERER:-https://kiwi-mem.local}
       EXTRA_TITLE: ${EXTRA_TITLE:-kiwi-mem}
+      MCP_ALLOWED_HOSTS: ${MCP_ALLOWED_HOSTS:-}
+      MCP_ALLOWED_ORIGINS: ${MCP_ALLOWED_ORIGINS:-}
     depends_on:
       db:
         condition: service_healthy
