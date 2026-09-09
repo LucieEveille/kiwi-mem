@@ -263,7 +263,10 @@ class UpdateGuards(unittest.TestCase):
 
     @unittest.skipIf(os.name == 'nt', 'minimal POSIX PATH matrix runs in Linux CI')
     def test_fallback_runtime_paths(self):
-        from mcp_access import valid_host
+        self.assertIsNotNone(importlib.util.find_spec('mcp_access'),
+                             'PREP observation implementation is missing')
+        valid_host = getattr(importlib.import_module('mcp_access'), 'valid_host', None)
+        self.assertTrue(callable(valid_host), 'PREP host validator must exist')
         values=['x.example','x.example:*','localhost','127.0.0.1','[::1]',
                 '[::1]:8080','[2001:db8::1]:*','[::ffff:192.0.2.1]',
                 '[::ffff:01.2.3.4]','[:::]','[1:2:3:4:5:6:7:8:9]',
@@ -302,6 +305,21 @@ class UpdateGuards(unittest.TestCase):
                 self.assertEqual(r.returncode,1,r.stdout)
                 self.assertEqual(f.head(),f.prev)
                 self.assertFalse((f.repo/'.update-state.json').exists())
+
+        for configured, expected in (('9090', '9090'), ('invalid', '8080')):
+            with self.subTest(no_helpers=True, valid_port=configured.isdigit()):
+                f=self.fixture()
+                f.restrict_runtime(python=False, http='curl')
+                (f.bin/'jq').unlink()
+                target=f.target(False)
+                (f.repo/'.env').write_text('PORT=8081\n  PORT='+configured+'\r\n')
+                r=f.run('--auto')
+                self.assertEqual(r.returncode,0,r.stdout)
+                self.assertEqual(f.head(),target)
+                urls=[arg for call in f.calls('curl') for arg in call[1]
+                      if arg.startswith('http://')]
+                self.assertEqual(urls,['http://127.0.0.1:'+expected+'/'],
+                                 'helper-free root probe must use pending dotenv port')
 
     def test_T_PREP_01_06_three_conditions(self):
         f = self.fixture(); f.target()
@@ -398,13 +416,17 @@ class DeliveryGuards(unittest.TestCase):
         self.assertIs(json.loads(p.read_text(encoding='utf-8'))['gates']['mcp_access_control'],False)
         text=(ROOT/'main.py').read_text(encoding='utf-8')
         self.assertIn('VERSION = "1.7.0"',text); self.assertIn('version="1.7.0"',text)
-        # Frozen blob from 98e7d5c, also works in CI's shallow checkout.
-        content=(ROOT/'mcp_server.py').read_bytes().replace(b'\r\n',b'\n')
-        blob=subprocess.check_output(['git','hash-object','--stdin'],input=content,cwd=ROOT).decode().strip()
-        self.assertEqual(blob,'bc7c1892a21b719b5733bfae9ec3cf69cb0b719f')
+        # PREP must coexist with SEC-01a in the release integration tree.
+        content=(ROOT/'mcp_server.py').read_text(encoding='utf-8-sig')
+        calls=[n for n in ast.walk(ast.parse(content)) if isinstance(n,ast.Call)
+               and isinstance(n.func,ast.Name) and n.func.id=='FastMCP']
+        self.assertEqual(len(calls),2,'exactly two FastMCP constructors')
+        for call in calls:
+            self.assertNotIn('transport_security',[k.arg for k in call.keywords])
+        for token in ('transport_security','TransportSecuritySettings','MCP_ALLOWED'):
+            self.assertNotIn(token,content)
 
     def test_T_PREP_01_12_no_protection_wiring(self):
-        self.assertFalse((ROOT/'security.py').exists())
         for p in ROOT.glob('*.py'):
             tree=ast.parse(p.read_text(encoding='utf-8-sig'))
             for node in ast.walk(tree):
