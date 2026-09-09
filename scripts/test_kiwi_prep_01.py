@@ -165,7 +165,16 @@ class ApplicationGuards(unittest.TestCase):
         module = self.module()
         wrapper = getattr(module, "observe_mcp_access", None)
         self.assertTrue(callable(wrapper), "observe_mcp_access must exist")
-        with self.client("/memory", wrapper) as client:
+        import main
+
+        @asynccontextmanager
+        async def protocol_lifespan(app):
+            # Actual production mount; omit database initialization/schedulers only.
+            async with main.mcp_memory.session_manager.run():
+                async with main.mcp_calendar.session_manager.run():
+                    yield
+
+        with patch.object(main.app.router, 'lifespan_context', protocol_lifespan), TestClient(main.app) as client:
             for host in ("localhost:8080", "127.0.0.1:8080", "[::1]:8080",
                          "192.168.1.10:8080", "[2001:db8::1]:8080"):
                 with self.subTest(host_kind=host.split(":")[0]):
@@ -346,8 +355,10 @@ class DeliveryGuards(unittest.TestCase):
         self.assertIs(json.loads(p.read_text(encoding='utf-8'))['gates']['mcp_access_control'],False)
         text=(ROOT/'main.py').read_text(encoding='utf-8')
         self.assertIn('VERSION = "1.7.0"',text); self.assertIn('version="1.7.0"',text)
-        before=subprocess.check_output(['git','show','98e7d5c:mcp_server.py'],cwd=ROOT)
-        self.assertEqual(before.replace(b'\r\n',b'\n'),(ROOT/'mcp_server.py').read_bytes().replace(b'\r\n',b'\n'))
+        # Frozen blob from 98e7d5c, also works in CI's shallow checkout.
+        content=(ROOT/'mcp_server.py').read_bytes().replace(b'\r\n',b'\n')
+        blob=subprocess.check_output(['git','hash-object','--stdin'],input=content,cwd=ROOT).decode().strip()
+        self.assertEqual(blob,'bc7c1892a21b719b5733bfae9ec3cf69cb0b719f')
 
     def test_T_PREP_01_12_no_protection_wiring(self):
         self.assertFalse((ROOT/'security.py').exists())
