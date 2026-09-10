@@ -2,7 +2,7 @@
   "ticket": "KIWI-BUILD-01",
   "stage": "A",
   "implementation_base": "6b2b43d0b746fb9c69f52f54d0347bd63e3ae9f4",
-  "tested_head": "78ecf8eb22ee7b25409822ba778eb02a993e99f1",
+  "tested_head": "8f1f848",
   "build_tests": 13,
   "assertion_failures": 13,
   "errors": 0,
@@ -32,7 +32,7 @@
   "source_blobs": {
     ".github/workflows/ci.yml": "235a72e6bb844033db5ad74a3b30753c7769f90c",
     "scripts/kiwi_build_01_knives.py": "894678c84079a3ce4e8f64261eada2c8fdb30d5a",
-    "scripts/test_kiwi_build_01.py": "eae12047206d8d657739accefe60e48885bac4f5",
+    "scripts/test_kiwi_build_01.py": "5376230524f062b0968df3239fd8d17d559ac31f",
     "scripts/test_kiwi_prep_01.py": "e0561fd7038a2384f801bd46050f0bbef779f170"
   },
   "build_red_reasons": {
@@ -49,5 +49,6 @@
     "T-BUILD-01-11": "'1.12.4' != '1.29.1'",
     "T-BUILD-01-12": "False is not true : build_transport_security BUILD implementation missing",
     "T-BUILD-01-13": "False is not true : guard_mcp_access BUILD implementation missing"
-  }
+  },
+  "correction": "T-05 uppercase APPLICATION/JSON expects SDK transport 415, without invalid_content_type; 13 assertion failures, zero errors reverified."
 }
