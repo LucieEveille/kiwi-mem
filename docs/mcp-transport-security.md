@@ -14,7 +14,7 @@ MCP_ALLOWED_HOSTS / MCP_ALLOWED_ORIGINS 只来自进程环境，逗号分隔、�
 
 严格 ipaddress 解析的 IP Host 经 Origin / Content-Type 检查后，只在 scope 副本中将 Host 改成 127.0.0.1，其他字段及原 scope 不动；非 IP scope 原样传 SDK。mcp 1.29.1 流式 HTTP 除安全层外不消费 Host，升 mcp 时须重核，不能推广到其他协议或任意中间件。
 
-相对于 SDK 安全层有两类明确差异：(a) 合法 IP 字面量被门卫接纳，经局部改写通过 SDK；(b) 多 Host 或结构畸形但碰巧命中 base:* 的 Host 被门卫拒绝。其余安全检查跟随 SDK：Content-Type 仅 lower、不 strip；Origin 缺失允许，存在则精确或 base:* 前缀匹配。Content-Type 还有第三层——SDK 传输层要求 application/json 精确小写（可带 ; charset=…），大小写异常回 415，属协议层，门卫不复制。
+相对于 SDK 安全层有三类明确差异：(a) 合法 IP 字面量被门卫接纳，经局部改写通过 SDK；(b) 多 Host 或结构畸形但碰巧命中 base:* 的 Host 被门卫拒绝；(c) 空值 `Origin:` 头：门卫 403，SDK 视同缺失放行。其余安全检查跟随 SDK：Content-Type 仅 lower、不 strip；Origin 缺失允许，存在则精确或 base:* 前缀匹配。Content-Type 还有第三层——SDK 传输层要求 application/json 精确小写（可带 ; charset=…），大小写异常回 415，属协议层，门卫不复制。
 
 DNS 重绑定通过域名访问本机服务，因此域名仍须登记；带跨站 Origin 的 IP 请求仍拒绝，表单类型 POST 仍拒绝。无 Origin 的非浏览器请求不属于这条浏览器防线。IP 放行论证仍须通过独立 CC 对抗；有反例按裁决回退为精确 IP 登记，不把 Host 校验描述成认证。
 

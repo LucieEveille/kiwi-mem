@@ -311,14 +311,14 @@ class BuildGuards(unittest.TestCase):
         output=''.join(s.getvalue() for s in streams)
         self.assertIn('event=mcp_access_control hosts=0 origins=0 ip_literal=true',output)
         self.assertIn('MCP_ALLOWED_HOSTS',output)
-        self.assertNotIn('棰勫憡',output)
+        self.assertNotIn('预告',output)
         with patch.dict(os.environ,{'MCP_ALLOWED_HOSTS':'registered.example, bad item'}),captures() as streams:
             log()
         output=''.join(s.getvalue() for s in streams)
         self.assertIn('event=mcp_access_control hosts=1 origins=0 ip_literal=true',output)
         self.assertIn('event=mcp_allowlist_invalid_item field=hosts increment=1',output)
         self.assertNotIn('MCP_ALLOWED_HOSTS',output)
-        for value in ('registered.example','bad item','棰勫憡'):
+        for value in ('registered.example','bad item','预告'):
             self.assertNotIn(value,output)
 
     def test_T_BUILD_01_10_wiring(self):
