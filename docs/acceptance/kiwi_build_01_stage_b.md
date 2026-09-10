@@ -52,3 +52,14 @@ F-1 corrected tests-only：旧实现 BUILD 13 failures、0 ERROR。B-04 新 T-02
 ## B-04 收口
 
 此前 stage_b_blocked.md 为历史停点记录。用户 B-04 裁决已落实于 c059bd2 与 29c3b02，当前无该阻塞；没有改写 SDK 内部对象。后续验收仍以本报告、实际树和原始刀账为准。
+
+
+## 阶段 B 验收 F-2 / N-1 小补丁（2026-09-10）
+
+被测修正 commit：74df0e2738fb554ff4aee0b161ab42fb86cdf4f7。仅改 T-09 两处乱码为“预告”，并在机制文档差异集加入 (c) 空值 Origin 头：门卫 403、SDK 视同缺失放行；应用代码未改。依阶段 B 验收 v1 §五，CC 差异口径以三类为准，第四类差异才是新增反例。
+
+UTF-8 严格回读测试全文；AST 非 ASCII 字符串恰为两个“预告”，没有乱码。BUILD 13 绿；BUILD 23/23 RED，preflight/restored 都为 0，原始新账本入仓。另在仓外探针临时令启动摘要输出“预告”：T-09 assertion failure 正确触发，0 ERROR；字节还原后再跑 BUILD 13 全绿，证明修正的臂确实工作。此额外探针不计入正式 23 刀。
+
+PREP / SEC 原账本的 16 / 7 个 source_blobs 与修正 head 逐一相同，按裁决不重出。上一轮全绿 CI 34460740427 为实现基线证据；本次只执行点名的小补丁重验，不把旧 CI 写成新 head 的运行结果。最后一笔只更新 BUILD 账本与本节文书，被测 commit 与账本自身 commit 分开，源码指纹保持一致。
+
+保持 Draft，下一步 Fable 快核本补丁 diff，之后再由用户转交 CC；未合并、部署或改动生产。
