@@ -59,3 +59,9 @@
   → 统一需新增配置项 + schema（属功能改动，非「顺手」），留待后续。
 - 后台任务兜底默认模型名硬编码 `anthropic/claude-haiku-4`（OpenRouter 命名风格），非 OpenRouter
   供应商上该 model_id 可能 404。→ 改默认值会影响零配置开箱体验，暂留。
+
+## KIWI-PREP-01
+
+1.7.0 暂留 mcp 1.12.4 的 CVE-2025-66416 / CVE-2026-52869 / CVE-2026-59950，限时例外由 BUILD-01 随 2.0.0 解除；其他扫描结果不豁免。详见 [升级预告](docs/UPGRADING.md)。
+
+预检 fail-open：尚未观察到远程使用、状态口不可达或升级门无法解析时仅提示；登记值存在不证明正确。Zeabur Auto Deploy 和跳过准备版的用户不受预检覆盖。Quick Tunnel 官方不支持 SSE。

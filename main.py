@@ -74,6 +74,7 @@ from anthropic_adapter import (
     to_anthropic_request, to_anthropic_headers, get_anthropic_url,
     from_anthropic_response, anthropic_stream_to_openai,
 )
+from mcp_access import observe_mcp_access, mcp_access_status, log_mcp_access_preview
 
 # ============================================================
 # 配置项 —— 全部从环境变量读取，部署时在云平台面板里设置
@@ -81,7 +82,7 @@ from anthropic_adapter import (
 
 # 版本号。管理面板顶栏/侧栏读 GET / 的 version 字段显示，
 # 只此一处定义，避免两处字符串各说各话。
-VERSION = "1.6.2"
+VERSION = "1.7.0"
 
 # 你的 API Key（OpenRouter / OpenAI / 其他兼容服务）
 API_KEY = os.getenv("API_KEY", "")
@@ -281,6 +282,7 @@ async def lifespan(app: FastAPI):
     async with mcp_memory.session_manager.run():
         async with mcp_calendar.session_manager.run():
             print("✅ MCP server 已启动（/memory/mcp + /calendar/mcp）")
+            log_mcp_access_preview()
 
             # v6.3：仅当 tool_drawer_enabled=true 时初始化工具抽屉
             # （默认 false，开源用户行为不变；抽屉打开后通过向量路由按需展开工具）
@@ -306,7 +308,7 @@ async def lifespan(app: FastAPI):
         await close_pool()
 
 
-app = FastAPI(title="Kiwi-Mem", version="1.3.0", lifespan=lifespan)
+app = FastAPI(title="Kiwi-Mem", version="1.7.0", lifespan=lifespan)
 
 
 # ============================================================
@@ -4693,6 +4695,11 @@ async def api_update_scene(scene_id: int, req: Request):
 # 动态配置管理接口（v3.1）
 # ============================================================
 
+@app.get("/admin/mcp-access-status")
+async def api_mcp_access_status():
+    return await mcp_access_status()
+
+
 @app.get("/admin/config")
 async def api_get_config():
     """获取所有配置"""
@@ -6246,8 +6253,8 @@ async def api_delete_reminder(rid: str):
 # 记忆系统：/memory/mcp
 #   工具：search_memory, save_memory, get_recent, trigger_digest
 
-app.mount("/memory", get_mcp_app())
-app.mount("/calendar", get_calendar_mcp_app())
+app.mount("/memory", observe_mcp_access(get_mcp_app()))
+app.mount("/calendar", observe_mcp_access(get_calendar_mcp_app()))
 
 # 管理面板静态资源（css/js/assets）。必须在所有 /admin/* API 路由之后挂载，
 # 这样显式 API 路由优先匹配，本挂载只接管 /admin/css、/admin/js 等静态文件。

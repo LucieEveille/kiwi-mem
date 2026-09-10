@@ -8080,6 +8080,48 @@ async def run_suite(test_dsn: str) -> None:
         await test_empty_response_resilience_contracts()
 
 
+async def test_prep_observation_schema() -> None:
+    name = "T-PREP-01-PG-01"
+    begin(name)
+    pool = await database.get_pool()
+    async with pool.acquire() as conn:
+        # This suite already created and validated its own disposable database.
+        require((await conn.fetchval("SELECT current_database()")).startswith(DATABASE_PREFIX),
+                "PREP schema test requires the suite's disposable database")
+        await conn.execute("DROP TABLE IF EXISTS mcp_access_observation")
+    await database.init_tables()
+    await database.init_tables()
+    async with pool.acquire() as conn:
+        exists = await conn.fetchval("SELECT to_regclass('public.mcp_access_observation')")
+        require(exists is not None, "PREP observation table must be created on an old database")
+        columns = await conn.fetch("""SELECT column_name FROM information_schema.columns
+            WHERE table_schema='public' AND table_name='mcp_access_observation'""")
+        require({row['column_name'] for row in columns} ==
+                {'id', 'foreign_host_seen', 'last_seen_at'},
+                "PREP observation table must store no address columns")
+        rejected = False
+        try:
+            async with conn.transaction():
+                await conn.execute("INSERT INTO mcp_access_observation (id) VALUES (2)")
+        except asyncpg.CheckViolationError:
+            rejected = True
+        require(rejected, "PREP observation table must reject id=2")
+        await conn.execute("INSERT INTO mcp_access_observation DEFAULT VALUES")
+        row = await conn.fetchrow("SELECT * FROM mcp_access_observation")
+        require(dict(row) == {'id': 1, 'foreign_host_seen': False, 'last_seen_at': None},
+                "PREP observation row defaults must be false/null")
+        await conn.execute("""INSERT INTO mcp_access_observation
+            (id, foreign_host_seen, last_seen_at) VALUES (1, TRUE, now())
+            ON CONFLICT (id) DO UPDATE SET foreign_host_seen=EXCLUDED.foreign_host_seen,
+                last_seen_at=EXCLUDED.last_seen_at""")
+        rows = await conn.fetch("SELECT * FROM mcp_access_observation")
+        require(len(rows) == 1 and rows[0]['foreign_host_seen'] is True
+                and rows[0]['last_seen_at'] is not None,
+                "PREP observation upsert must keep exactly one timestamped row")
+        await conn.execute("DELETE FROM mcp_access_observation")
+    passed(name)
+
+
 async def async_main() -> int:
     admin_dsn = _validated_admin_dsn()
     database_name = ""
@@ -8087,6 +8129,8 @@ async def async_main() -> int:
         database_name, test_dsn = await _create_disposable_database(admin_dsn)
         print(f"Created disposable PostgreSQL database: {database_name}")
         await run_suite(test_dsn)
+        print(f"PREP baseline complete: {len(PASSED)} existing guards passed")
+        await test_prep_observation_schema()
         legacy_passed = [name for name in PASSED if name.startswith("T-S")]
         w1_01_passed = [name for name in PASSED if name.startswith("T-W1-01-")]
         w1_06_passed = [name for name in PASSED if name.startswith("T-W1-06-")]

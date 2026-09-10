@@ -47,6 +47,8 @@ jobs:
     steps:
       - name: 拉取代码
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
       - name: 准备 Python 3.12（与 Dockerfile 一致）
         uses: actions/setup-python@v5
@@ -55,6 +57,7 @@ jobs:
           cache: pip
 
       - name: 安装运行依赖
+        id: prep-dependencies
         run: pip install -r requirements.txt
 
       - name: 运行既有开源回归脚本
@@ -75,3 +78,24 @@ jobs:
 
       - name: 运行 S1-S6 永久真库行为守卫
         run: python scripts/test_kiwi_safety_sync.py
+
+      - name: 运行 PREP-01 应用侧守卫
+        if: ${{ !cancelled() && steps.prep-dependencies.outcome == 'success' }}
+        run: python scripts/test_kiwi_prep_01.py
+
+      - name: PREP 框架兼容与镜像构建
+        run: |
+          python scripts/test_prep_framework_compat.py
+          docker build -t kiwi-prep-ci .
+
+      - name: PREP 变异与依赖证据
+        run: |
+          python scripts/kiwi_prep_01_knives.py --output /tmp/kiwi_prep_01_knives.json
+          cat /tmp/kiwi_prep_01_knives.json
+          pip check
+          pip freeze > /tmp/prep-resolved.txt
+          python -m venv /tmp/prep-audit
+          /tmp/prep-audit/bin/pip install pip-audit
+          /tmp/prep-audit/bin/pip-audit --disable-pip --no-deps -r /tmp/prep-resolved.txt -f json -o /tmp/prep-audit.json || test $? -eq 1
+          cat /tmp/prep-audit.json
+          python scripts/check_prep_audit.py /tmp/prep-audit.json
