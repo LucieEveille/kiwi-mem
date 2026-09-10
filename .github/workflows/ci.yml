@@ -58,7 +58,9 @@ jobs:
 
       - name: 安装运行依赖
         id: prep-dependencies
-        run: pip install -r requirements.txt
+        # BUILD stage A: reproduce the accepted PREP runtime for red evidence.
+        # Stage B removes this test-only constraint when requirements is pinned.
+        run: pip install -r requirements.txt 'mcp==1.12.4'
 
       - name: 运行 SEC-01a 凭据边界守卫
         run: |
@@ -87,6 +89,12 @@ jobs:
       - name: 运行 PREP-01 应用侧守卫
         if: ${{ !cancelled() && steps.prep-dependencies.outcome == 'success' }}
         run: python scripts/test_kiwi_prep_01.py
+
+      - name: BUILD-01 阶段 A 红证与刀目录
+        if: ${{ !cancelled() && steps.prep-dependencies.outcome == 'success' }}
+        run: |
+          python scripts/kiwi_build_01_knives.py --list
+          python scripts/test_kiwi_build_01.py
 
       - name: PREP 框架兼容与镜像构建
         run: |

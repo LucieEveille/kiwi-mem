@@ -37,7 +37,7 @@ INIT = {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
     "protocolVersion": "2025-06-18", "capabilities": {},
     "clientInfo": {"name": "prep-test", "version": "1.7.0"}}}
 HEADERS = {"Accept": "application/json, text/event-stream",
-           "Content-Type": "application/json"}
+           "Content-Type": "application/json", "Host": "127.0.0.1"}
 KEYS = {"protection", "hosts_registered", "origins_registered", "hosts_invalid",
         "origins_invalid", "ip_literal_allowed", "foreign_host_seen",
         "foreign_host_last_seen_at", "version"}
@@ -110,12 +110,25 @@ class ApplicationGuards(unittest.TestCase):
         module = importlib.reload(module)  # isolate the per-process write throttle
         if hasattr(module, "get_pool"):
             self.enterContext(patch.object(module, "get_pool", self.db.pool))
+        # BUILD caches one settings object at startup; recreate the application
+        # with the same per-test environment, without running its lifespan.
+        for name in ('mcp_server', 'main'):
+            if name in sys.modules:
+                importlib.reload(sys.modules[name])
         return module
 
-    def client(self, prefix, wrapper=None):
+    def client(self, prefix, wrapper=None, protection=False):
         # Real SDK and its real session manager. Only persistence is replaced.
-        sdk = FastMCP("PREP test", stateless_http=True)
+        module = importlib.import_module('mcp_access')
+        build = getattr(module, 'build_transport_security', None)
+        settings = build() if callable(build) else None
+        kwargs = {'transport_security': settings} if settings is not None else {}
+        sdk = FastMCP("PREP test", stateless_http=True, **kwargs)
         child = sdk.streamable_http_app()
+        if protection:
+            guard = getattr(module, 'guard_mcp_access', None)
+            self.assertTrue(callable(guard), 'BUILD guard_mcp_access must exist')
+            child = guard(child, settings)
 
         @asynccontextmanager
         async def lifespan(app):
@@ -148,8 +161,8 @@ class ApplicationGuards(unittest.TestCase):
             for key in ("hosts_registered", "origins_registered", "hosts_invalid", "origins_invalid"):
                 self.assertIs(type(result[key]), int)
                 self.assertEqual(result[key], 2)
-            self.assertEqual(result["protection"], "preview")
-            self.assertEqual(result["version"], "1.7.0")
+            self.assertEqual(result["protection"], "enabled")
+            self.assertEqual(result["version"], main.VERSION)
             self.assertIs(result["ip_literal_allowed"], True)
             self.assertIs(result["foreign_host_seen"], False)
             self.assertIsNone(result["foreign_host_last_seen_at"])
@@ -164,6 +177,8 @@ class ApplicationGuards(unittest.TestCase):
 
     def test_T_PREP_01_02_observation(self):
         module = self.module()
+        self.assertTrue(callable(getattr(module, 'guard_mcp_access', None)),
+                        'BUILD protected observation path must exist')
         wrapper = getattr(module, "observe_mcp_access", None)
         self.assertTrue(callable(wrapper), "observe_mcp_access must exist")
         import main
@@ -187,7 +202,8 @@ class ApplicationGuards(unittest.TestCase):
             for _ in range(3):
                 response = client.post("/memory/mcp", json=INIT,
                                        headers={**HEADERS, "Host": SENTINEL + ":443"})
-                self.assertEqual(response.status_code, 200)
+                self.assertEqual(response.status_code, 421)
+                self.assertEqual(response.json()['error_code'], 'mcp_host_not_allowed')
                 self.assertNotIn(SENTINEL, response.text)
             self.assertIsNotNone(self.db.row, "foreign access must be observed")
             self.assertIs(self.db.row["foreign_host_seen"], True)
@@ -201,10 +217,11 @@ class ApplicationGuards(unittest.TestCase):
                 self.db.row = None
                 self.db.calls.clear()
                 module = self.module()
-                with self.client("/memory", module.observe_mcp_access) as client:
+                with self.client("/memory", module.observe_mcp_access, protection=True) as client:
                     response = client.post("/memory/mcp", json=INIT,
                                            headers={**HEADERS, "Host": host})
-                    self.assertEqual(response.status_code, 200)
+                    self.assertEqual(response.status_code, 421)
+                    self.assertEqual(response.json()['error_code'], 'mcp_host_not_allowed')
                 self.assertIsNotNone(self.db.row, "malformed/empty Host must count foreign")
                 self.assertIs(self.db.row["foreign_host_seen"], True)
                 self.no_values("SENTINEL-malformed-7f3a", "bad host")
@@ -212,6 +229,8 @@ class ApplicationGuards(unittest.TestCase):
 
     def test_T_PREP_01_03_passthrough(self):
         module = self.module()
+        self.assertTrue(callable(getattr(module, 'guard_mcp_access', None)),
+                        'BUILD protected passthrough path must exist')
         wrapper = getattr(module, "observe_mcp_access", None)
         self.assertTrue(callable(wrapper), "observe_mcp_access must exist")
         for prefix in ("/memory", "/calendar"):
@@ -219,7 +238,7 @@ class ApplicationGuards(unittest.TestCase):
                 with self.subTest(prefix=prefix, valid=body != "{broken"):
                     with self.client(prefix) as baseline:
                         before = baseline.post(prefix + "/mcp", content=body, headers=HEADERS)
-                    with self.client(prefix, wrapper) as guarded:
+                    with self.client(prefix, wrapper, protection=True) as guarded:
                         after = guarded.post(prefix + "/mcp", content=body, headers=HEADERS)
                     self.assertEqual(after.status_code, before.status_code)
                     self.assertEqual(list(after.headers.multi_items()), list(before.headers.multi_items()))
@@ -227,26 +246,31 @@ class ApplicationGuards(unittest.TestCase):
         # A failed observation store must also leave the protocol available.
         module._next_write = 0
         self.db.broken = True
-        with self.client("/memory", wrapper) as client:
+        with self.client("/memory", wrapper, protection=True) as client:
             response = client.post("/memory/mcp", json=INIT,
                                    headers={**HEADERS, "Host": SENTINEL})
+            self.assertEqual(response.status_code, 421)
+            self.assertEqual(response.json()['error_code'], 'mcp_host_not_allowed')
+            response = client.post("/memory/mcp", json=INIT, headers=HEADERS)
             self.assertEqual(response.status_code, 200)
             self.assertIn('"result"', response.text)
         self.no_values(SENTINEL)
 
     def test_T_PREP_01_05_startup(self):
         module = self.module()
-        preview = getattr(module, "log_mcp_access_preview", None)
-        self.assertTrue(callable(preview), "startup preview entrypoint must exist")
+        preview = getattr(module, "log_mcp_access_summary", None)
+        self.assertTrue(callable(preview), "BUILD startup summary entrypoint must exist")
         preview()
-        self.assertIn("event=mcp_allowlist_preview hosts=0 origins=0 increment=1", self.output.getvalue())
+        self.assertIn("event=mcp_access_control hosts=0 origins=0 ip_literal=true", self.output.getvalue())
+        self.assertNotIn("预告", self.output.getvalue())
         self.assertIn("MCP_ALLOWED_HOSTS", self.output.getvalue())
         self.output.seek(0)
         self.output.truncate()
         with patch.dict(os.environ, {"MCP_ALLOWED_HOSTS": "a.example, bad item",
                                     "MCP_ALLOWED_ORIGINS": "https://b.example, SENTINEL-invalid-origin"}):
             preview()
-        self.assertIn("event=mcp_allowlist_preview hosts=1 origins=1 increment=1", self.output.getvalue())
+        self.assertIn("event=mcp_access_control hosts=1 origins=1 ip_literal=true", self.output.getvalue())
+        self.assertNotIn("预告", self.output.getvalue())
         for field in ("hosts", "origins"):
             self.assertEqual(self.output.getvalue().count(
                 f"event=mcp_allowlist_invalid_item field={field} increment=1"), 1)
@@ -473,7 +497,7 @@ class DeliveryGuards(unittest.TestCase):
             'README.md':['不支持流式与 MCP'], 'README_EN.md':['2.0 notice'],
             '.env.example':['MCP_ALLOWED_HOSTS','MCP_ALLOWED_ORIGINS'],
             'docker-compose.yml':['MCP_ALLOWED_HOSTS','MCP_ALLOWED_ORIGINS'],
-            'requirements.txt':['fastapi==0.141.1','starlette==1.3.1','mcp>=1.8.0','httpx==0.27.0','uvicorn==0.30.0'],
+            'requirements.txt':['fastapi==0.141.1','starlette==1.3.1','mcp==1.29.1','httpx==0.27.2','uvicorn==0.31.1'],
         }.items():
             with self.subTest(file=path):
                 self.assertTrue((ROOT/path).exists(),path+' missing')
@@ -488,20 +512,37 @@ class DeliveryGuards(unittest.TestCase):
         calls=[n for n in ast.walk(ast.parse(content)) if isinstance(n,ast.Call)
                and isinstance(n.func,ast.Name) and n.func.id=='FastMCP']
         self.assertEqual(len(calls),2,'exactly two FastMCP constructors')
+        names = []
         for call in calls:
-            self.assertNotIn('transport_security',[k.arg for k in call.keywords])
-        for token in ('transport_security','TransportSecuritySettings','MCP_ALLOWED'):
-            self.assertNotIn(token,content)
+            values = [k.value for k in call.keywords if k.arg == 'transport_security']
+            self.assertEqual(len(values), 1)
+            self.assertIsInstance(values[0], ast.Name)
+            names.append(values[0].id)
+        self.assertEqual(names[0], names[1])
 
     def test_T_PREP_01_12_no_protection_wiring(self):
-        for p in ROOT.glob('*.py'):
-            tree=ast.parse(p.read_text(encoding='utf-8-sig'))
-            for node in ast.walk(tree):
-                if isinstance(node,(ast.Import,ast.ImportFrom)):
-                    names=[a.name for a in node.names]+[getattr(node,'module','') or '']
-                    self.assertFalse(any('transport_security' in n or 'TransportSecuritySettings' in n for n in names),str(p))
-                if isinstance(node,ast.Call):
-                    self.assertFalse(any(k.arg=='transport_security' for k in node.keywords),str(p))
+        tree=ast.parse((ROOT/'mcp_access.py').read_text(encoding='utf-8-sig'))
+        imports=[n for n in ast.walk(tree) if isinstance(n,(ast.Import,ast.ImportFrom))]
+        self.assertTrue(any(any(a.name == 'TransportSecuritySettings' for a in n.names)
+                            for n in imports), 'BUILD must import TransportSecuritySettings')
+        self.assertFalse(any(getattr(n,'module',None)=='main' or any(a.name=='main' for a in n.names)
+                             for n in imports))
+        tree=ast.parse((ROOT/'mcp_server.py').read_text(encoding='utf-8-sig'))
+        calls=[n for n in ast.walk(tree) if isinstance(n,ast.Call)
+               and isinstance(n.func,ast.Name) and n.func.id=='FastMCP']
+        self.assertEqual(len(calls),2)
+        for call in calls:
+            self.assertIn('transport_security',[k.arg for k in call.keywords])
+        tree=ast.parse((ROOT/'main.py').read_text(encoding='utf-8-sig'))
+        mounts=[n for n in ast.walk(tree) if isinstance(n,ast.Call) and isinstance(n.func,ast.Attribute)
+                and n.func.attr=='mount' and n.args and isinstance(n.args[0],ast.Constant)
+                and n.args[0].value in ('/memory','/calendar')]
+        self.assertEqual(len(mounts),2)
+        for mount in mounts:
+            outer=mount.args[1]
+            self.assertEqual(getattr(getattr(outer,'func',None),'id',None),'observe_mcp_access')
+            inner=outer.args[0]
+            self.assertEqual(getattr(getattr(inner,'func',None),'id',None),'guard_mcp_access')
 
 
 if __name__ == "__main__":
