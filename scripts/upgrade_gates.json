@@ -1,0 +1,1 @@
+{"schema":1,"gates":{"mcp_access_control":false},"notes":"由 RELEASE-01 在发布分支置 true；update.sh 预检读取目标 commit 的本文件"}

@@ -169,6 +169,14 @@ async def init_tables():
                 updated_at      TIMESTAMPTZ DEFAULT NOW()
             );
         """)
+        # PREP-01: observation metadata is separate from user configuration.
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS mcp_access_observation (
+                id SMALLINT PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+                foreign_host_seen BOOLEAN NOT NULL DEFAULT FALSE,
+                last_seen_at TIMESTAMPTZ NULL
+            );
+        """)
         # v3.4：供应商管理表
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS providers (

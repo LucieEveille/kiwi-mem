@@ -1,0 +1,378 @@
+{
+  "head": "3268baf1348cbf01b4a2662147707295d761f5dd",
+  "source_blobs": {
+    "database.py": "9893312f9f45dbf9905117b7da8920603cf0a379",
+    "main.py": "e27b37a240b41c66be1c993e5329eddd0021f009",
+    "mcp_access.py": "3a11354c5f72818811796b15fbda5582f3352e14",
+    "mcp_server.py": "bc7c1892a21b719b5733bfae9ec3cf69cb0b719f",
+    "requirements.txt": "2ce37a838f5b8ac76a562efa4cf61158e4117733",
+    "scripts/check_prep_audit.py": "881760d00f25a6f3fa4ddc3fcdde66a21387f7f1",
+    "scripts/kiwi_prep_01_knives.py": "6947f1884cc032b8b336bf84d8b07c47bcb07ea2",
+    "scripts/prep_authority.jq": "97c205ae5ae4ed478e9c84fe529ddbe30c50da35",
+    "scripts/prep_update_fixture.py": "1e18c5cff5f3a01c3ed7ae612351b12752b1f92c",
+    "scripts/test_kiwi_prep_01.py": "71610ab6342c2dd7013d0dc1bce6b53b09355f03",
+    "scripts/test_kiwi_safety_sync.py": "035cde8a0a51df9e530caf582f3f5250948a9acb",
+    "scripts/test_prep_framework_compat.py": "4c453f62274dea311af7e852738a372407e8b32f",
+    "scripts/update.sh": "80588c24c4208be7a602a08d89334ac8bf6ac924",
+    "scripts/update_support.py": "c20b0755b8235dc4558a9517f8e746f05615f74c",
+    "scripts/update_support_jq.sh": "77680c1e749df6cfdb5853e27deeaac018759f49",
+    "scripts/upgrade_gates.json": "64387ce58d489307ab9cf14ea014cc2d99247b62"
+  },
+  "preflight": 0,
+  "restored": 0,
+  "results": [
+    {
+      "knife": "K-PREP-1",
+      "variant": "default",
+      "test": "ApplicationGuards.test_T_PREP_01_02_observation",
+      "status": "RED",
+      "reason": [
+        "{'id': 1, 'foreign_host_seen': True, 'last_seen_at': datetime.datetime(2026, 9, 9, 23, 42, 30, 430117, tzinfo=datetime.timezone.utc)} is not None",
+        "{'id': 1, 'foreign_host_seen': True, 'last_seen_at': datetime.datetime(2026, 9, 9, 23, 42, 30, 430117, tzinfo=datetime.timezone.utc)} is not None",
+        "{'id': 1, 'foreign_host_seen': True, 'last_seen_at': datetime.datetime(2026, 9, 9, 23, 42, 30, 430117, tzinfo=datetime.timezone.utc)} is not None",
+        "{'id': 1, 'foreign_host_seen': True, 'last_seen_at': datetime.datetime(2026, 9, 9, 23, 42, 30, 430117, tzinfo=datetime.timezone.utc)} is not None"
+      ],
+      "exit_code": 1
+    },
+    {
+      "knife": "K-PREP-2",
+      "variant": "stdout",
+      "test": "ApplicationGuards.test_T_PREP_01_02_observation",
+      "status": "RED",
+      "reason": [
+        "'SENTINEL-host-7f3a.example' unexpectedly found in '/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/jieba/analyse/tfidf.py:47: ResourceWarning: unclosed file <_io.BufferedReader name=\\'/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/jieba/analyse/idf.txt\\'>\\n  content = open(new_idf_path, \\'rb\\').read().decode(\\'utf-8\\')\\nResourceWarning: Enable tracemalloc to get the object allocation traceback\\nBuilding prefix dict from the default dictionary ...\\nLoading model from cache /tmp/jieba.cache\\nLoading model cost 0.780 seconds.\\nPrefix dict has been built successfully.\\n✅ jieba 分词引擎已初始化\\n/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/pydantic_settings/sources/utils.py:47: IncompleteFieldDefinitionWarning: Field \\'lifespan\\' has an incomplete definition: its annotation contains an unresolved forward reference, so settings sources may fail to correctly resolve its value. Call `model_rebuild()` on the model where the field is defined, once all the referenced types are defined.\\n  warnings.warn(\\n✅ 人设已加载（文件），长度：755 字符\\nlocalhost:8080\\n127.0.0.1:8080\\n[::1]:8080\\n/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/anyio/streams/memory.py:190: ResourceWarning: Unclosed <MemoryObjectReceiveStream at 7f3935a46ff0>\\n  warnings.warn(\\nResourceWarning: Enable tracemalloc to get the object allocation traceback\\n/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/anyio/streams/memory.py:190: ResourceWarning: Unclosed <MemoryObjectReceiveStream at 7f3935a45dc0>\\n  warnings.warn(\\nResourceWarning: Enable tracemalloc to get the object allocation traceback\\n192.168.1.10:8080\\n[2001:db8::1]:8080\\n/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/anyio/streams/memory.py:190: ResourceWarning: Unclosed <MemoryObjectReceiveStream at 7f3935a442f0>\\n  warnings.warn(\\nResourceWarning: Enable tracemalloc to get the object allocation traceback\\n/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/anyio/streams/memory.py:190: ResourceWarning: Unclosed <MemoryObjectReceiveStream at 7f3935a6c290>\\n  warnings.warn(\\nResourceWarning: Enable tracemalloc to get the object allocation traceback\\nSENTINEL-host-7f3a.example:443\\nSENTINEL-host-7f3a.example:443\\n/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/anyio/streams/memory.py:190: ResourceWarning: Unclosed <MemoryObjectReceiveStream at 7f3935a47ad0>\\n  warnings.warn(\\nResourceWarning: Enable tracemalloc to get the object allocation traceback\\n/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/anyio/streams/memory.py:190: ResourceWarning: Unclosed <MemoryObjectReceiveStream at 7f3935a6cad0>\\n  warnings.warn(\\nResourceWarning: Enable tracemalloc to get the object allocation traceback\\nSENTINEL-host-7f3a.example:443\\nBuilding prefix dict from the default dictionary ...\\nLoading model from cache /tmp/jieba.cache\\nLoading model cost 0.780 seconds.\\nPrefix dict has been built successfully.\\nInitializing server \\'Memory Garden\\'\\nInitializing server \\'Memory Garden\\'\\nRegistering handler for ListToolsRequest\\nRegistering handler for ListToolsRequest\\nRegistering handler for CallToolRequest\\nRegistering handler for CallToolRequest\\nRegistering handler for ListResourcesRequest\\nRegistering handler for ListResourcesRequest\\nRegistering handler for ReadResourceRequest\\nRegistering handler for ReadResourceRequest\\nRegistering handler for PromptListRequest\\nRegistering handler for PromptListRequest\\nRegistering handler for GetPromptRequest\\nRegistering handler for GetPromptRequest\\nRegistering handler for ListResourceTemplatesRequest\\nRegistering handler for ListResourceTemplatesRequest\\nInitializing server \\'Calendar & Dream\\'\\nInitializing server \\'Calendar & Dream\\'\\nRegistering handler for ListToolsRequest\\nRegistering handler for ListToolsRequest\\nRegistering handler for CallToolRequest\\nRegistering handler for CallToolRequest\\nRegistering handler for ListResourcesRequest\\nRegistering handler for ListResourcesRequest\\nRegistering handler for ReadResourceRequest\\nRegistering handler for ReadResourceRequest\\nRegistering handler for PromptListRequest\\nRegistering handler for PromptListRequest\\nRegistering handler for GetPromptRequest\\nRegistering handler for GetPromptRequest\\nRegistering handler for ListResourceTemplatesRequest\\nRegistering handler for ListResourceTemplatesRequest\\nUsing selector: EpollSelector\\nStreamableHTTP session manager started\\nStreamableHTTP session manager started\\nStreamableHTTP session manager started\\nStreamableHTTP session manager started\\nStateless mode: Creating new transport for this request\\nStateless mode: Creating new transport for this request\\nClosing SSE writer\\nClosing SSE writer\\nchunk: b\\'event: message\\\\r\\\\ndata: {\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"protocolVersion\":\"2025-06-18\",\"capabilities\":{\"experimental\":{},\"prompts\":{\"listChanged\":false},\"resources\":{\"subscribe\":false,\"listChanged\":false},\"tools\":{\"listChanged\":false}},\"serverInfo\":{\"name\":\"Memory Garden\",\"version\":\"1.12.4\"}}}\\\\r\\\\n\\\\r\\\\n\\'\\nGot event: http.disconnect. Stop streaming.\\nTerminating session: None\\nTerminating session: None\\nHTTP Request: POST http://testserver/memory/mcp \"HTTP/1.1 200 OK\"\\nStateless mode: Creating new transport for this request\\nStateless mode: Creating new transport for this request\\nClosing SSE writer\\nClosing SSE writer\\nchunk: b\\'event: message\\\\r\\\\ndata: {\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"protocolVersion\":\"2025-06-18\",\"capabilities\":{\"experimental\":{},\"prompts\":{\"listChanged\":false},\"resources\":{\"subscribe\":false,\"listChanged\":false},\"tools\":{\"listChanged\":false}},\"serverInfo\":{\"name\":\"Memory Garden\",\"version\":\"1.12.4\"}}}\\\\r\\\\n\\\\r\\\\n\\'\\nGot event: http.disconnect. Stop streaming.\\nTerminating session: None\\nTerminating session: None\\nHTTP Request: POST http://testserver/memory/mcp \"HTTP/1.1 200 OK\"\\nStateless mode: Creating new transport for this request\\nStateless mode: Creating new transport for this request\\nClosing SSE writer\\nClosing SSE writer\\nchunk: b\\'event: message\\\\r\\\\ndata: {\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"protocolVersion\":\"2025-06-18\",\"capabilities\":{\"experimental\":{},\"prompts\":{\"listChanged\":false},\"resources\":{\"subscribe\":false,\"listChanged\":false},\"tools\":{\"listChanged\":false}},\"serverInfo\":{\"name\":\"Memory Garden\",\"version\":\"1.12.4\"}}}\\\\r\\\\n\\\\r\\\\n\\'\\nGot event: http.disconnect. Stop streaming.\\nTerminating session: None\\nTerminating session: None\\nHTTP Request: POST http://testserver/memory/mcp \"HTTP/1.1 200 OK\"\\nStateless mode: Creating new transport for this request\\nStateless mode: Creating new transport for this request\\nClosing SSE writer\\nClosing SSE writer\\nchunk: b\\'event: message\\\\r\\\\ndata: {\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"protocolVersion\":\"2025-06-18\",\"capabilities\":{\"experimental\":{},\"prompts\":{\"listChanged\":false},\"resources\":{\"subscribe\":false,\"listChanged\":false},\"tools\":{\"listChanged\":false}},\"serverInfo\":{\"name\":\"Memory Garden\",\"version\":\"1.12.4\"}}}\\\\r\\\\n\\\\r\\\\n\\'\\nGot event: http.disconnect. Stop streaming.\\nTerminating session: None\\nTerminating session: None\\nHTTP Request: POST http://testserver/memory/mcp \"HTTP/1.1 200 OK\"\\nStateless mode: Creating new transport for this request\\nStateless mode: Creating new transport for this request\\nClosing SSE writer\\nClosing SSE writer\\nchunk: b\\'event: message\\\\r\\\\ndata: {\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"protocolVersion\":\"2025-06-18\",\"capabilities\":{\"experimental\":{},\"prompts\":{\"listChanged\":false},\"resources\":{\"subscribe\":false,\"listChanged\":false},\"tools\":{\"listChanged\":false}},\"serverInfo\":{\"name\":\"Memory Garden\",\"version\":\"1.12.4\"}}}\\\\r\\\\n\\\\r\\\\n\\'\\nGot event: http.disconnect. Stop streaming.\\nTerminating session: None\\nTerminating session: None\\nHTTP Request: POST http://testserver/memory/mcp \"HTTP/1.1 200 OK\"\\nStateless mode: Creating new transport for this request\\nStateless mode: Creating new transport for this request\\nClosing SSE writer\\nClosing SSE writer\\nchunk: b\\'event: message\\\\r\\\\ndata: {\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"protocolVersion\":\"2025-06-18\",\"capabilities\":{\"experimental\":{},\"prompts\":{\"listChanged\":false},\"resources\":{\"subscribe\":false,\"listChanged\":false},\"tools\":{\"listChanged\":false}},\"serverInfo\":{\"name\":\"Memory Garden\",\"version\":\"1.12.4\"}}}\\\\r\\\\n\\\\r\\\\n\\'\\nGot event: http.disconnect. Stop streaming.\\nTerminating session: None\\nTerminating session: None\\nHTTP Request: POST http://testserver/memory/mcp \"HTTP/1.1 200 OK\"\\nStateless mode: Creating new transport for this request\\nStateless mode: Creating new transport for this request\\nClosing SSE writer\\nClosing SSE writer\\nchunk: b\\'event: message\\\\r\\\\ndata: {\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"protocolVersion\":\"2025-06-18\",\"capabilities\":{\"experimental\":{},\"prompts\":{\"listChanged\":false},\"resources\":{\"subscribe\":false,\"listChanged\":false},\"tools\":{\"listChanged\":false}},\"serverInfo\":{\"name\":\"Memory Garden\",\"version\":\"1.12.4\"}}}\\\\r\\\\n\\\\r\\\\n\\'\\nGot event: http.disconnect. Stop streaming.\\nTerminating session: None\\nTerminating session: None\\nHTTP Request: POST http://testserver/memory/mcp \"HTTP/1.1 200 OK\"\\nStateless mode: Creating new transport for this request\\nStateless mode: Creating new transport for this request\\nClosing SSE writer\\nClosing SSE writer\\nchunk: b\\'event: message\\\\r\\\\ndata: {\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"protocolVersion\":\"2025-06-18\",\"capabilities\":{\"experimental\":{},\"prompts\":{\"listChanged\":false},\"resources\":{\"subscribe\":false,\"listChanged\":false},\"tools\":{\"listChanged\":false}},\"serverInfo\":{\"name\":\"Memory Garden\",\"version\":\"1.12.4\"}}}\\\\r\\\\n\\\\r\\\\n\\'\\nGot event: http.disconnect. Stop streaming.\\nTerminating session: None\\nTerminating session: None\\nHTTP Request: POST http://testserver/memory/mcp \"HTTP/1.1 200 OK\"\\n{\"row\": {\"id\": 1, \"foreign_host_seen\": true, \"last_seen_at\": \"2026-09-09 23:42:32.615221+00:00\"}, \"calls\": [[\"INSERT INTO mcp_access_observation\\\\n                            (id, foreign_host_seen, last_seen_at) VALUES (1, TRUE, now())\\\\n                            ON CONFLICT (id) DO UPDATE SET foreign_host_seen=TRUE,\\\\n                                last_seen_at=EXCLUDED.last_seen_at\", []]]}'"
+      ],
+      "exit_code": 1
+    },
+    {
+      "knife": "K-PREP-2",
+      "variant": "logging",
+      "test": "ApplicationGuards.test_T_PREP_01_02_observation",
+      "status": "RED",
+      "reason": [
+        "'SENTINEL-host-7f3a.example' unexpectedly found in '/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/jieba/analyse/tfidf.py:47: ResourceWarning: unclosed file <_io.BufferedReader name=\\'/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/jieba/analyse/idf.txt\\'>\\n  content = open(new_idf_path, \\'rb\\').read().decode(\\'utf-8\\')\\nResourceWarning: Enable tracemalloc to get the object allocation traceback\\nBuilding prefix dict from the default dictionary ...\\nLoading model from cache /tmp/jieba.cache\\nLoading model cost 0.769 seconds.\\nPrefix dict has been built successfully.\\n✅ jieba 分词引擎已初始化\\n/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/pydantic_settings/sources/utils.py:47: IncompleteFieldDefinitionWarning: Field \\'lifespan\\' has an incomplete definition: its annotation contains an unresolved forward reference, so settings sources may fail to correctly resolve its value. Call `model_rebuild()` on the model where the field is defined, once all the referenced types are defined.\\n  warnings.warn(\\n✅ 人设已加载（文件），长度：755 字符\\n/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/anyio/streams/memory.py:190: ResourceWarning: Unclosed <MemoryObjectReceiveStream at 7fd7e4c77290>\\n  warnings.warn(\\nResourceWarning: Enable tracemalloc to get the object allocation traceback\\n/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/anyio/streams/memory.py:190: ResourceWarning: Unclosed <MemoryObjectReceiveStream at 7fd7e4c76000>\\n  warnings.warn(\\nResourceWarning: Enable tracemalloc to get the object allocation traceback\\n/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/anyio/streams/memory.py:190: ResourceWarning: Unclosed <MemoryObjectReceiveStream at 7fd7e4c74680>\\n  warnings.warn(\\nResourceWarning: Enable tracemalloc to get the object allocation traceback\\n/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/anyio/streams/memory.py:190: ResourceWarning: Unclosed <MemoryObjectReceiveStream at 7fd7e4c9c470>\\n  warnings.warn(\\nResourceWarning: Enable tracemalloc to get the object allocation traceback\\n/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/anyio/streams/memory.py:190: ResourceWarning: Unclosed <MemoryObjectReceiveStream at 7fd7e4c76e10>\\n  warnings.warn(\\nResourceWarning: Enable tracemalloc to get the object allocation traceback\\n/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/anyio/streams/memory.py:190: ResourceWarning: Unclosed <MemoryObjectReceiveStream at 7fd7e4c9ce00>\\n  warnings.warn(\\nResourceWarning: Enable tracemalloc to get the object allocation traceback\\nBuilding prefix dict from the default dictionary ...\\nLoading model from cache /tmp/jieba.cache\\nLoading model cost 0.769 seconds.\\nPrefix dict has been built successfully.\\nInitializing server \\'Memory Garden\\'\\nInitializing server \\'Memory Garden\\'\\nRegistering handler for ListToolsRequest\\nRegistering handler for ListToolsRequest\\nRegistering handler for CallToolRequest\\nRegistering handler for CallToolRequest\\nRegistering handler for ListResourcesRequest\\nRegistering handler for ListResourcesRequest\\nRegistering handler for ReadResourceRequest\\nRegistering handler for ReadResourceRequest\\nRegistering handler for PromptListRequest\\nRegistering handler for PromptListRequest\\nRegistering handler for GetPromptRequest\\nRegistering handler for GetPromptRequest\\nRegistering handler for ListResourceTemplatesRequest\\nRegistering handler for ListResourceTemplatesRequest\\nInitializing server \\'Calendar & Dream\\'\\nInitializing server \\'Calendar & Dream\\'\\nRegistering handler for ListToolsRequest\\nRegistering handler for ListToolsRequest\\nRegistering handler for CallToolRequest\\nRegistering handler for CallToolRequest\\nRegistering handler for ListResourcesRequest\\nRegistering handler for ListResourcesRequest\\nRegistering handler for ReadResourceRequest\\nRegistering handler for ReadResourceRequest\\nRegistering handler for PromptListRequest\\nRegistering handler for PromptListRequest\\nRegistering handler for GetPromptRequest\\nRegistering handler for GetPromptRequest\\nRegistering handler for ListResourceTemplatesRequest\\nRegistering handler for ListResourceTemplatesRequest\\nUsing selector: EpollSelector\\nStreamableHTTP session manager started\\nStreamableHTTP session manager started\\nStreamableHTTP session manager started\\nStreamableHTTP session manager started\\nlocalhost:8080\\nlocalhost:8080\\nStateless mode: Creating new transport for this request\\nStateless mode: Creating new transport for this request\\nClosing SSE writer\\nClosing SSE writer\\nchunk: b\\'event: message\\\\r\\\\ndata: {\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"protocolVersion\":\"2025-06-18\",\"capabilities\":{\"experimental\":{},\"prompts\":{\"listChanged\":false},\"resources\":{\"subscribe\":false,\"listChanged\":false},\"tools\":{\"listChanged\":false}},\"serverInfo\":{\"name\":\"Memory Garden\",\"version\":\"1.12.4\"}}}\\\\r\\\\n\\\\r\\\\n\\'\\nGot event: http.disconnect. Stop streaming.\\nTerminating session: None\\nTerminating session: None\\nHTTP Request: POST http://testserver/memory/mcp \"HTTP/1.1 200 OK\"\\n127.0.0.1:8080\\n127.0.0.1:8080\\nStateless mode: Creating new transport for this request\\nStateless mode: Creating new transport for this request\\nClosing SSE writer\\nClosing SSE writer\\nchunk: b\\'event: message\\\\r\\\\ndata: {\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"protocolVersion\":\"2025-06-18\",\"capabilities\":{\"experimental\":{},\"prompts\":{\"listChanged\":false},\"resources\":{\"subscribe\":false,\"listChanged\":false},\"tools\":{\"listChanged\":false}},\"serverInfo\":{\"name\":\"Memory Garden\",\"version\":\"1.12.4\"}}}\\\\r\\\\n\\\\r\\\\n\\'\\nGot event: http.disconnect. Stop streaming.\\nTerminating session: None\\nTerminating session: None\\nHTTP Request: POST http://testserver/memory/mcp \"HTTP/1.1 200 OK\"\\n[::1]:8080\\n[::1]:8080\\nStateless mode: Creating new transport for this request\\nStateless mode: Creating new transport for this request\\nClosing SSE writer\\nClosing SSE writer\\nchunk: b\\'event: message\\\\r\\\\ndata: {\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"protocolVersion\":\"2025-06-18\",\"capabilities\":{\"experimental\":{},\"prompts\":{\"listChanged\":false},\"resources\":{\"subscribe\":false,\"listChanged\":false},\"tools\":{\"listChanged\":false}},\"serverInfo\":{\"name\":\"Memory Garden\",\"version\":\"1.12.4\"}}}\\\\r\\\\n\\\\r\\\\n\\'\\nGot event: http.disconnect. Stop streaming.\\nTerminating session: None\\nTerminating session: None\\nHTTP Request: POST http://testserver/memory/mcp \"HTTP/1.1 200 OK\"\\n192.168.1.10:8080\\n192.168.1.10:8080\\nStateless mode: Creating new transport for this request\\nStateless mode: Creating new transport for this request\\nClosing SSE writer\\nClosing SSE writer\\nchunk: b\\'event: message\\\\r\\\\ndata: {\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"protocolVersion\":\"2025-06-18\",\"capabilities\":{\"experimental\":{},\"prompts\":{\"listChanged\":false},\"resources\":{\"subscribe\":false,\"listChanged\":false},\"tools\":{\"listChanged\":false}},\"serverInfo\":{\"name\":\"Memory Garden\",\"version\":\"1.12.4\"}}}\\\\r\\\\n\\\\r\\\\n\\'\\nGot event: http.disconnect. Stop streaming.\\nTerminating session: None\\nTerminating session: None\\nHTTP Request: POST http://testserver/memory/mcp \"HTTP/1.1 200 OK\"\\n[2001:db8::1]:8080\\n[2001:db8::1]:8080\\nStateless mode: Creating new transport for this request\\nStateless mode: Creating new transport for this request\\nClosing SSE writer\\nClosing SSE writer\\nchunk: b\\'event: message\\\\r\\\\ndata: {\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"protocolVersion\":\"2025-06-18\",\"capabilities\":{\"experimental\":{},\"prompts\":{\"listChanged\":false},\"resources\":{\"subscribe\":false,\"listChanged\":false},\"tools\":{\"listChanged\":false}},\"serverInfo\":{\"name\":\"Memory Garden\",\"version\":\"1.12.4\"}}}\\\\r\\\\n\\\\r\\\\n\\'\\nGot event: http.disconnect. Stop streaming.\\nTerminating session: None\\nTerminating session: None\\nHTTP Request: POST http://testserver/memory/mcp \"HTTP/1.1 200 OK\"\\nSENTINEL-host-7f3a.example:443\\nSENTINEL-host-7f3a.example:443\\nStateless mode: Creating new transport for this request\\nStateless mode: Creating new transport for this request\\nClosing SSE writer\\nClosing SSE writer\\nchunk: b\\'event: message\\\\r\\\\ndata: {\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"protocolVersion\":\"2025-06-18\",\"capabilities\":{\"experimental\":{},\"prompts\":{\"listChanged\":false},\"resources\":{\"subscribe\":false,\"listChanged\":false},\"tools\":{\"listChanged\":false}},\"serverInfo\":{\"name\":\"Memory Garden\",\"version\":\"1.12.4\"}}}\\\\r\\\\n\\\\r\\\\n\\'\\nGot event: http.disconnect. Stop streaming.\\nTerminating session: None\\nTerminating session: None\\nHTTP Request: POST http://testserver/memory/mcp \"HTTP/1.1 200 OK\"\\nSENTINEL-host-7f3a.example:443\\nSENTINEL-host-7f3a.example:443\\nStateless mode: Creating new transport for this request\\nStateless mode: Creating new transport for this request\\nClosing SSE writer\\nClosing SSE writer\\nchunk: b\\'event: message\\\\r\\\\ndata: {\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"protocolVersion\":\"2025-06-18\",\"capabilities\":{\"experimental\":{},\"prompts\":{\"listChanged\":false},\"resources\":{\"subscribe\":false,\"listChanged\":false},\"tools\":{\"listChanged\":false}},\"serverInfo\":{\"name\":\"Memory Garden\",\"version\":\"1.12.4\"}}}\\\\r\\\\n\\\\r\\\\n\\'\\nGot event: http.disconnect. Stop streaming.\\nTerminating session: None\\nTerminating session: None\\nHTTP Request: POST http://testserver/memory/mcp \"HTTP/1.1 200 OK\"\\nSENTINEL-host-7f3a.example:443\\nSENTINEL-host-7f3a.example:443\\nStateless mode: Creating new transport for this request\\nStateless mode: Creating new transport for this request\\nClosing SSE writer\\nClosing SSE writer\\nchunk: b\\'event: message\\\\r\\\\ndata: {\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"protocolVersion\":\"2025-06-18\",\"capabilities\":{\"experimental\":{},\"prompts\":{\"listChanged\":false},\"resources\":{\"subscribe\":false,\"listChanged\":false},\"tools\":{\"listChanged\":false}},\"serverInfo\":{\"name\":\"Memory Garden\",\"version\":\"1.12.4\"}}}\\\\r\\\\n\\\\r\\\\n\\'\\nGot event: http.disconnect. Stop streaming.\\nTerminating session: None\\nTerminating session: None\\nHTTP Request: POST http://testserver/memory/mcp \"HTTP/1.1 200 OK\"\\n{\"row\": {\"id\": 1, \"foreign_host_seen\": true, \"last_seen_at\": \"2026-09-09 23:42:34.726235+00:00\"}, \"calls\": [[\"INSERT INTO mcp_access_observation\\\\n                            (id, foreign_host_seen, last_seen_at) VALUES (1, TRUE, now())\\\\n                            ON CONFLICT (id) DO UPDATE SET foreign_host_seen=TRUE,\\\\n                                last_seen_at=EXCLUDED.last_seen_at\", []]]}'"
+      ],
+      "exit_code": 1
+    },
+    {
+      "knife": "K-PREP-3",
+      "variant": "default",
+      "test": "ApplicationGuards.test_T_PREP_01_01_status_shape",
+      "status": "RED",
+      "reason": [
+        "Items in the first set but not the second:"
+      ],
+      "exit_code": 1
+    },
+    {
+      "knife": "K-PREP-4",
+      "variant": "default",
+      "test": "ApplicationGuards.test_T_PREP_01_01_status_shape",
+      "status": "RED",
+      "reason": [
+        "'enabled' != 'preview'"
+      ],
+      "exit_code": 1
+    },
+    {
+      "knife": "K-PREP-5",
+      "variant": "default",
+      "test": "ApplicationGuards.test_T_PREP_01_01_status_shape",
+      "status": "RED",
+      "reason": [
+        "3 != 2"
+      ],
+      "exit_code": 1
+    },
+    {
+      "knife": "K-PREP-6",
+      "variant": "default",
+      "test": "ApplicationGuards.test_T_PREP_01_03_passthrough",
+      "status": "RED",
+      "reason": [
+        "400 != 200",
+        "Lists differ: [('content-length', '0')] != [('content-type', 'application/json'), ('content-length', '162')]",
+        "400 != 200",
+        "Lists differ: [('content-length', '0')] != [('content-type', 'application/json'), ('content-length', '162')]",
+        "400 != 200"
+      ],
+      "exit_code": 1
+    },
+    {
+      "knife": "K-PREP-7",
+      "variant": "default",
+      "test": "PG",
+      "status": "RED",
+      "reason": [
+        "PREP observation table must reject id=2"
+      ],
+      "exit_code": 1
+    },
+    {
+      "knife": "K-PREP-8",
+      "variant": "default",
+      "test": "UpdateGuards.test_T_PREP_01_06_three_conditions",
+      "status": "RED",
+      "reason": [
+        "3 != 0 : "
+      ],
+      "exit_code": 1
+    },
+    {
+      "knife": "K-PREP-9",
+      "variant": "default",
+      "test": "UpdateGuards.test_T_PREP_01_07_configuration",
+      "status": "RED",
+      "reason": [
+        "3 != 0 : "
+      ],
+      "exit_code": 1
+    },
+    {
+      "knife": "K-PREP-10",
+      "variant": "default",
+      "test": "UpdateGuards.test_T_PREP_01_07_configuration",
+      "status": "RED",
+      "reason": [
+        "True is not false : dotenv was executed"
+      ],
+      "exit_code": 1
+    },
+    {
+      "knife": "K-PREP-11",
+      "variant": "default",
+      "test": "UpdateGuards.test_T_PREP_01_08_preflight_before_mutation",
+      "status": "RED",
+      "reason": [
+        "'012e7e7d62ee5301affcc4f9009e4f0dc2f56093' != '8644420445a888cb8998f8cd023f11a57b30c22a'"
+      ],
+      "exit_code": 1
+    },
+    {
+      "knife": "K-PREP-12",
+      "variant": "default",
+      "test": "UpdateGuards.test_T_PREP_01_06_three_conditions",
+      "status": "RED",
+      "reason": [
+        "0 != 3 : "
+      ],
+      "exit_code": 1
+    },
+    {
+      "knife": "K-PREP-13",
+      "variant": "default",
+      "test": "UpdateGuards.test_T_PREP_01_09_resume",
+      "status": "RED",
+      "reason": [
+        "'a3d89ed1843dfce6d854d00bae4168c6ceb58035' != '9ec906bf26adac25e24b9576768ff2233dc8322e'"
+      ],
+      "exit_code": 1
+    },
+    {
+      "knife": "K-PREP-14",
+      "variant": "default",
+      "test": "UpdateGuards.test_T_PREP_01_09_resume",
+      "status": "RED",
+      "reason": [
+        "2 != 1"
+      ],
+      "exit_code": 1
+    },
+    {
+      "knife": "K-PREP-15",
+      "variant": "default",
+      "test": "UpdateGuards.test_T_PREP_01_09_resume",
+      "status": "RED",
+      "reason": [
+        "91 != 0 : [2026-09-09 23:43:21] 检查更新中（origin/main）…"
+      ],
+      "exit_code": 1
+    },
+    {
+      "knife": "K-PREP-16",
+      "variant": "default",
+      "test": "UpdateGuards.test_T_PREP_01_10_initialize_probe",
+      "status": "RED",
+      "reason": [
+        "'POST' not found in ['-sS', '--max-time', '5', '-o', '/tmp/kiwi-probe-9ccvewfa/body', '-w', '%{http_code}', '-X', 'GET', '-H', 'Accept: application/json, text/event-stream', '-H', 'Content-Type: application/json', '--data', '{\"jsonrpc\": \"2.0\", \"id\": 1, \"method\": \"initialize\", \"params\": {\"protocolVersion\": \"2025-06-18\", \"capabilities\": {}, \"clientInfo\": {\"name\": \"update.sh\", \"version\": \"1.7.0\"}}}', 'http://127.0.0.1:8080/memory/mcp']"
+      ],
+      "exit_code": 1
+    },
+    {
+      "knife": "K-PREP-17",
+      "variant": "default",
+      "test": "UpdateGuards.test_T_PREP_01_10_initialize_probe",
+      "status": "RED",
+      "reason": [
+        "0 != 1 : "
+      ],
+      "exit_code": 1
+    },
+    {
+      "knife": "K-PREP-18",
+      "variant": "default",
+      "test": "UpdateGuards.test_T_PREP_01_10_initialize_probe",
+      "status": "RED",
+      "reason": [
+        "'--max-time' not found in ['-sS', '-o', '/tmp/kiwi-probe-i4ndwfzp/body', '-w', '%{http_code}', '-X', 'POST', '-H', 'Accept: application/json, text/event-stream', '-H', 'Content-Type: application/json', '--data', '{\"jsonrpc\": \"2.0\", \"id\": 1, \"method\": \"initialize\", \"params\": {\"protocolVersion\": \"2025-06-18\", \"capabilities\": {}, \"clientInfo\": {\"name\": \"update.sh\", \"version\": \"1.7.0\"}}}', 'http://127.0.0.1:8080/memory/mcp']"
+      ],
+      "exit_code": 1
+    },
+    {
+      "knife": "K-PREP-19",
+      "variant": "default",
+      "test": "DeliveryGuards.test_T_PREP_01_11_delivery_contract",
+      "status": "RED",
+      "reason": [
+        "'starlette==1.3.1' not found in 'fastapi==0.141.1\\nuvicorn==0.30.0\\nhttpx==0.27.0\\nasyncpg==0.30.0\\nmcp>=1.8.0\\npython-multipart>=0.0.6\\npypdf>=4.0.0\\npython-docx>=1.1.0\\nopenpyxl>=3.1.0\\njieba>=0.42.1\\n'"
+      ],
+      "exit_code": 1
+    },
+    {
+      "knife": "K-PREP-20",
+      "variant": "default",
+      "test": "DeliveryGuards.test_T_PREP_01_11_delivery_contract",
+      "status": "RED",
+      "reason": [
+        "True is not False"
+      ],
+      "exit_code": 1
+    },
+    {
+      "knife": "K-PREP-21",
+      "variant": "default",
+      "test": "DeliveryGuards.test_T_PREP_01_11_delivery_contract",
+      "status": "RED",
+      "reason": [
+        "'transport_security' unexpectedly found in ['stateless_http', 'transport_security']"
+      ],
+      "exit_code": 1
+    },
+    {
+      "knife": "K-PREP-22",
+      "variant": "default",
+      "test": "DeliveryGuards.test_T_PREP_01_12_no_protection_wiring",
+      "status": "RED",
+      "reason": [
+        "True is not false : /home/runner/work/kiwi-mem/kiwi-mem/mcp_access.py"
+      ],
+      "exit_code": 1
+    },
+    {
+      "knife": "K-PREP-23",
+      "variant": "default",
+      "test": "UpdateGuards.test_T_PREP_01_13_port_environment",
+      "status": "RED",
+      "reason": [
+        "False is not true : probe port differs from compose published port: ['http://127.0.0.1:8080/']",
+        "False is not true : probe port differs from compose published port: ['http://127.0.0.1:8080/']",
+        "False is not true : probe port differs from compose published port: ['http://127.0.0.1:8080/']",
+        "False is not true : probe port differs from compose published port: ['http://127.0.0.1:8080/']",
+        "False is not true : probe port differs from compose published port: ['http://127.0.0.1:8080/']",
+        "False is not true : probe port differs from compose published port: ['http://127.0.0.1:8080/']",
+        "False is not true : probe port differs from compose published port: ['http://127.0.0.1:8080/']",
+        "False is not true : probe port differs from compose published port: ['http://127.0.0.1:8080/']",
+        "False is not true : probe port differs from compose published port: ['http://127.0.0.1:8080/']",
+        "False is not true : probe port differs from compose published port: ['http://127.0.0.1:8080/']"
+      ],
+      "exit_code": 1
+    },
+    {
+      "knife": "K-PREP-24",
+      "variant": "default",
+      "test": "UpdateGuards.test_T_PREP_01_13_port_environment",
+      "status": "RED",
+      "reason": [
+        "{'PORT_set': True, 'PORT': '8080'} != {'PORT_set': True, 'PORT': '9400'}",
+        "{'PORT_set': True, 'PORT': '8080'} != {'PORT_set': True, 'PORT': '9400'}",
+        "{'PORT_set': True, 'PORT': '8080'} != {'PORT_set': True, 'PORT': '9400'}",
+        "{'PORT_set': True, 'PORT': '8080'} != {'PORT_set': True, 'PORT': '9400'}",
+        "{'PORT_set': True, 'PORT': '8080'} != {'PORT_set': True, 'PORT': '9400'}",
+        "{'PORT_set': True, 'PORT': '8080'} != {'PORT_set': True, 'PORT': ''}",
+        "{'PORT_set': True, 'PORT': '8080'} != {'PORT_set': True, 'PORT': ''}",
+        "{'PORT_set': True, 'PORT': '8080'} != {'PORT_set': True, 'PORT': ''}",
+        "{'PORT_set': True, 'PORT': '8080'} != {'PORT_set': True, 'PORT': ''}",
+        "{'PORT_set': True, 'PORT': '8080'} != {'PORT_set': True, 'PORT': ''}",
+        "{'PORT_set': True, 'PORT': '8080'} != {'PORT_set': True, 'PORT': '9400'}",
+        "{'PORT_set': True, 'PORT': '8080'} != {'PORT_set': True, 'PORT': '9400'}",
+        "{'PORT_set': True, 'PORT': '8080'} != {'PORT_set': True, 'PORT': '9400'}",
+        "{'PORT_set': True, 'PORT': '8080'} != {'PORT_set': True, 'PORT': '9400'}",
+        "{'PORT_set': True, 'PORT': '8080'} != {'PORT_set': True, 'PORT': '9400'}",
+        "{'PORT_set': True, 'PORT': '8080'} != {'PORT_set': True, 'PORT': ''}",
+        "{'PORT_set': True, 'PORT': '8080'} != {'PORT_set': True, 'PORT': ''}",
+        "{'PORT_set': True, 'PORT': '8080'} != {'PORT_set': True, 'PORT': ''}",
+        "{'PORT_set': True, 'PORT': '8080'} != {'PORT_set': True, 'PORT': ''}",
+        "{'PORT_set': True, 'PORT': '8080'} != {'PORT_set': True, 'PORT': ''}",
+        "False is not true : probe port differs from compose published port: ['http://127.0.0.1:8080/']",
+        "False is not true : probe port differs from compose published port: ['http://127.0.0.1:8080/']",
+        "False is not true : probe port differs from compose published port: ['http://127.0.0.1:8080/']",
+        "False is not true : probe port differs from compose published port: ['http://127.0.0.1:8080/']",
+        "{'PORT_set': True, 'PORT': '8080'} != {'PORT_set': True, 'PORT': '9400'}",
+        "{'PORT_set': True, 'PORT': '8080'} != {'PORT_set': True, 'PORT': '9400'}",
+        "{'PORT_set': True, 'PORT': '8080'} != {'PORT_set': True, 'PORT': '9400'}",
+        "{'PORT_set': True, 'PORT': '8080'} != {'PORT_set': True, 'PORT': '9400'}",
+        "{'PORT_set': True, 'PORT': '8080'} != {'PORT_set': True, 'PORT': '9400'}",
+        "{'PORT_set': True, 'PORT': '8080'} != {'PORT_set': True, 'PORT': ''}",
+        "{'PORT_set': True, 'PORT': '8080'} != {'PORT_set': True, 'PORT': ''}",
+        "{'PORT_set': True, 'PORT': '8080'} != {'PORT_set': True, 'PORT': ''}",
+        "{'PORT_set': True, 'PORT': '8080'} != {'PORT_set': True, 'PORT': ''}",
+        "{'PORT_set': True, 'PORT': '8080'} != {'PORT_set': True, 'PORT': ''}",
+        "False is not true : probe port differs from compose published port: ['http://127.0.0.1:8080/']",
+        "{'PORT_set': True, 'PORT': '8080'} != {'PORT_set': True, 'PORT': '9400'}",
+        "{'PORT_set': True, 'PORT': '8080'} != {'PORT_set': True, 'PORT': '9400'}"
+      ],
+      "exit_code": 1
+    },
+    {
+      "knife": "K-PREP-25",
+      "variant": "default",
+      "test": "UpdateGuards.test_T_PREP_01_13_port_environment",
+      "status": "RED",
+      "reason": [
+        "False is not true : probe port differs from compose published port: ['http://127.0.0.1:8080/']",
+        "'\"9000\"' != '9000'"
+      ],
+      "exit_code": 1
+    },
+    {
+      "knife": "K-PREP-26",
+      "variant": "jq",
+      "test": "UpdateGuards.test_T_PREP_01_13_port_environment",
+      "status": "RED",
+      "reason": [
+        "False is not true : probe port differs from compose published port: ['http://127.0.0.1:8080/', 'http://127.0.0.1:8080/memory/mcp']",
+        "'' != '9300'"
+      ],
+      "exit_code": 1
+    },
+    {
+      "knife": "K-PREP-26",
+      "variant": "no-helper",
+      "test": "UpdateGuards.test_T_PREP_01_13_port_environment",
+      "status": "RED",
+      "reason": [
+        "False is not true : probe port differs from compose published port: ['http://127.0.0.1:8080/']",
+        "'' != '9300'"
+      ],
+      "exit_code": 1
+    },
+    {
+      "knife": "K-PREP-27",
+      "variant": "default",
+      "test": "UpdateGuards.test_T_PREP_01_13_port_environment",
+      "status": "RED",
+      "reason": [
+        "False is not true : probe port differs from compose published port: ['http://127.0.0.1:9000/']",
+        "False is not true : probe port differs from compose published port: ['http://127.0.0.1:9000/']",
+        "False is not true : probe port differs from compose published port: ['http://127.0.0.1:9300/']",
+        "False is not true : probe port differs from compose published port: ['http://127.0.0.1:9000/']",
+        "False is not true : probe port differs from compose published port: ['http://127.0.0.1:8080/']",
+        "False is not true : probe port differs from compose published port: ['http://127.0.0.1:9000/']",
+        "False is not true : probe port differs from compose published port: ['http://127.0.0.1:9000/']",
+        "False is not true : probe port differs from compose published port: ['http://127.0.0.1:9300/']",
+        "False is not true : probe port differs from compose published port: ['http://127.0.0.1:9000/']"
+      ],
+      "exit_code": 1
+    }
+  ]
+}
