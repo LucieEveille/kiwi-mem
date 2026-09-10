@@ -138,6 +138,7 @@ class BuildGuards(unittest.TestCase):
         actual, body = result
         self.assertEqual(actual, status, body.decode(errors='replace'))
         if code:
+            self.assertTrue(body.startswith(b'{'), 'rejection must use stable JSON, not SDK plaintext')
             data = json.loads(body)
             self.assertEqual(data['error'], code)
             self.assertEqual(data['error_code'], code)
@@ -188,10 +189,12 @@ class BuildGuards(unittest.TestCase):
 
     def test_T_BUILD_01_04_origin_matrix(self):
         good = [None,'http://localhost','http://localhost:8123','http://127.0.0.1',
-                'http://127.0.0.1:8123','http://[::1]','http://[::1]:8123','https://ok.example']
-        bad = ['https://evil.example','https://named.example','https://ok.example.evil']
+                'http://127.0.0.1:8123','http://[::1]','http://[::1]:8123','https://ok.example',
+                'https://port.example:8123']
+        bad = ['https://evil.example','https://named.example','https://ok.example.evil',
+               'https://evil.example/https://port.example:8123']
         for results in self.run_sdk([scope_for('10.0.0.5:8080',o) for o in good+bad],
-                                    hosts='named.example', origins='https://ok.example'):
+                                    hosts='named.example', origins='https://ok.example,https://port.example:*'):
             for i, result in enumerate(results):
                 self.assert_result(result,200 if i<len(good) else 403,
                                    None if i<len(good) else 'mcp_origin_not_allowed')
