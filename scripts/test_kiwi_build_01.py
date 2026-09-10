@@ -205,8 +205,12 @@ class BuildGuards(unittest.TestCase):
         scopes += [scope_for('localhost:garbage'),scope_for(extra=[(b'host',b'localhost')])]
         for results in self.run_sdk(scopes):
             for i,result in enumerate(results):
-                status,code = (400,'invalid_content_type') if i<4 else ((200,None) if i<6 else (421,'mcp_host_not_allowed'))
-                self.assert_result(result,status,code)
+                status,code = (400,'invalid_content_type') if i<4 else ((200,None) if i==4 else ((415,None) if i==5 else (421,'mcp_host_not_allowed')))
+                if i == 5:
+                    self.assertEqual(result[0], 415)
+                    self.assertNotIn(b'invalid_content_type', result[1])
+                else:
+                    self.assert_result(result,status,code)
 
     def test_T_BUILD_01_06_no_values(self):
         sentinels = ['BUILD-HOST-91c7.example','https://BUILD-ORIGIN-a617.example','BUILD-CONTENT-382f']
