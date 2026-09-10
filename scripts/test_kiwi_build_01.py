@@ -367,7 +367,7 @@ class BuildGuards(unittest.TestCase):
             sock=socket.socket()
             sock.bind(('127.0.0.1',0)); port=sock.getsockname()[1]
             app=sdk.streamable_http_app() if transport=='streamable_http' else sdk.sse_app()
-            server=uvicorn.Server(uvicorn.Config(app,log_level='error',lifespan='on'))
+            server=uvicorn.Server(uvicorn.Config(app,log_level='error',lifespan='on', timeout_graceful_shutdown=1))
             thread=threading.Thread(target=server.run,kwargs={'sockets':[sock]},daemon=True)
             thread.start()
             try:

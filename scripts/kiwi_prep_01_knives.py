@@ -21,8 +21,8 @@ BOM_RULE = r'NR==1 && substr($0,1,3)=="\357\273\277" { $0=substr($0,4) }'
 MUTATIONS = {
  1: ('mcp_access.py','                    local = True','                    local = False','ApplicationGuards.test_T_PREP_01_02_observation'),
  2: ('mcp_access.py',"            host = parse_authority(authority)","            print(authority)\n            host = parse_authority(authority)",'ApplicationGuards.test_T_PREP_01_02_observation'),
- 3: ('mcp_access.py',"return {'protection': 'preview',", "return {'last_host': 'configured', 'protection': 'preview',",'ApplicationGuards.test_T_PREP_01_01_status_shape'),
- 4: ('mcp_access.py',"'protection': 'preview'", "'protection': 'enabled'",'ApplicationGuards.test_T_PREP_01_01_status_shape'),
+ 3: ('mcp_access.py',"return {'protection': 'enabled',", "return {'last_host': 'configured', 'protection': 'enabled',",'ApplicationGuards.test_T_PREP_01_01_status_shape'),
+ 4: ('mcp_access.py',"'protection': 'enabled'", "'protection': 'preview'",'ApplicationGuards.test_T_PREP_01_01_status_shape'),
  5: ('mcp_access.py','return value.isascii() and parse_authority(value, wildcard_port=True) is not None','return value.startswith("*.") or parse_authority(value, wildcard_port=True) is not None','ApplicationGuards.test_T_PREP_01_01_status_shape'),
  6: ('mcp_access.py','        await app(scope, receive, send)',"        from starlette.responses import Response\n        await Response(status_code=400)(scope, receive, send)",'ApplicationGuards.test_T_PREP_01_03_passthrough'),
  7: ('database.py','id SMALLINT PRIMARY KEY DEFAULT 1 CHECK (id = 1)','id SMALLINT PRIMARY KEY DEFAULT 1','PG'),
@@ -39,8 +39,8 @@ MUTATIONS = {
  18: ('scripts/update_support.py',"'--max-time', '5', ", "",'UpdateGuards.test_T_PREP_01_10_initialize_probe'),
  19: ('requirements.txt','starlette==1.3.1\n','', 'DeliveryGuards.test_T_PREP_01_11_delivery_contract'),
  20: ('scripts/upgrade_gates.json','"mcp_access_control":false','"mcp_access_control":true','DeliveryGuards.test_T_PREP_01_11_delivery_contract'),
- 21: ('mcp_server.py','FastMCP("Memory Garden", stateless_http=True)','FastMCP("Memory Garden", stateless_http=True, transport_security=None)','DeliveryGuards.test_T_PREP_01_11_delivery_contract'),
- 22: ('mcp_access.py','import ipaddress','from mcp.server.transport_security import TransportSecuritySettings\nimport ipaddress','DeliveryGuards.test_T_PREP_01_12_no_protection_wiring'),
+ 21: ('mcp_server.py','FastMCP("Memory Garden", stateless_http=True, transport_security=_SECURITY)','FastMCP("Memory Garden", stateless_http=True)','DeliveryGuards.test_T_PREP_01_11_delivery_contract'),
+ 22: ('mcp_access.py','    from mcp.server.transport_security import TransportSecuritySettings','    # mutation: omit required transport import','DeliveryGuards.test_T_PREP_01_12_no_protection_wiring'),
  23: ('scripts/update.sh','        LISTEN_PORT="$PORT_FALLBACK"','        LISTEN_PORT=8080','UpdateGuards.test_T_PREP_01_13_port_environment'),
  24: ('scripts/update.sh','LISTEN_PORT=8080','PORT=8080\nLISTEN_PORT=8080','UpdateGuards.test_T_PREP_01_13_port_environment'),
  25: ('scripts/update.sh','value=substr(value,2,length(value)-2);','value=value;','UpdateGuards.test_T_PREP_01_13_port_environment'),
@@ -89,7 +89,7 @@ def execute(output, selected):
     head=subprocess.check_output(['git','rev-parse','HEAD'],cwd=ROOT,text=True).strip()
     files=sorted({v[0] for v in MUTATIONS.values()}|{'main.py','scripts/test_kiwi_prep_01.py','scripts/test_kiwi_safety_sync.py','scripts/prep_update_fixture.py','scripts/update_support_jq.sh','scripts/prep_authority.jq','scripts/kiwi_prep_01_knives.py','scripts/test_prep_framework_compat.py','scripts/check_prep_audit.py'})
     blobs={p:subprocess.check_output(['git','rev-parse',head+':'+p],cwd=ROOT,text=True).strip() for p in files}
-    ledger=dict(head=head,source_blobs=blobs,preflight=preflight.returncode,restored=restored.returncode,results=results)
+    ledger=dict(reanchored_by='KIWI-BUILD-01', head=head,source_blobs=blobs,preflight=preflight.returncode,restored=restored.returncode,results=results)
     Path(output).write_text(json.dumps(ledger,ensure_ascii=False,indent=2)+'\n',encoding='utf-8')
     return 0 if restored.returncode==0 and all(r['status']=='RED' for r in results) else 1
 
@@ -114,8 +114,8 @@ KNIVES = [
     (18, "10", "Remove MCP probe timeout"),
     (19, "11", "Remove Starlette pin"),
     (20, "11", "Enable upgrade gate early"),
-    (21, "11", "Wire transport_security into a FastMCP constructor"),
-    (22, "12", "Import transport protection in production"),
+    (21, "11", "Remove transport_security from a FastMCP constructor"),
+    (22, "12", "Remove transport protection import"),
     (23, "13", "Discard helper-free dotenv port fallback"),
     (24, "13", "Overwrite the operator PORT environment"),
     (25, "13", "Remove helper-free paired quote trimming"),

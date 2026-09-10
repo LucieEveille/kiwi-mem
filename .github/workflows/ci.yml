@@ -58,9 +58,7 @@ jobs:
 
       - name: 安装运行依赖
         id: prep-dependencies
-        # BUILD stage A: reproduce the accepted PREP runtime for red evidence.
-        # Stage B removes this test-only constraint when requirements is pinned.
-        run: pip install -r requirements.txt 'mcp==1.12.4'
+        run: pip install -r requirements.txt
 
       - name: 运行 SEC-01a 凭据边界守卫
         run: |
@@ -90,12 +88,6 @@ jobs:
         if: ${{ !cancelled() && steps.prep-dependencies.outcome == 'success' }}
         run: python scripts/test_kiwi_prep_01.py
 
-      - name: BUILD-01 阶段 A 红证与刀目录
-        if: ${{ !cancelled() && steps.prep-dependencies.outcome == 'success' }}
-        run: |
-          python scripts/kiwi_build_01_knives.py --list
-          python scripts/test_kiwi_build_01.py
-
       - name: PREP 框架兼容与镜像构建
         run: |
           python scripts/test_prep_framework_compat.py
@@ -111,4 +103,27 @@ jobs:
           /tmp/prep-audit/bin/pip install pip-audit
           /tmp/prep-audit/bin/pip-audit --disable-pip --no-deps -r /tmp/prep-resolved.txt -f json -o /tmp/prep-audit.json || test $? -eq 1
           cat /tmp/prep-audit.json
-          python scripts/check_prep_audit.py /tmp/prep-audit.json
+          python scripts/check_build_audit.py /tmp/prep-audit.json
+
+      - name: BUILD-01 应用側守卫
+        if: ${{ !cancelled() && steps.prep-dependencies.outcome == 'success' }}
+        run: python scripts/test_kiwi_build_01.py
+
+      - name: BUILD-01 变异与 SEC 回归刀
+        run: |
+          python scripts/kiwi_build_01_knives.py --output /tmp/kiwi_build_01_knives.json
+          python scripts/kiwi_sec_01a_knives.py --run --output /tmp/kiwi_sec_01a_build_knives.json
+          pip check
+          python scripts/check_build_audit.py /tmp/prep-audit.json
+
+      - name: 保存 BUILD 验证证据
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-01-evidence
+          path: |
+            /tmp/kiwi_build_01_knives.json
+            /tmp/kiwi_prep_01_knives.json
+            /tmp/kiwi_sec_01a_build_knives.json
+            /tmp/prep-audit.json
+            /tmp/prep-resolved.txt

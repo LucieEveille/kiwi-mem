@@ -1,4 +1,4 @@
-"""MCP access preview only. Never authorizes or rejects a request.
+"""MCP access observation and transport security.
 
 Authority parsing is dependency-free so the host updater can use the same
 registration rules without installing the application's Python dependencies.
@@ -103,26 +103,118 @@ def observe_mcp_access(app):
     return observed
 
 
-async def mcp_access_status():
+async def mcp_access_status(version='1.7.0'):
     from starlette.responses import JSONResponse
     try:
         pool = await get_pool()
         async with pool.acquire() as conn:
             row = await conn.fetchrow('SELECT foreign_host_seen, last_seen_at FROM mcp_access_observation WHERE id=1')
         timestamp = row['last_seen_at'] if row else None
-        return {'protection': 'preview', **read_allowlists(), 'ip_literal_allowed': True,
+        return {'protection': 'enabled', **read_allowlists(), 'ip_literal_allowed': True,
                 'foreign_host_seen': bool(row and row['foreign_host_seen']),
                 'foreign_host_last_seen_at': timestamp.isoformat() if timestamp else None,
-                'version': '1.7.0'}
+                'version': version}
     except Exception:
         return JSONResponse({'error': 'internal_error', 'error_code': 'internal_error'}, status_code=500)
 
 
-def log_mcp_access_preview():
+def log_mcp_access_summary():
     counts = read_allowlists()
     for field in ('hosts', 'origins'):
         if counts[field+'_invalid']:
             print(f"event=mcp_allowlist_invalid_item field={field} increment={counts[field+'_invalid']}")
-    print(f"event=mcp_allowlist_preview hosts={counts['hosts_registered']} origins={counts['origins_registered']} increment=1")
+    print(f"event=mcp_access_control hosts={counts['hosts_registered']} origins={counts['origins_registered']} ip_literal=true")
     if not counts['hosts_registered']:
-        print('预告：下一大版本起 MCP 只接受登记过的访问地址（本机与 IP 直连无需登记）；用域名访问 MCP 请先在 .env 登记 MCP_ALLOWED_HOSTS / MCP_ALLOWED_ORIGINS，见 docs/UPGRADING.md')
+        print('当前 MCP 只接受本机与 IP 直连；用域名访问 MCP 需登记 MCP_ALLOWED_HOSTS / MCP_ALLOWED_ORIGINS，见 docs/UPGRADING.md')
+
+
+_BUILTIN_HOSTS = ['localhost', 'localhost:*', '127.0.0.1', '127.0.0.1:*', '[::1]', '[::1]:*']
+_BUILTIN_ORIGINS = ['http://localhost', 'http://localhost:*', 'http://127.0.0.1', 'http://127.0.0.1:*', 'http://[::1]', 'http://[::1]:*']
+_transport_security = None
+
+
+def build_transport_security():
+    # Lazy SDK import preserves dependency-free host updater parsing.
+    from mcp.server.transport_security import TransportSecuritySettings
+    global _transport_security
+    if _transport_security is None:
+        hosts = [v.strip() for v in os.getenv('MCP_ALLOWED_HOSTS', '').split(',') if v.strip() and valid_host(v.strip())]
+        origins = [v.strip() for v in os.getenv('MCP_ALLOWED_ORIGINS', '').split(',') if v.strip() and valid_origin(v.strip())]
+        _transport_security = TransportSecuritySettings(
+            enable_dns_rebinding_protection=True,
+            allowed_hosts=list(dict.fromkeys(_BUILTIN_HOSTS + hosts)),
+            allowed_origins=list(dict.fromkeys(_BUILTIN_ORIGINS + origins)),
+        )
+    return _transport_security
+
+
+def install_transport_security_log_filter():
+    import logging
+    logger = logging.getLogger('mcp.server.transport_security')
+    if any(getattr(f, '_kiwi_transport_filter', False) for f in logger.filters):
+        return
+
+    class TransportFilter(logging.Filter):
+        _kiwi_transport_filter = True
+
+        def filter(self, record):
+            message = record.getMessage()
+            for prefix, reason in (
+                ('Invalid Host header', 'host'), ('Missing Host header', 'host'),
+                ('Invalid Origin header', 'origin'),
+                ('Invalid Content-Type header', 'content_type'),
+                ('Missing Content-Type header', 'content_type'),
+            ):
+                if message.startswith(prefix):
+                    record.msg = 'mcp_transport_security_rejected reason=' + reason
+                    record.args = ()
+                    break
+            return True
+
+    logger.addFilter(TransportFilter())
+
+
+def _listed(raw, allowed):
+    return raw in allowed or any(p.endswith(':*') and raw.startswith(p[:-2] + ':') for p in allowed)
+
+
+def guard_mcp_access(app, settings):
+    async def reject(scope, receive, send, status, code, reason, field=None):
+        import logging
+        from starlette.responses import JSONResponse
+        payload = {'error': code, 'error_code': code}
+        if field:
+            payload['hint'] = '请配置 ' + field + '，见 docs/UPGRADING.md'
+        logging.getLogger(__name__).warning('event=mcp_access_rejected reason=%s increment=1', reason)
+        await JSONResponse(payload, status_code=status)(scope, receive, send)
+
+    async def guarded(scope, receive, send):
+        if scope['type'] != 'http':
+            return await app(scope, receive, send)
+        from starlette.datastructures import Headers
+        headers = Headers(scope=scope)
+        ct = headers.get('content-type')
+        if scope.get('method') == 'POST' and not (bool(ct) and ct.lower().startswith('application/json')):
+            return await reject(scope, receive, send, 400, 'invalid_content_type', 'content_type')
+        host_values = [v for k, v in scope.get('headers', []) if k.lower() == b'host']
+        raw = host_values[0].decode('latin-1') if len(host_values) == 1 else ''
+        authority = parse_authority(raw)
+        if authority is None:
+            return await reject(scope, receive, send, 421, 'mcp_host_not_allowed', 'host', 'MCP_ALLOWED_HOSTS')
+        try:
+            ipaddress.ip_address(authority)
+            is_ip = True
+        except ValueError:
+            is_ip = False
+        if not is_ip and not _listed(raw, settings.allowed_hosts):
+            return await reject(scope, receive, send, 421, 'mcp_host_not_allowed', 'host', 'MCP_ALLOWED_HOSTS')
+        origin = headers.get('origin')
+        if origin is not None and not _listed(origin, settings.allowed_origins):
+            return await reject(scope, receive, send, 403, 'mcp_origin_not_allowed', 'origin', 'MCP_ALLOWED_ORIGINS')
+        if is_ip:
+            # MCP 1.29.1 consumes Host only in its security layer. Reaudit on upgrade.
+            forwarded = dict(scope)
+            forwarded['headers'] = [(k, b'127.0.0.1' if k.lower() == b'host' else v) for k, v in scope.get('headers', [])]
+            return await app(forwarded, receive, send)
+        return await app(scope, receive, send)
+    return guarded

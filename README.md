@@ -274,9 +274,9 @@ https://你的域名/admin
 
 ### 第六步：以后怎么跟上新版本
 
-#### 2.0 预告：MCP 访问地址登记
+#### 2.0 集成分支：MCP 访问地址登记
 
-1.7.0 仅预告，不启用访问保护。用域名连接 MCP 的用户请预配 `MCP_ALLOWED_HOSTS`，浏览器客户端另配 `MCP_ALLOWED_ORIGINS`。
+本集成分支已启用 MCP 访问保护，待随 2.0 发布。MCP 只接受登记过的访问地址；未配置时先接受本机地址（含 IP 直连）。用域名连接 MCP 的用户请配置 `MCP_ALLOWED_HOSTS`，浏览器客户端另配 `MCP_ALLOWED_ORIGINS`。
 Compose 用户修改 .env 后须 `docker compose up -d --build`；Zeabur 可引用 `${ZEABUR_WEB_DOMAIN}`。
 更新预检的适用范围、临时域名与登记示例见 [升级指南](docs/UPGRADING.md)。
 
@@ -552,7 +552,7 @@ GitHub 上那个 fork 留着不管就行，删不删都不影响服务器。
 | `PORT` | 端口 | `8080` |
 | `MAX_MEMORIES_INJECT` | 每次注入最大记忆条数 | `15` |
 | `MEMORY_EXTRACT_INTERVAL` | 提取间隔（轮） | `3` |
-| `MCP_ALLOWED_HOSTS` | 空 | MCP 2.0 域名登记，多个逗号分隔；1.7.0 仅预告 |
+| `MCP_ALLOWED_HOSTS` | 空 | MCP 域名登记，多个逗号分隔；与实际 Host 一致（含端口） |
 | `MCP_ALLOWED_ORIGINS` | 空 | 浏览器类 MCP 客户端的完整 Origin 登记 |
 | `CORS_ORIGINS` | 前端域名白名单 | `http://localhost:5173` |
 | `JIEBA_CUSTOM_WORDS` | jieba 自定义词汇 | 空 |

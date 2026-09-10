@@ -494,7 +494,7 @@ class DeliveryGuards(unittest.TestCase):
         for path, tokens in {
             'docs/UPGRADING.md':['不改变任何访问行为','不支持 SSE','up -d --build','${ZEABUR_WEB_DOMAIN}','CVE-2025-66416','CVE-2026-52869','CVE-2026-59950','BUILD-01'],
             'CHANGELOG.md':['1.7.0','CVE-2026-59950'],
-            'README.md':['不支持流式与 MCP'], 'README_EN.md':['2.0 notice'],
+            'README.md':['不支持流式与 MCP'], 'README_EN.md':['2.0 MCP access controls'],
             '.env.example':['MCP_ALLOWED_HOSTS','MCP_ALLOWED_ORIGINS'],
             'docker-compose.yml':['MCP_ALLOWED_HOSTS','MCP_ALLOWED_ORIGINS'],
             'requirements.txt':['fastapi==0.141.1','starlette==1.3.1','mcp==1.29.1','httpx==0.27.2','uvicorn==0.31.1'],
