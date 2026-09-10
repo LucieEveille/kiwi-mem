@@ -2,7 +2,7 @@
   "ticket": "KIWI-BUILD-01",
   "stage": "A",
   "implementation_base": "6b2b43d0b746fb9c69f52f54d0347bd63e3ae9f4",
-  "tested_head": "8f1f848",
+  "tested_head": "8f1f84848bb58d864482401cc7d85beb8e706298",
   "build_tests": 13,
   "assertion_failures": 13,
   "errors": 0,

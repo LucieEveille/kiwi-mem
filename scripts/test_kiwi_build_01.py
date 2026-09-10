@@ -111,14 +111,36 @@ class BuildGuards(unittest.TestCase):
         os.environ.update(MCP_ALLOWED_HOSTS=hosts, MCP_ALLOWED_ORIGINS=origins)
         return self.required('build_transport_security')()
 
+    def checked_servers(self, settings):
+        from mcp.server.fastmcp import FastMCP
+        from mcp.server.transport_security import TransportSecuritySettings
+        # Import before recording to avoid counting an initial import plus reload.
+        module = importlib.import_module('mcp_server')
+        seen = []
+        real_init = FastMCP.__init__
+        def recording_init(instance, *args, **kwargs):
+            seen.append(kwargs.get('transport_security'))
+            return real_init(instance, *args, **kwargs)
+        with patch.object(FastMCP, '__init__', recording_init):
+            servers = importlib.reload(module)
+        self.assertEqual(len(seen), 2)
+        for obj in seen:
+            self.assertIs(obj, settings)
+        self.assertIs(servers._SECURITY, settings)
+        for sdk in (servers.mcp_memory, servers.mcp_calendar):
+            internal = sdk.settings.transport_security
+            self.assertIsInstance(internal, TransportSecuritySettings)
+            self.assertEqual(internal.model_dump(), settings.model_dump())
+            self.assertIs(internal.enable_dns_rebinding_protection, True)
+        return servers
+
     def run_sdk(self, scopes, *, hosts='', origins='', guarded=True):
         settings = self.settings(hosts, origins)
         guard = self.required('guard_mcp_access')
         self.required('install_transport_security_log_filter')()
-        servers = importlib.reload(importlib.import_module('mcp_server'))
-        self.assertIs(servers.mcp_memory.settings.transport_security, settings)
-        self.assertIs(servers.mcp_calendar.settings.transport_security, settings)
-        before = repr(settings)
+        servers = self.checked_servers(settings)
+        objects = [settings, servers.mcp_memory.settings.transport_security, servers.mcp_calendar.settings.transport_security]
+        before = [repr(obj) for obj in objects]
 
         async def run():
             results = []
@@ -131,7 +153,7 @@ class BuildGuards(unittest.TestCase):
                     results.append([await request(app, copy.deepcopy(s)) for s in scopes])
             return results
         results = asyncio.run(run())
-        self.assertEqual(repr(settings), before, 'shared settings mutated by requests')
+        self.assertEqual([repr(obj) for obj in objects], before, 'settings or SDK copies mutated by requests')
         return results
 
     def assert_result(self, result, status, code=None):
@@ -173,9 +195,7 @@ class BuildGuards(unittest.TestCase):
         self.assertEqual(counts['hosts_invalid'], 3)
         self.assertEqual(counts['origins_invalid'], 2)
         self.assertIs(self.access.build_transport_security(), settings)
-        servers = importlib.reload(importlib.import_module('mcp_server'))
-        self.assertIs(servers.mcp_memory.settings.transport_security, settings)
-        self.assertIs(servers.mcp_calendar.settings.transport_security, settings)
+        servers = self.checked_servers(settings)
 
     def test_T_BUILD_01_03_host_matrix(self):
         good = ['localhost','localhost:8123','127.0.0.1','127.0.0.1:8123','[::1]','[::1]:8123',
@@ -291,14 +311,14 @@ class BuildGuards(unittest.TestCase):
         output=''.join(s.getvalue() for s in streams)
         self.assertIn('event=mcp_access_control hosts=0 origins=0 ip_literal=true',output)
         self.assertIn('MCP_ALLOWED_HOSTS',output)
-        self.assertNotIn('预告',output)
+        self.assertNotIn('棰勫憡',output)
         with patch.dict(os.environ,{'MCP_ALLOWED_HOSTS':'registered.example, bad item'}),captures() as streams:
             log()
         output=''.join(s.getvalue() for s in streams)
         self.assertIn('event=mcp_access_control hosts=1 origins=0 ip_literal=true',output)
         self.assertIn('event=mcp_allowlist_invalid_item field=hosts increment=1',output)
         self.assertNotIn('MCP_ALLOWED_HOSTS',output)
-        for value in ('registered.example','bad item','预告'):
+        for value in ('registered.example','bad item','棰勫憡'):
             self.assertNotIn(value,output)
 
     def test_T_BUILD_01_10_wiring(self):

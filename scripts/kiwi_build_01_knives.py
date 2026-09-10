@@ -9,7 +9,7 @@ import json
 
 INVENTORY = [
     ('memory transport_security keyword removed', ['T-10','T-12']),
-    ('calendar settings replaced with another object', ['T-02']),
+    ('calendar passes TransportSecuritySettings(**_SECURITY.model_dump()), an equal distinct object', ['T-02','T-10']),
     ('unregistered Host accepted by guard', ['T-03']),
     ('IP parsed using a numeric string prefix', ['T-07']),
     ('IP skips Origin validation', ['T-04']),
