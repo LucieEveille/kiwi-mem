@@ -74,14 +74,14 @@ from config import (
     get_all_config, set_config, get_config, get_config_int, get_config_bool, get_config_float,
 )
 from memory_extractor import extract_memories
-from mcp_server import get_mcp_app, get_calendar_mcp_app, mcp_memory, mcp_calendar
+from mcp_server import get_mcp_app, get_calendar_mcp_app, mcp_memory, mcp_calendar, _SECURITY
 from web_search import SEARCH_ENGINES, web_search, format_results_for_prompt, get_engine_list
 from mcp_client import get_tools_for_servers, call_tool, call_tools_batch, clear_tool_cache
 from anthropic_adapter import (
     to_anthropic_request, to_anthropic_headers, get_anthropic_url,
     from_anthropic_response, anthropic_stream_to_openai,
 )
-from mcp_access import observe_mcp_access, mcp_access_status, log_mcp_access_preview
+from mcp_access import observe_mcp_access, guard_mcp_access, mcp_access_status, log_mcp_access_summary
 
 # ============================================================
 # 配置项 —— 全部从环境变量读取，部署时在云平台面板里设置
@@ -289,7 +289,7 @@ async def lifespan(app: FastAPI):
     async with mcp_memory.session_manager.run():
         async with mcp_calendar.session_manager.run():
             print("✅ MCP server 已启动（/memory/mcp + /calendar/mcp）")
-            log_mcp_access_preview()
+            log_mcp_access_summary()
 
             # v6.3：仅当 tool_drawer_enabled=true 时初始化工具抽屉
             # （默认 false，开源用户行为不变；抽屉打开后通过向量路由按需展开工具）
@@ -4713,7 +4713,7 @@ async def api_update_scene(scene_id: int, req: Request):
 
 @app.get("/admin/mcp-access-status")
 async def api_mcp_access_status():
-    return await mcp_access_status()
+    return await mcp_access_status(version=VERSION)
 
 
 @app.get("/admin/config")
@@ -6276,8 +6276,8 @@ async def api_delete_reminder(rid: str):
 # 记忆系统：/memory/mcp
 #   工具：search_memory, save_memory, get_recent, trigger_digest
 
-app.mount("/memory", observe_mcp_access(get_mcp_app()))
-app.mount("/calendar", observe_mcp_access(get_calendar_mcp_app()))
+app.mount("/memory", observe_mcp_access(guard_mcp_access(get_mcp_app(), _SECURITY)))
+app.mount("/calendar", observe_mcp_access(guard_mcp_access(get_calendar_mcp_app(), _SECURITY)))
 
 # 管理面板静态资源（css/js/assets）。必须在所有 /admin/* API 路由之后挂载，
 # 这样显式 API 路由优先匹配，本挂载只接管 /admin/css、/admin/js 等静态文件。

@@ -1,0 +1,225 @@
+{
+  "head": "74df0e2738fb554ff4aee0b161ab42fb86cdf4f7",
+  "source_blobs": {
+    ".github/workflows/ci.yml": "a205b376e5200a906a299307f7e02a2634e9fdaa",
+    "Dockerfile": "81788e51ecedda1f88da5a156ee737ba4f6a5703",
+    "main.py": "105b711ee5de7d4f35aae425fddc4dc7455b3b56",
+    "mcp_access.py": "c360d8f58aa8e8c465b3a655a07567608dc6f00e",
+    "mcp_server.py": "331a43508e2653b9f7bb547bb25fc3fe8de95161",
+    "requirements.txt": "766edc47c15871b49f6d1a4115c46b7fe4fe4544",
+    "scripts/kiwi_build_01_knives.py": "e1faa9ca99c7f044148143eaf78e28e674c0014f",
+    "scripts/test_kiwi_build_01.py": "b13d7e2c92919f087e0e7ed979eeb5f405539b30"
+  },
+  "preflight": 0,
+  "restored": 0,
+  "results": [
+    {
+      "knife": "K-BUILD-1",
+      "status": "RED",
+      "test": "10",
+      "reason": [
+        "0 != 1 : FastMCP transport_security keyword missing"
+      ],
+      "exit_code": 1
+    },
+    {
+      "knife": "K-BUILD-2",
+      "status": "RED",
+      "test": "02",
+      "reason": [
+        "TransportSecuritySettings(enable_dns_rebinding_protection=True, allowed_hosts=['localhost', 'localhost:*', '127.0.0.1', '127.0.0.1:*', '[::1]', '[::1]:*', 'a.example', 'b.example:*'], allowed_origins=['http://localhost', 'http://localhost:*', 'http://127.0.0.1', 'http://127.0.0.1:*', 'http://[::1]', 'http://[::1]:*', 'https://a.example', 'https://b.example:*']) is not TransportSecuritySettings(enable_dns_rebinding_protection=True, allowed_hosts=['localhost', 'localhost:*', '127.0.0.1', '127.0.0.1:*', '[::1]', '[::1]:*', 'a.example', 'b.example:*'], allowed_origins=['http://localhost', 'http://localhost:*', 'http://127.0.0.1', 'http://127.0.0.1:*', 'http://[::1]', 'http://[::1]:*', 'https://a.example', 'https://b.example:*'])",
+        "<ast.Call object at 0x00000278275D0190> is not an instance of <class 'ast.Name'>"
+      ],
+      "exit_code": 1
+    },
+    {
+      "knife": "K-BUILD-3",
+      "status": "RED",
+      "test": "03",
+      "reason": [
+        "False is not true : rejection must use stable JSON, not SDK plaintext"
+      ],
+      "exit_code": 1
+    },
+    {
+      "knife": "K-BUILD-4",
+      "status": "RED",
+      "test": "07",
+      "reason": [
+        "200 != 421 : event: message"
+      ],
+      "exit_code": 1
+    },
+    {
+      "knife": "K-BUILD-5",
+      "status": "RED",
+      "test": "04",
+      "reason": [
+        "False is not true : rejection must use stable JSON, not SDK plaintext"
+      ],
+      "exit_code": 1
+    },
+    {
+      "knife": "K-BUILD-6",
+      "status": "RED",
+      "test": "07",
+      "reason": [
+        "Lists differ: [\"Tra[162 chars]mple', '10.0.0.5:8080', '[fe80::1]:9000', '10.[788 chars]'])\"] != [\"Tra[162 chars]mple'], allowed_origins=['http://localhost', '[718 chars]'])\"]"
+      ],
+      "exit_code": 1
+    },
+    {
+      "knife": "K-BUILD-7",
+      "status": "RED",
+      "test": "06",
+      "reason": [
+        "'BUILD-HOST-91c7.example' unexpectedly found in '{\"error\":\"mcp_host_not_allowed\",\"error_code\":\"mcp_host_not_allowed\",\"host\":\"BUILD-HOST-91c7.example\",\"hint\":\"请配置 MCP_ALLOWED_HOSTS，见 docs/UPGRADING.md\"}'"
+      ],
+      "exit_code": 1
+    },
+    {
+      "knife": "K-BUILD-8",
+      "status": "RED",
+      "test": "12",
+      "reason": [
+        "'BUILD-direct.example' unexpectedly found in \"Initializing server 'Memory Garden'\\nRegistering handler for ListToolsRequest\\nRegistering handler for CallToolRequest\\nRegistering handler for ListResourcesRequest\\nRegistering handler for ReadResourceRequest\\nRegistering handler for PromptListRequest\\nRegistering handler for GetPromptRequest\\nRegistering handler for ListResourceTemplatesRequest\\nInitializing server 'Calendar & Dream'\\nRegistering handler for ListToolsRequest\\nRegistering handler for CallToolRequest\\nRegistering handler for ListResourcesRequest\\nRegistering handler for ReadResourceRequest\\nRegistering handler for PromptListRequest\\nRegistering handler for GetPromptRequest\\nRegistering handler for ListResourceTemplatesRequest\\nInitializing server 'Memory Garden'\\nRegistering handler for ListToolsRequest\\nRegistering handler for CallToolRequest\\nRegistering handler for ListResourcesRequest\\nRegistering handler for ReadResourceRequest\\nRegistering handler for PromptListRequest\\nRegistering handler for GetPromptRequest\\nRegistering handler for ListResourceTemplatesRequest\\nInitializing server 'Calendar & Dream'\\nRegistering handler for ListToolsRequest\\nRegistering handler for CallToolRequest\\nRegistering handler for ListResourcesRequest\\nRegistering handler for ReadResourceRequest\\nRegistering handler for PromptListRequest\\nRegistering handler for GetPromptRequest\\nRegistering handler for ListResourceTemplatesRequest\\nUsing proactor: IocpProactor\\nStreamableHTTP session manager started\\nStateless mode: Creating new transport for this request\\nInvalid Host header: BUILD-direct.example\\nTerminating session: None\\nStateless mode: Creating new transport for this request\\nRead stream closed by client\\nRead stream closed by client\\nInvalid Host header: 10.0.0.5:8080\\nTerminating session: None\\nStateless mode: Creating new transport for this request\\nRead stream closed by client\\nRead stream closed by client\\nInvalid Content-Type header:  application/json\\nTerminating session: None\\nStreamableHTTP session manager shutting down\\nStreamableHTTP session manager started\\nStateless mode: Creating new transport for this request\\nInvalid Host header: BUILD-direct.example\\nTerminating session: None\\nStateless mode: Creating new transport for this request\\nRead stream closed by client\\nRead stream closed by client\\nInvalid Host header: 10.0.0.5:8080\\nTerminating session: None\\nStateless mode: Creating new transport for this request\\nRead stream closed by client\\nRead stream closed by client\\nInvalid Content-Type header:  application/json\\nTerminating session: None\\nStreamableHTTP session manager shutting down\\nInitializing server 'Memory Garden'\\nRegistering handler for ListToolsRequest\\nRegistering handler for CallToolRequest\\nRegistering handler for ListResourcesRequest\\nRegistering handler for ReadResourceRequest\\nRegistering handler for PromptListRequest\\nRegistering handler for GetPromptRequest\\nRegistering handler for ListResourceTemplatesRequest\\nInitializing server 'Calendar & Dream'\\nRegistering handler for ListToolsRequest\\nRegistering handler for CallToolRequest\\nRegistering handler for ListResourcesRequest\\nRegistering handler for ReadResourceRequest\\nRegistering handler for PromptListRequest\\nRegistering handler for GetPromptRequest\\nRegistering handler for ListResourceTemplatesRequest\\nInitializing server 'Memory Garden'\\nRegistering handler for ListToolsRequest\\nRegistering handler for CallToolRequest\\nRegistering handler for ListResourcesRequest\\nRegistering handler for ReadResourceRequest\\nRegistering handler for PromptListRequest\\nRegistering handler for GetPromptRequest\\nRegistering handler for ListResourceTemplatesRequest\\nInitializing server 'Calendar & Dream'\\nRegistering handler for ListToolsRequest\\nRegistering handler for CallToolRequest\\nRegistering handler for ListResourcesRequest\\nRegistering handler for ReadResourceRequest\\nRegistering handler for PromptListRequest\\nRegistering handler for GetPromptRequest\\nRegistering handler for ListResourceTemplatesRequest\\nStreamableHTTP session manager started\\nStateless mode: Creating new transport for this request\\nInvalid Host header: BUILD-direct.example\\nTerminating session: None\\nStateless mode: Creating new transport for this request\\nRead stream closed by client\\nInvalid Host header: 10.0.0.5:8080\\nTerminating session: None\\nStateless mode: Creating new transport for this request\\nRead stream closed by client\\nInvalid Content-Type header:  application/json\\nTerminating session: None\\nStreamableHTTP session manager shutting down\\nStreamableHTTP session manager started\\nStateless mode: Creating new transport for this request\\nInvalid Host header: BUILD-direct.example\\nTerminating session: None\\nStateless mode: Creating new transport for this request\\nRead stream closed by client\\nInvalid Host header: 10.0.0.5:8080\\nTerminating session: None\\nStateless mode: Creating new transport for this request\\nRead stream closed by client\\nInvalid Content-Type header:  application/json\\nTerminating session: None\\nStreamableHTTP session manager shutting down\\nInvalid Host header: BUILD-direct.example\\nInvalid Host header: 10.0.0.5:8080\\nInvalid Content-Type header:  application/json\\nInvalid Host header: BUILD-direct.example\\nInvalid Host header: 10.0.0.5:8080\\nInvalid Content-Type header:  application/json\\n\""
+      ],
+      "exit_code": 1
+    },
+    {
+      "knife": "K-BUILD-9",
+      "status": "RED",
+      "test": "02",
+      "reason": [
+        "Lists differ: ['loc[46 chars]1:*', '[::1]', '[::1]:*', 'a.example', 'b.example:*', '*.evil'] != ['loc[46 chars]1:*', '[::1]', '[::1]:*', 'a.example', 'b.example:*']"
+      ],
+      "exit_code": 1
+    },
+    {
+      "knife": "K-BUILD-10",
+      "status": "RED",
+      "test": "02",
+      "reason": [
+        "Lists differ: ['htt[94 chars], 'http://[::1]:*'] != ['htt[94 chars], 'http://[::1]:*', 'https://a.example', 'https://b.example:*']"
+      ],
+      "exit_code": 1
+    },
+    {
+      "knife": "K-BUILD-11",
+      "status": "RED",
+      "test": "03",
+      "reason": [
+        "False is not true : rejection must use stable JSON, not SDK plaintext"
+      ],
+      "exit_code": 1
+    },
+    {
+      "knife": "K-BUILD-12",
+      "status": "RED",
+      "test": "05",
+      "reason": [
+        "False is not true : rejection must use stable JSON, not SDK plaintext"
+      ],
+      "exit_code": 1
+    },
+    {
+      "knife": "K-BUILD-13",
+      "status": "RED",
+      "test": "12",
+      "reason": [
+        "False is not True"
+      ],
+      "exit_code": 1
+    },
+    {
+      "knife": "K-BUILD-14",
+      "status": "RED",
+      "test": "03",
+      "reason": [
+        "421 != 200 : Invalid Host header"
+      ],
+      "exit_code": 1
+    },
+    {
+      "knife": "K-BUILD-15",
+      "status": "RED",
+      "test": "01",
+      "reason": [
+        "'mcp==1.29.1' not found in ['fastapi==0.141.1', 'starlette==1.3.1', 'uvicorn==0.31.1', 'httpx==0.27.2', 'asyncpg==0.30.0', 'mcp>=1.8.0', 'python-multipart>=0.0.6', 'pypdf>=4.0.0', 'python-docx>=1.1.0', 'openpyxl>=3.1.0', 'jieba>=0.42.1']"
+      ],
+      "exit_code": 1
+    },
+    {
+      "knife": "K-BUILD-16",
+      "status": "RED",
+      "test": "08",
+      "reason": [
+        "'preview' != 'enabled'"
+      ],
+      "exit_code": 1
+    },
+    {
+      "knife": "K-BUILD-17",
+      "status": "RED",
+      "test": "09",
+      "reason": [
+        "'registered.example' unexpectedly found in 'registered.example, bad item\\nevent=mcp_allowlist_invalid_item field=hosts increment=1\\nevent=mcp_access_control hosts=1 origins=0 ip_literal=true\\n'"
+      ],
+      "exit_code": 1
+    },
+    {
+      "knife": "K-BUILD-18",
+      "status": "RED",
+      "test": "10",
+      "reason": [
+        "'guard_mcp_access' != 'observe_mcp_access'"
+      ],
+      "exit_code": 1
+    },
+    {
+      "knife": "K-BUILD-19",
+      "status": "RED",
+      "test": "07",
+      "reason": [
+        "200 != 421 : event: message"
+      ],
+      "exit_code": 1
+    },
+    {
+      "knife": "K-BUILD-20",
+      "status": "RED",
+      "test": "04",
+      "reason": [
+        "False is not true : rejection must use stable JSON, not SDK plaintext"
+      ],
+      "exit_code": 1
+    },
+    {
+      "knife": "K-BUILD-21",
+      "status": "RED",
+      "test": "07",
+      "reason": [
+        "421 != 200 : Invalid Host header"
+      ],
+      "exit_code": 1
+    },
+    {
+      "knife": "K-BUILD-22",
+      "status": "RED",
+      "test": "07",
+      "reason": [
+        "{'type': 'http', 'asgi': {'version': '3.0'}, 'http_version': '1.1', 'method': 'POST', 'scheme': 'http', 'path': '/mcp', 'raw_path': b'/mcp', 'query_string': b'', 'root_path': '', 'headers': [(b'accept', b'application/json, text/event-stream'), (b'host', b'127.0.0.1'), (b'content-type', b'application/json'), (b'x-test', b'unchanged')], 'server': ('127.0.0.1', 8080), 'client': ('127.0.0.1', 50000)} is not {'type': 'http', 'asgi': {'version': '3.0'}, 'http_version': '1.1', 'method': 'POST', 'scheme': 'http', 'path': '/mcp', 'raw_path': b'/mcp', 'query_string': b'', 'root_path': '', 'headers': [(b'accept', b'application/json, text/event-stream'), (b'host', b'named.example'), (b'content-type', b'application/json'), (b'x-test', b'unchanged')], 'server': ('127.0.0.1', 8080), 'client': ('127.0.0.1', 50000)}"
+      ],
+      "exit_code": 1
+    },
+    {
+      "knife": "K-BUILD-23",
+      "status": "RED",
+      "test": "05",
+      "reason": [
+        "False is not true : rejection must use stable JSON, not SDK plaintext"
+      ],
+      "exit_code": 1
+    }
+  ]
+}

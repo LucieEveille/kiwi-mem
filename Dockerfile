@@ -1,5 +1,5 @@
 # 用 Python 精简镜像（体积小，部署快）
-FROM python:3.12-slim
+FROM public.ecr.aws/docker/library/python:3.12-slim
 
 # 设置工作目录
 WORKDIR /app

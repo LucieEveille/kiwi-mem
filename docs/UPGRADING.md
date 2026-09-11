@@ -56,3 +56,36 @@ Cloudflare Quick Tunnel 官方不支持 SSE，聊天流式与 MCP 不保证可�
 1.7.0 previews MCP address registration without enabling access controls. Register your deployment hostname in `MCP_ALLOWED_HOSTS`; browser clients also need `MCP_ALLOWED_ORIGINS`. Compose users must recreate containers with `docker compose up -d --build`; native Python users must export the variables. Zeabur can reference `${ZEABUR_WEB_DOMAIN}`.
 
 The updater blocks automatic upgrades only when remote access was observed, no valid hostname is configured, and the target enables the breaking-change gate. A registered hostname may still be wrong. Missing observations or failed checks are not evidence of readiness. Zeabur auto-deploy and users skipping 1.7.0 bypass this preflight. Quick Tunnel does not support SSE. The temporary MCP security exception above remains until BUILD-01 ships with 2.0.0; no other audit findings are exempt.
+
+## 2.0 MCP 访问控制（集成分支已启用，待发布）
+
+MCP 只接受登记过的访问地址；未配置时先接受本机地址（含 IP 直连）。IP 零配置只适用于不带 Origin 的非浏览器客户端，以及托管在内置本机源（localhost / 127.0.0.1 / [::1]，任意端口）的浏览器页面；其他浏览器来源仍须登记 Origin。本机制不是登录认证，公版管理面和数据接口仍须用部署边界保护。
+
+Compose 三步：
+1. 在宿主机 `.env` 写 `MCP_ALLOWED_HOSTS=kiwi.example.com`（含实际端口时一起写，或 `kiwi.example.com:*`）。
+2. 浏览器客户端另写 `MCP_ALLOWED_ORIGINS=https://client.example.com`，填客户端真实来源，不自动等同于服务域名。
+3. 执行 `docker compose up -d --build` 重建容器，再以有界 initialize POST 验证。仅 restart 不更新容器环境。
+
+原生 Python：先 export 两变量再启动；Zeabur 环境变量页可填 `MCP_ALLOWED_HOSTS=${ZEABUR_WEB_DOMAIN}`，实际展开效果须部署验收。多域名用逗号，临时域名变化后更新；永久 cloudflared 隧道的 `httpHostHeader` 可改变应用收到的 Host，按实收值登记。大小写及端口须与 Host 原值一致，不接受整个共享托管后缀。Quick Tunnel 不支持 SSE，仍只作为试用路径。
+
+| HTTP | error / error_code | 处理 |
+| --- | --- | --- |
+| 421 | mcp_host_not_allowed | 检查 MCP_ALLOWED_HOSTS、端口、重复或畸形 Host |
+| 403 | mcp_origin_not_allowed | 登记客户端实际 Origin |
+| 400 | invalid_content_type | POST 使用 application/json，无前导空白 |
+
+421/403 另有固定 hint 指向本指南；回包不含请求头值。大写 APPLICATION/JSON 虽通过安全层，仍被 SDK 协议层以 415 拒绝；不要改写它规避协议校验。请求体上限由 SDK 控制为 4 MiB。
+
+### 状态口与观察表
+
+`GET /admin/mcp-access-status` 固定九键：protection（本分支 enabled）、version（当前服务版本）、hosts_registered / origins_registered（合法登记项数）、hosts_invalid / origins_invalid（非法项数）、ip_literal_allowed、foreign_host_seen、foreign_host_last_seen_at。只回数量、布尔与时间，不回地址。`mcp_access_observation` 是独立单行表，存“是否见过非本机非 IP Host”与最近记录时间，观察写入有 60 秒节流；被拒请求也会观察，存储故障不改变访问裁决。
+
+`MCP_AUTH_TOKEN` 已于 SEC-01a (#80) 删除，原变量从未参与校验，部署配置残留可删。`upgrade_gates.json` 仍为 false，由 RELEASE-01 在正式 2.0 升级时置 true；本分支不宣称 /calendar/mcp 外部路由已经修好（归 SEC-01b）。
+
+### English: 2.0 MCP access controls
+
+This integration branch enables MCP transport access controls for 2.0. Configure exact Host values (case and port included, or host:*) in MCP_ALLOWED_HOSTS. Literal IP access without registration applies to non-browser clients without an Origin header, and to browser pages hosted on the built-in local origins (localhost / 127.0.0.1 / [::1], on any port); other browser origins must still be registered in MCP_ALLOWED_ORIGINS. These checks are not authentication for the public admin or data APIs.
+
+Compose: add the Host entry to the host .env, add MCP_ALLOWED_ORIGINS for browser clients, then run `docker compose up -d --build`. Native Python users export the variables before starting. Zeabur may reference `${ZEABUR_WEB_DOMAIN}`; verify expansion after deployment. Update temporary domain entries when they change. A tunnel's httpHostHeader can rewrite the effective Host. Shared hosting suffixes are not trusted globally; Quick Tunnel does not support SSE.
+
+Stable errors are 421 mcp_host_not_allowed, 403 mcp_origin_not_allowed and 400 invalid_content_type; no header values are returned. Uppercase APPLICATION/JSON passes security validation but receives SDK protocol HTTP 415. Requests are limited to 4 MiB by the SDK. The nine-key status endpoint reports counts, flags and a throttled observation timestamp only. MCP_AUTH_TOKEN was unused and removed in SEC-01a. The upgrade gate remains false until RELEASE-01; calendar external routing is tracked in SEC-01b.

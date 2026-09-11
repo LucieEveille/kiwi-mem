@@ -20,6 +20,10 @@ import os
 import json
 import httpx
 from mcp.server.fastmcp import FastMCP
+from mcp_access import build_transport_security, install_transport_security_log_filter
+
+_SECURITY = build_transport_security()
+install_transport_security_log_filter()
 
 # ============================================================
 # 配置
@@ -36,7 +40,7 @@ GATEWAY_HEADERS = {}
 # 模块一：记忆碎片
 # ============================================================
 
-mcp_memory = FastMCP("Memory Garden", stateless_http=True)
+mcp_memory = FastMCP("Memory Garden", stateless_http=True, transport_security=_SECURITY)
 
 
 @mcp_memory.tool()
@@ -278,7 +282,7 @@ async def unlock_memory(memory_id: int) -> str:
 # 模块二：日历 + Dream
 # ============================================================
 
-mcp_calendar = FastMCP("Calendar & Dream", stateless_http=True)
+mcp_calendar = FastMCP("Calendar & Dream", stateless_http=True, transport_security=_SECURITY)
 
 
 # ---- 日历页面 ----
