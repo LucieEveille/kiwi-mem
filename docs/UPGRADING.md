@@ -59,7 +59,7 @@ The updater blocks automatic upgrades only when remote access was observed, no v
 
 ## 2.0 MCP 访问控制（集成分支已启用，待发布）
 
-MCP 只接受登记过的访问地址；未配置时先接受本机地址（含 IP 直连）。IP 零配置只适用于不带 Origin 的非浏览器客户端，浏览器仍须登记 Origin。本机制不是登录认证，公版管理面和数据接口仍须用部署边界保护。
+MCP 只接受登记过的访问地址；未配置时先接受本机地址（含 IP 直连）。IP 零配置只适用于不带 Origin 的非浏览器客户端，以及托管在内置本机源（localhost / 127.0.0.1 / [::1]，任意端口）的浏览器页面；其他浏览器来源仍须登记 Origin。本机制不是登录认证，公版管理面和数据接口仍须用部署边界保护。
 
 Compose 三步：
 1. 在宿主机 `.env` 写 `MCP_ALLOWED_HOSTS=kiwi.example.com`（含实际端口时一起写，或 `kiwi.example.com:*`）。
@@ -84,7 +84,7 @@ Compose 三步：
 
 ### English: 2.0 MCP access controls
 
-This integration branch enables MCP transport access controls for 2.0. Configure exact Host values (case and port included, or host:*) in MCP_ALLOWED_HOSTS; browser clients must register their actual Origin separately. Literal IP access without registration applies only to clients without an Origin header. These checks are not authentication for the public admin or data APIs.
+This integration branch enables MCP transport access controls for 2.0. Configure exact Host values (case and port included, or host:*) in MCP_ALLOWED_HOSTS. Literal IP access without registration applies to non-browser clients without an Origin header, and to browser pages hosted on the built-in local origins (localhost / 127.0.0.1 / [::1], on any port); other browser origins must still be registered in MCP_ALLOWED_ORIGINS. These checks are not authentication for the public admin or data APIs.
 
 Compose: add the Host entry to the host .env, add MCP_ALLOWED_ORIGINS for browser clients, then run `docker compose up -d --build`. Native Python users export the variables before starting. Zeabur may reference `${ZEABUR_WEB_DOMAIN}`; verify expansion after deployment. Update temporary domain entries when they change. A tunnel's httpHostHeader can rewrite the effective Host. Shared hosting suffixes are not trusted globally; Quick Tunnel does not support SSE.
 
