@@ -333,17 +333,8 @@ class BuildGuards(unittest.TestCase):
             names.append(values[0].id)
         self.assertEqual(names[0],names[1])
         tree=ast.parse((ROOT/'main.py').read_text(encoding='utf-8-sig'))
-        mounts=[n for n in ast.walk(tree) if isinstance(n,ast.Call) and isinstance(n.func,ast.Attribute)
-                and n.func.attr=='mount' and n.args and isinstance(n.args[0],ast.Constant)
-                and n.args[0].value in ('/memory','/calendar')]
-        self.assertEqual(len(mounts),2)
-        for mount in mounts:
-            wrapper=mount.args[1]
-            self.assertIsInstance(wrapper,ast.Call)
-            self.assertEqual(getattr(wrapper.func,'id',None),'observe_mcp_access')
-            inner=wrapper.args[0]
-            self.assertIsInstance(inner,ast.Call)
-            self.assertEqual(getattr(inner.func,'id',None),'guard_mcp_access')
+        from test_kiwi_sec_01b import assert_exact_mcp_routes
+        assert_exact_mcp_routes(self, tree)
         access=(ROOT/'mcp_access.py').read_text()
         self.assertNotIn('CORS_ORIGINS',access)
         for node in ast.walk(ast.parse(access)):
