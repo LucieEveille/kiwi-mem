@@ -218,3 +218,14 @@ def guard_mcp_access(app, settings):
             return await app(forwarded, receive, send)
         return await app(scope, receive, send)
     return guarded
+
+
+class AsgiEndpoint:
+    """Keep ASGI closures out of Starlette's Request-handler adaptation."""
+    __slots__ = ("app",)
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        await self.app(scope, receive, send)
