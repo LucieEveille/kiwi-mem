@@ -219,7 +219,9 @@ class MountGuards(unittest.TestCase):
     def test_T_SEC_01b_04_delete(self):
         for status, _, body in self.run_requests([(('DELETE', path), {}) for path in PATHS]):
             self.assertEqual(status, 405)
-            self.assertEqual(self.payload(body)['error']['code'], -32600)
+            payload = self.payload(body)
+            self.assertIn('error', payload, 'DELETE must reach the SDK JSON-RPC error response')
+            self.assertEqual(payload['error']['code'], -32600)
 
     def test_T_SEC_01b_05_redirect(self):
         items = [((method, path + '/'), {'host': host}) for path in PATHS
