@@ -812,3 +812,25 @@ mcp = mcp_memory
 def get_mcp_app():
     """向后兼容：返回记忆模块"""
     return get_memory_mcp_app()
+
+
+class _McpAsgiApp:
+    """Dispatch an exact public route directly to the SDK session manager."""
+    __slots__ = ("_server",)
+
+    def __init__(self, server):
+        self._server = server
+
+    async def __call__(self, scope, receive, send):
+        await self._server.session_manager.handle_request(scope, receive, send)
+
+
+def get_memory_mcp_endpoint():
+    # Warm up the lazy manager before main's lifespan enters run().
+    mcp_memory.streamable_http_app()
+    return _McpAsgiApp(mcp_memory)
+
+
+def get_calendar_mcp_endpoint():
+    mcp_calendar.streamable_http_app()
+    return _McpAsgiApp(mcp_calendar)

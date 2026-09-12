@@ -17,3 +17,9 @@
 MCP 接入 Host / Origin / Content-Type 保护与不回显头值的稳定错误；IP 客户端仍需满足 Origin 规则。升级 mcp 1.29.1、httpx 0.27.2、uvicorn 0.31.1，Python 基础镜像改 ECR 源。详见 docs/UPGRADING.md。当前版本标识仍 1.7.0，最终版本与升级 gate 由 RELEASE-01 同批更新。
 
 MCP transport access controls are enabled on the integration branch, with stable header-free errors and the updated dependency pins. See the upgrade guide before deploying 2.0.
+
+## Unreleased — 2.0.0 integration / KIWI-SEC-01b (#84)
+
+- 两条 MCP 精确路由前置，修复 calendar GET 被业务路由截走及 IP 尾斜杠重定向丢端口；连接 URL 保持不变。
+- 行为变更：`/calendar/{date}` 非 GET 由 404 改 405；`/memory` 不再重定向；非端点路径不再经门卫或写观察记录。
+- Exact MCP routes now precede business routes. Calendar GET reaches MCP, trailing-slash redirects retain the original port, and non-endpoint paths bypass observation and the guard. Date-path non-GET requests return 405 instead of 404. These changes are on the integration branch, not yet released.

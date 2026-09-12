@@ -74,14 +74,14 @@ from config import (
     get_all_config, set_config, get_config, get_config_int, get_config_bool, get_config_float,
 )
 from memory_extractor import extract_memories
-from mcp_server import get_mcp_app, get_calendar_mcp_app, mcp_memory, mcp_calendar, _SECURITY
+from mcp_server import get_memory_mcp_endpoint, get_calendar_mcp_endpoint, mcp_memory, mcp_calendar, _SECURITY
 from web_search import SEARCH_ENGINES, web_search, format_results_for_prompt, get_engine_list
 from mcp_client import get_tools_for_servers, call_tool, call_tools_batch, clear_tool_cache
 from anthropic_adapter import (
     to_anthropic_request, to_anthropic_headers, get_anthropic_url,
     from_anthropic_response, anthropic_stream_to_openai,
 )
-from mcp_access import observe_mcp_access, guard_mcp_access, mcp_access_status, log_mcp_access_summary
+from mcp_access import AsgiEndpoint, observe_mcp_access, guard_mcp_access, mcp_access_status, log_mcp_access_summary
 
 # ============================================================
 # 配置项 —— 全部从环境变量读取，部署时在云平台面板里设置
@@ -316,6 +316,20 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Kiwi-Mem", version="1.7.0", lifespan=lifespan)
+
+# Exact MCP routes precede business routes, especially /calendar/{date}.
+# Keep observation outside the access guard; both wrap the real SDK manager.
+for _mcp_path, _mcp_endpoint, _mcp_name in (
+    ("/memory/mcp", get_memory_mcp_endpoint(), "mcp-memory"),
+    ("/calendar/mcp", get_calendar_mcp_endpoint(), "mcp-calendar"),
+):
+    app.add_route(
+        _mcp_path,
+        AsgiEndpoint(observe_mcp_access(guard_mcp_access(_mcp_endpoint, _SECURITY))),
+        methods=None,
+        name=_mcp_name,
+        include_in_schema=False,
+    )
 
 
 # ============================================================
@@ -6269,15 +6283,7 @@ async def api_delete_reminder(rid: str):
         return JSONResponse(status_code=500, content={"error": str(e)})
 
 
-# ============================================================
-# 挂载 MCP Server（Streamable HTTP）
-# ============================================================
-#
-# 记忆系统：/memory/mcp
-#   工具：search_memory, save_memory, get_recent, trigger_digest
-
-app.mount("/memory", observe_mcp_access(guard_mcp_access(get_mcp_app(), _SECURITY)))
-app.mount("/calendar", observe_mcp_access(guard_mcp_access(get_calendar_mcp_app(), _SECURITY)))
+# MCP /memory/mcp and /calendar/mcp are registered before business routes above.
 
 # 管理面板静态资源（css/js/assets）。必须在所有 /admin/* API 路由之后挂载，
 # 这样显式 API 路由优先匹配，本挂载只接管 /admin/css、/admin/js 等静态文件。

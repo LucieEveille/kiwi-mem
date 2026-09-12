@@ -87,7 +87,7 @@ def execute(output, selected):
                 if path.read_bytes()!=original: raise RuntimeError('restoration failed')
     restored=run_tests()
     head=subprocess.check_output(['git','rev-parse','HEAD'],cwd=ROOT,text=True).strip()
-    files=sorted({v[0] for v in MUTATIONS.values()}|{'main.py','scripts/test_kiwi_prep_01.py','scripts/test_kiwi_safety_sync.py','scripts/prep_update_fixture.py','scripts/update_support_jq.sh','scripts/prep_authority.jq','scripts/kiwi_prep_01_knives.py','scripts/test_prep_framework_compat.py','scripts/check_prep_audit.py'})
+    files=sorted({v[0] for v in MUTATIONS.values()}|{'main.py','scripts/test_kiwi_sec_01b.py','scripts/test_kiwi_prep_01.py','scripts/test_kiwi_safety_sync.py','scripts/prep_update_fixture.py','scripts/update_support_jq.sh','scripts/prep_authority.jq','scripts/kiwi_prep_01_knives.py','scripts/test_prep_framework_compat.py','scripts/check_prep_audit.py'})
     blobs={p:subprocess.check_output(['git','rev-parse',head+':'+p],cwd=ROOT,text=True).strip() for p in files}
     ledger=dict(reanchored_by='KIWI-BUILD-01', head=head,source_blobs=blobs,preflight=preflight.returncode,restored=restored.returncode,results=results)
     Path(output).write_text(json.dumps(ledger,ensure_ascii=False,indent=2)+'\n',encoding='utf-8')

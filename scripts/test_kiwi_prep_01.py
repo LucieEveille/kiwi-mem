@@ -534,15 +534,8 @@ class DeliveryGuards(unittest.TestCase):
         for call in calls:
             self.assertIn('transport_security',[k.arg for k in call.keywords])
         tree=ast.parse((ROOT/'main.py').read_text(encoding='utf-8-sig'))
-        mounts=[n for n in ast.walk(tree) if isinstance(n,ast.Call) and isinstance(n.func,ast.Attribute)
-                and n.func.attr=='mount' and n.args and isinstance(n.args[0],ast.Constant)
-                and n.args[0].value in ('/memory','/calendar')]
-        self.assertEqual(len(mounts),2)
-        for mount in mounts:
-            outer=mount.args[1]
-            self.assertEqual(getattr(getattr(outer,'func',None),'id',None),'observe_mcp_access')
-            inner=outer.args[0]
-            self.assertEqual(getattr(getattr(inner,'func',None),'id',None),'guard_mcp_access')
+        from test_kiwi_sec_01b import assert_exact_mcp_routes
+        assert_exact_mcp_routes(self, tree)
 
 
 if __name__ == "__main__":
