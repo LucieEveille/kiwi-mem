@@ -116,6 +116,14 @@ jobs:
           pip check
           python scripts/check_build_audit.py /tmp/prep-audit.json
 
+      - name: 运行 SEC-01b 挂载守卫
+        run: python scripts/test_kiwi_sec_01b.py
+
+      - name: SEC-01b 变异证据
+        run: |
+          python scripts/kiwi_sec_01b_knives.py --output /tmp/kiwi_sec_01b_knives.json
+          cat /tmp/kiwi_sec_01b_knives.json
+
       - name: 保存 BUILD 验证证据
         if: always()
         uses: actions/upload-artifact@v4
@@ -127,3 +135,4 @@ jobs:
             /tmp/kiwi_sec_01a_build_knives.json
             /tmp/prep-audit.json
             /tmp/prep-resolved.txt
+            /tmp/kiwi_sec_01b_knives.json

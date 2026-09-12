@@ -22,4 +22,24 @@ DNS 重绑定通过域名访问本机服务，因此域名仍须登记；带跨�
 
 状态口九键、启动计数摘要、固定 mcp_access_rejected reason 与 SDK mcp_transport_security_rejected reason 供诊断，无原始头值。421 登记 Host、403 登记 Origin、400 修 Content-Type，具体操作见 UPGRADING。4 MiB 请求体上限由 SDK 实现。
 
-不内置 zeabur.app / trycloudflare.com 等共享后缀，不做面板配置，不适配 Quick Tunnel 流式。calendar 子实例受保护，但 /calendar/mcp 外部路由归 SEC-01b。版本号和升级 gate 由 RELEASE-01 更新。
+不内置 zeabur.app / trycloudflare.com 等共享后缀，不做面板配置，不适配 Quick Tunnel 流式。两个 MCP 的外部精确路由见下一节。版本号和升级 gate 由 RELEASE-01 更新。
+
+## 挂载与路径 / Mounting and paths
+
+SEC-01b（PR #84）将 `/memory/mcp` 与 `/calendar/mcp` 注册为精确路由，排在全部业务路由之前。每条端点按 `AsgiEndpoint(observe(guard(SDK)))` 派发，calendar 的 GET 不再进入 `/calendar/{date}`。POST 在旧版已经可达，本次同时恢复 GET 通道。
+
+| 路径 / Path | GET | POST initialize | DELETE |
+|---|---|---|---|
+| `/memory/mcp` | Accept 含 SSE：200 `text/event-stream`；仅 JSON：406 | 200，Memory Garden，6 tools | SDK 405，JSON-RPC `error.code=-32600` |
+| `/calendar/mcp` | 同上 / Same as memory | 200，Calendar & Dream，11 tools | SDK 405，JSON-RPC `error.code=-32600` |
+| `/memory/mcp/`、`/calendar/mcp/` | 307，Location 保留原 Host 与端口 | 同左 / Same redirect | 同左 / Same redirect |
+| `/memory`、`/memory/` | 404，无重定向 | 404 | 404 |
+| `/memory/mcp/extra`、`/calendar/mcp/extra` | 404 | 404 | 404 |
+| `/calendar` | 原业务 200 / Existing business response | 405 | 405 |
+| `/calendar/{date}` | 原业务 200 / Existing business response | 405（原 404 / previously 404） | 405（原 404 / previously 404） |
+
+精确端点上的外来 Host 仍回 421，未登记 Origin 仍回 403，POST Content-Type 仍先经门卫检查。尾斜杠由外层 FastAPI 在进入门卫前返回 307，Location 使用请求原 Host:port；不另注册斜杠端点。`/memory/extra` 等非端点路径直接 404，不经门卫、不写观察、不记拒绝日志；观察范围因此收窄到两个精确端点。GET SSE 在 stateless 模式下可以是持续空流，健康检查应使用有界 POST initialize。
+
+Both exact routes precede all business routes and retain observation → access guard → SDK. Calendar POST already worked before this change; its GET now reaches MCP too. Slash redirects happen in the outer FastAPI router before Host rewriting, preserving the original Host and port. Non-endpoint paths return 404 without observation writes or guard rejection logs. Calendar business GET responses are unchanged; non-GET date requests now return 405 instead of 404. Foreign Hosts and unregistered Origins remain rejected on both exact endpoints. Stateless GET SSE may remain open without events; use a bounded initialize POST for health checks.
+
+端点工厂先调用 `streamable_http_app()` 初始化惰性 session manager，再直接代理其 `handle_request`。原三个子应用工厂保留兼容；主 lifespan 仍启动两个 manager。SDK 的请求体限制和 transport security 仍在派发链内。升级 mcp 时需重核 handle_request 签名及路径依赖。Factories warm up each lazy manager before main's lifespan and delegate to handle_request; the existing app factories remain available. Recheck this SDK boundary on dependency upgrades.

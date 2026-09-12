@@ -80,7 +80,7 @@ Compose 三步：
 
 `GET /admin/mcp-access-status` 固定九键：protection（本分支 enabled）、version（当前服务版本）、hosts_registered / origins_registered（合法登记项数）、hosts_invalid / origins_invalid（非法项数）、ip_literal_allowed、foreign_host_seen、foreign_host_last_seen_at。只回数量、布尔与时间，不回地址。`mcp_access_observation` 是独立单行表，存“是否见过非本机非 IP Host”与最近记录时间，观察写入有 60 秒节流；被拒请求也会观察，存储故障不改变访问裁决。
 
-`MCP_AUTH_TOKEN` 已于 SEC-01a (#80) 删除，原变量从未参与校验，部署配置残留可删。`upgrade_gates.json` 仍为 false，由 RELEASE-01 在正式 2.0 升级时置 true；本分支不宣称 /calendar/mcp 外部路由已经修好（归 SEC-01b）。
+`MCP_AUTH_TOKEN` 已于 SEC-01a (#80) 删除，原变量从未参与校验，部署配置残留可删。`upgrade_gates.json` 仍为 false，由 RELEASE-01 在正式 2.0 升级时置 true；`/calendar/mcp` 自 SEC-01b (#84) 起 GET / POST / DELETE 均到达 MCP，与 `/memory/mcp` 同形；`/memory` 不再重定向。
 
 ### English: 2.0 MCP access controls
 
@@ -88,4 +88,4 @@ This integration branch enables MCP transport access controls for 2.0. Configure
 
 Compose: add the Host entry to the host .env, add MCP_ALLOWED_ORIGINS for browser clients, then run `docker compose up -d --build`. Native Python users export the variables before starting. Zeabur may reference `${ZEABUR_WEB_DOMAIN}`; verify expansion after deployment. Update temporary domain entries when they change. A tunnel's httpHostHeader can rewrite the effective Host. Shared hosting suffixes are not trusted globally; Quick Tunnel does not support SSE.
 
-Stable errors are 421 mcp_host_not_allowed, 403 mcp_origin_not_allowed and 400 invalid_content_type; no header values are returned. Uppercase APPLICATION/JSON passes security validation but receives SDK protocol HTTP 415. Requests are limited to 4 MiB by the SDK. The nine-key status endpoint reports counts, flags and a throttled observation timestamp only. MCP_AUTH_TOKEN was unused and removed in SEC-01a. The upgrade gate remains false until RELEASE-01; calendar external routing is tracked in SEC-01b.
+Stable errors are 421 mcp_host_not_allowed, 403 mcp_origin_not_allowed and 400 invalid_content_type; no header values are returned. Uppercase APPLICATION/JSON passes security validation but receives SDK protocol HTTP 415. Requests are limited to 4 MiB by the SDK. The nine-key status endpoint reports counts, flags and a throttled observation timestamp only. MCP_AUTH_TOKEN was unused and removed in SEC-01a. The upgrade gate remains false until RELEASE-01; since SEC-01b (#84), GET / POST / DELETE on `/calendar/mcp` reach MCP just like `/memory/mcp`; `/memory` no longer redirects.

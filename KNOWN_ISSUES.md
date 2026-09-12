@@ -85,5 +85,5 @@ SEC-01a P3 复核登记（本批未改，后续 ERR-01 / 观察）：OpenAI 的 
 - 集成分支已升 mcp 1.29.1，PREP 的三条 MCP 公告例外在本分支解除；正式用户随 2.0.0 发布取得修复，1.7.0 历史例外仍适用。
 - 不内置共享托管后缀（含 zeabur.app / trycloudflare.com），需登记完整域名；Quick Tunnel 不支持 SSE。
 - IP 零配置仅适用于没有 Origin 的客户端；Host 校验不等于认证，/v1、/admin、/sync 不因此增加 Host/Origin 拒绝。
-- SDK 请求体上限 4 MiB。/calendar/mcp 外部路由修复归 SEC-01b，本票仅验证 calendar SDK 实例。
+- SDK 请求体上限 4 MiB。/calendar/mcp 精确路由已修（SEC-01b，560ec2b，PR #84；集成分支，未发布），本票仅验证 calendar SDK 实例。
 - SEC-01a P3 观察项：只有空白或 : keepalive 的零事件体可能被判 parse_failed；message_start 后混入非 SSE 垃圾会被吞成 role delta + [DONE]。登记后续处理，本票不改。

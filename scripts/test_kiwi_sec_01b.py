@@ -3,6 +3,7 @@
 
 T-03/04/09/10 preserve behavior already available on the baseline. T-09 uses
 the real streamable HTTP client, whose initialize/list_tools use POST.
+PREP T-12 and BUILD T-10 share assert_exact_mcp_routes from this module.
 """
 from __future__ import annotations
 
@@ -152,7 +153,14 @@ class MountGuards(unittest.TestCase):
             if method == 'GET' and message['type'] == 'http.response.start':
                 if b'text/event-stream' in dict(message['headers']).get(b'content-type', b''):
                     disconnect.set()
-        await asyncio.wait_for(self.main.app(scope, receive, send), 5)
+        try:
+            await asyncio.wait_for(self.main.app(scope, receive, send), 5)
+        except Exception:
+            # Like TestClient(raise_server_exceptions=False), retain an actual
+            # HTTP 500 emitted by ServerErrorMiddleware (K-07). Setup failures
+            # and timeouts without a response must still surface as errors.
+            if not any(m['type'] == 'http.response.start' and m['status'] == 500 for m in messages):
+                raise
         start = next(m for m in messages if m['type'] == 'http.response.start')
         body = b''.join(m.get('body', b'') for m in messages if m['type'] == 'http.response.body')
         return start['status'], dict(start['headers']), body
@@ -163,11 +171,13 @@ class MountGuards(unittest.TestCase):
                 return [await self.request(*args, **kwargs) for args, kwargs in requests]
         return asyncio.run(run())
 
-    @staticmethod
-    def payload(body):
-        if body.startswith(b'event:') or body.startswith(b'data:'):
-            return json.loads(next(line[5:].strip() for line in body.splitlines() if line.startswith(b'data:')))
-        return json.loads(body)
+    def payload(self, body):
+        try:
+            if body.startswith(b'event:') or body.startswith(b'data:'):
+                return json.loads(next(line[5:].strip() for line in body.splitlines() if line.startswith(b'data:')))
+            return json.loads(body)
+        except (ValueError, StopIteration):
+            self.fail('response must contain the expected JSON or SSE JSON payload')
 
     def test_T_SEC_01b_01_routes(self):
         from fastapi.routing import APIRoute
