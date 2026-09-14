@@ -87,3 +87,9 @@ SEC-01a P3 复核登记（本批未改，后续 ERR-01 / 观察）：OpenAI 的 
 - IP 零配置仅适用于没有 Origin 的客户端；Host 校验不等于认证，/v1、/admin、/sync 不因此增加 Host/Origin 拒绝。
 - SDK 请求体上限 4 MiB。/calendar/mcp 精确路由已修（SEC-01b，560ec2b，PR #84；集成分支，未发布），本票仅验证 calendar SDK 实例。
 - SEC-01a P3 观察项：只有空白或 : keepalive 的零事件体可能被判 parse_failed；message_start 后混入非 SSE 垃圾会被吞成 role delta + [DONE]。登记后续处理，本票不改。
+
+## KIWI-SEC-01b
+
+- O-6：真机 307（尾斜杠 `/memory/mcp/`、`/calendar/mcp/`、`/calendar/`）的 Location scheme 为 `http`——TLS 在平台 / 反代终止、应用未信任代理头。跟随重定向的客户端可能降到 http。规避：MCP URL 不带尾斜杠。代理头信任（`X-Forwarded-Proto`）评估归 RELEASE-01。
+- `/calendar/` 由 404 变 307（Starlette `redirect_slashes`，在门卫之前），不经门卫、不写观察、无安全面；`/calendar/{date}` 非 GET 由 404 变 405。行为变更已写入 CHANGELOG。
+- `session_identity` 与本票无关；四本刀账本 schema 不一致（SEC-01a 用 `result` / `--run`）统一归 RELEASE-01。
