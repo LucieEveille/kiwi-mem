@@ -123,7 +123,7 @@ export const CONFIG_META = {
   // —— 网关 / 对话行为 ——
   default_title_model:    { label:'标题生成模型', type:'text', def:'', input:'model', desc:'自动生成对话标题用的模型。建议小模型。' },
   prompt_title_summary:   { label:'标题生成提示词', type:'text', def:'', input:'prompt', hasDefault:false, desc:'指导如何生成对话标题。留空用内置默认。' },
-  reasoning_effort:       { label:'思考强度', type:'text', def:'off', input:'select', options:['off','auto','low','medium','high'], desc:'转发时附带的推理强度，仅对支持 reasoning 的模型生效。off=不传，auto=由供应商自动决定。（v1.6.1 新登记：此前面板上改不了）' },
+  reasoning_effort:       { label:'思考强度', type:'text', def:'off', input:'select', options:['off','auto','low','medium','high'], desc:'客户端未传 reasoning_effort 时按此值转发（2.0 起：显式 ＞ 此处 ＞ off）。off ＝ 网关不主动开启思考（默认；模型自身默认推理的不受影响）；auto ＝ 开、档位交供应商；具体档位按各端点能力就近降档；xhigh / max 目前需由客户端显式传。仅对支持思考的模型生效。' },
 
   // —— 网关 / 性能 ——
   prompt_cache_enabled:   { label:'Prompt 缓存', type:'bool', def:'true', input:'bool', desc:'Claude 模型的显式缓存：重复的 system prompt 前缀只收 1/10 费用。非 Claude 自动跳过。' },
