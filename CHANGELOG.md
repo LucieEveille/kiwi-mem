@@ -23,3 +23,8 @@ MCP transport access controls are enabled on the integration branch, with stable
 - 两条 MCP 精确路由前置，修复 calendar GET 被业务路由截走及 IP 尾斜杠重定向丢端口；连接 URL 保持不变。
 - 行为变更：`/calendar/{date}` 非 GET 由 404 改 405；`/memory` 不再重定向；非端点路径不再经门卫或写观察记录。
 - Exact MCP routes now precede business routes. Calendar GET reaches MCP, trailing-slash redirects retain the original port, and non-endpoint paths bypass observation and the guard. Date-path non-GET requests return 405 instead of 404. These changes are on the integration branch, not yet released.
+
+## Unreleased — 2.0.0 integration / KIWI-THINK-01 (#86)
+
+- 行为变更：网关缺省不再主动开启思考；面板思考强度开始生效；新增两条日志事件；面板下拉文案更新（档位不变）。优先级为显式 ＞ 面板 ＞ off。
+- Omitted effort now uses the panel setting, including its factory default off. Kiwi no longer implicitly enables reasoning; upstream model defaults remain outside this guarantee. Explicit effort, endpoint downgrades and Anthropic budget limits are unchanged. See [reasoning effort](docs/reasoning-effort.md).

@@ -93,3 +93,11 @@ SEC-01a P3 复核登记（本批未改，后续 ERR-01 / 观察）：OpenAI 的 
 - O-6：真机 307（尾斜杠 `/memory/mcp/`、`/calendar/mcp/`、`/calendar/`）的 Location scheme 为 `http`——TLS 在平台 / 反代终止、应用未信任代理头。跟随重定向的客户端可能降到 http。规避：MCP URL 不带尾斜杠。代理头信任（`X-Forwarded-Proto`）评估归 RELEASE-01。
 - `/calendar/` 由 404 变 307（Starlette `redirect_slashes`，在门卫之前），不经门卫、不写观察、无安全面；`/calendar/{date}` 非 GET 由 404 变 405。行为变更已写入 CHANGELOG。
 - `session_identity` 与本票无关；四本刀账本 schema 不一致（SEC-01a 用 `result` / `--run`）统一归 RELEASE-01。
+
+## KIWI-THINK-01
+
+- 排查 #1～#4 的网关缺省开启、面板未接线与隐式 Anthropic temperature 覆盖已修（5195c66，PR #86；集成分支，未发布）。
+- `off` ＝ 网关不主动开启，**不等于强制关闭上游推理**；供应商关闭参数与模型能力归思考档位双仓专项票。`exclude` 只控制是否返回推理内容，不关闭推理。
+- 面板档位仍为五档（#69 边界），`xhigh` / `max` 由客户端显式传；面板扩档留给专项票。
+- `auto` 对 Anthropic 直连映射 budget 10000 ＋ temperature 1；实际预算受 `max_tokens` 钳制，额度不足时禁用 thinking，详见机制文档。
+- 库中历史非法配置值的通用兜底归排查 #10（2.0.x），本票只兜 `reasoning_effort` 一键。`panel` 来源含出厂默认 off，`default` 只表示空 / 非法值兜底。
