@@ -1841,6 +1841,27 @@ def _normalize_reasoning_effort(value):
     return normalized
 
 
+REASONING_EFFORT_DEFAULT = "off"
+
+
+async def _resolve_reasoning_effort(explicit):
+    """Resolve explicit > panel > off once per request.
+
+    panel includes the schema default returned by get_config; default denotes
+    only an empty/invalid-value fallback. Never log the raw configuration value.
+    """
+    if explicit is not None:
+        return explicit, "explicit"
+    raw = await get_config("reasoning_effort")
+    if isinstance(raw, str):
+        candidate = raw.strip().lower()
+        if candidate in REASONING_EFFORT_VALUES:
+            return candidate, "panel"
+        if candidate:
+            print("event=reasoning_effort_config_invalid increment=1")
+    return REASONING_EFFORT_DEFAULT, "default"
+
+
 def _endpoint_host(api_url: str) -> str:
     """从出站 URL 取规范化后的真实 hostname；取不到就返回空串。
 
@@ -1899,13 +1920,11 @@ def _clamp_effort(effort: str, ceiling: str) -> str:
 def _apply_reasoning(body: dict, is_openrouter: bool, is_anthropic_fmt: bool, reasoning_effort, skip_prompt: bool = False, api_url: str = ""):
     """统一决定一个出站请求体的思考链参数。转发路径与工具循环共用，保证两条路对所有供应商一致。
 
-    reasoning_effort 是从请求体里 pop 出来的原值：REASONING_EFFORT_VALUES 之一或 None。
-      - 功能调用(skip_prompt) 或用户选 'off' → 不开思考（并清掉任何 reasoning/reasoning_effort 残留）
-      - OpenRouter / Anthropic 直连 → 写 reasoning={"enabled":True[, "effort"]}
-          None（旧前端 / 非推理模型未发）视为默认开（向后兼容）；'auto' 开但不带 effort；
-          其余档位带 effort。
-      - 其它 OpenAI 兼容供应商 → 透传具体档位；off/auto 剥掉，
-          避免严格供应商（如直连 OpenAI o 系列）对非法 reasoning_effort 报 400。
+    reasoning_effort 由入口 _resolve_reasoning_effort 解析为七档之一。
+    None 仅作防御，等于 off；off / 功能调用不主动开启思考，并清理残留字段。
+    auto 对 OpenRouter / Anthropic 开启但不带 effort；对其他供应商不带字段。
+    具体档位按端点天花板降档后发出；Anthropic 原值交 adapter 换算预算。
+    不发送参数不保证上游模型自身不推理。
 
     各端点认到哪一档不一样（见 config.TRUSTED_HOST_CEILINGS）：已登记的 OpenRouter
     与 DeepSeek 官方都认到 max，未登记端点在能力矩阵建立前取保守天花板。所以档位在出站前
@@ -1916,7 +1935,7 @@ def _apply_reasoning(body: dict, is_openrouter: bool, is_anthropic_fmt: bool, re
     # 先清干净，避免 fresh body 残留或重复调用叠加
     body.pop("reasoning", None)
     body.pop("reasoning_effort", None)
-    if skip_prompt or reasoning_effort == "off":
+    if skip_prompt or reasoning_effort in (None, "off"):
         return
     effort = reasoning_effort
     if not is_anthropic_fmt:
@@ -2019,6 +2038,8 @@ async def chat_completions(request: Request):
                 }
             },
         )
+    reasoning_effort, reasoning_source = await _resolve_reasoning_effort(reasoning_effort)
+    print(f"event=reasoning_effort_resolved source={reasoning_source} effort={reasoning_effort}")
     messages = body.get("messages", [])
     
     # ---------- 提取用户最新消息 ----------

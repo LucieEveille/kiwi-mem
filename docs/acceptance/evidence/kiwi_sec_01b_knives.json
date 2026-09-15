@@ -1,13 +1,13 @@
 {
   "ticket": "KIWI-SEC-01b",
-  "head": "c6b6e055d820b3d2d6396a5ce9cb317d4a65b9e6",
+  "head": "5be86798e5ec3d3ce6976b3e2e517ebaaf5b78a3",
   "source_blobs": {
-    "main.py": "b78435525deda3917a8d5713af0b71eed0d47e92",
+    "main.py": "58503986865b3209484156c4e5736f6a59ec22fb",
     "mcp_server.py": "8ee2860cea185fcc54af64ce2da2e96a508cdea4",
     "mcp_access.py": "f9ac3de21f7173646aa4db3509d2148fe2af3027",
     "scripts/test_kiwi_sec_01b.py": "94ee2e14bef112beb5a55bdda3774b3838e8de3c",
     "scripts/kiwi_sec_01b_knives.py": "6930d6ecc53939dd2b309f41c19cda9940f8c02d",
-    "docs/mcp-transport-security.md": "633cd60da32e87a69567175e451831c32c20a94e"
+    "docs/mcp-transport-security.md": "6dab7202c575266cbbf39b261504d5458880ca47"
   },
   "preflight": 0,
   "restored_suite": 0,
@@ -91,7 +91,7 @@
       "reason": [
         "'Calendar & Dream' != 'Memory Garden'",
         "'Memory Garden' != 'Calendar & Dream'",
-        "Lists differ: [('Calendar & Dream', {'get_calendar_range',[295 chars]y'})] != [('Memory Garden', {'search_memory', 'get_re[295 chars]e'})]"
+        "Lists differ: [('Calendar & Dream', {'get_day_page', 'stop[295 chars]y'})] != [('Memory Garden', {'save_memory', 'search_m[295 chars]e'})]"
       ],
       "exit_code": 1
     },

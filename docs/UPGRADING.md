@@ -82,6 +82,10 @@ Compose 三步：
 
 `MCP_AUTH_TOKEN` 已于 SEC-01a (#80) 删除，原变量从未参与校验，部署配置残留可删。`upgrade_gates.json` 仍为 false，由 RELEASE-01 在正式 2.0 升级时置 true；`/calendar/mcp` 自 SEC-01b (#84) 起 GET / POST / DELETE 均到达 MCP，与 `/memory/mcp` 同形；`/memory` 不再重定向。
 
+### 2.0 思考强度
+
+2.0 起网关缺省不再主动开启思考：客户端未传 `reasoning_effort` 时按面板「思考强度」（默认 off）；依赖缺省开思考的客户端请显式传值或在面板选档。模型自身默认推理的行为不受影响。Anthropic 直连不再在你没开思考时把 temperature 改成 1。
+
 ### English: 2.0 MCP access controls
 
 This integration branch enables MCP transport access controls for 2.0. Configure exact Host values (case and port included, or host:*) in MCP_ALLOWED_HOSTS. Literal IP access without registration applies to non-browser clients without an Origin header, and to browser pages hosted on the built-in local origins (localhost / 127.0.0.1 / [::1], on any port); other browser origins must still be registered in MCP_ALLOWED_ORIGINS. These checks are not authentication for the public admin or data APIs.
@@ -89,3 +93,7 @@ This integration branch enables MCP transport access controls for 2.0. Configure
 Compose: add the Host entry to the host .env, add MCP_ALLOWED_ORIGINS for browser clients, then run `docker compose up -d --build`. Native Python users export the variables before starting. Zeabur may reference `${ZEABUR_WEB_DOMAIN}`; verify expansion after deployment. Update temporary domain entries when they change. A tunnel's httpHostHeader can rewrite the effective Host. Shared hosting suffixes are not trusted globally; Quick Tunnel does not support SSE.
 
 Stable errors are 421 mcp_host_not_allowed, 403 mcp_origin_not_allowed and 400 invalid_content_type; no header values are returned. Uppercase APPLICATION/JSON passes security validation but receives SDK protocol HTTP 415. Requests are limited to 4 MiB by the SDK. The nine-key status endpoint reports counts, flags and a throttled observation timestamp only. MCP_AUTH_TOKEN was unused and removed in SEC-01a. The upgrade gate remains false until RELEASE-01; since SEC-01b (#84), GET / POST / DELETE on `/calendar/mcp` reach MCP just like `/memory/mcp`; `/memory` no longer redirects.
+
+### English: 2.0 reasoning effort
+
+Kiwi no longer enables thinking by default in 2.0. When the client omits `reasoning_effort`, the gateway uses the panel setting (off by default). Clients relying on the previous implicit enablement should send an explicit effort or select a panel value. Upstream models may still reason by default. Direct Anthropic requests no longer have temperature changed to 1 due to implicit gateway enablement.
