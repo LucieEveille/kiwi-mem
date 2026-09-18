@@ -28,3 +28,10 @@ MCP transport access controls are enabled on the integration branch, with stable
 
 - 行为变更：网关缺省不再主动开启思考；面板思考强度开始生效；新增两条日志事件；面板下拉文案更新（档位不变）。优先级为显式 ＞ 面板 ＞ off。
 - Omitted effort now uses the panel setting, including its factory default off. Kiwi no longer implicitly enables reasoning; upstream model defaults remain outside this guarantee. Explicit effort, endpoint downgrades and Anthropic budget limits are unchanged. See [reasoning effort](docs/reasoning-effort.md).
+
+## Unreleased — KIWI-EMB-01
+
+- Add model/route/text identity to memory, scene and file vectors; isolate incompatible vectors and validate batch indices.
+- Add durable, lease-owned vector alignment with explicit cost confirmation, failure counts and interruption recovery; retire GET migration (410).
+- Add a bounded, redacted embedding probe and a model-adjacent panel with automatic post-save testing, manual diagnostics and stale-response protection.
+- Preserve the existing embedding statistics fields and keyword fallback. Upgrade requires explicit alignment of old unknown vectors; provider charges may apply.

@@ -24,8 +24,18 @@ export async function loadConfig() {
   return flat;
 }
 
-export async function saveConfig(key, value) {
-  await put(`/admin/config/${key}`, { value: String(value ?? '') });
+let configSaveSequence = 0;
+let embeddingSaveQueue = Promise.resolve();
+export async function saveConfig(key, value, context = {}) {
+  const detail = {key, value, ...context, saveId:++configSaveSequence};
+  const write = () => put(`/admin/config/${key}`, {value:String(value ?? '')});
+  // Preserve save ordering across A -> B -> A. UI generation gates the receipt.
+  if (key === 'default_embedding_model') {
+    const pending = embeddingSaveQueue.catch(() => {}).then(write);
+    embeddingSaveQueue = pending;
+    await pending;
+  } else await write();
+  document.dispatchEvent(new CustomEvent('kiwi:config-saved',{detail}));
 }
 
 // 单个 key 的控件（带 data-cfg + data-key，供 wireConfig 自动保存）
@@ -130,6 +140,7 @@ export function wireConfig(root, cfg) {
   // 所以之前只有开关能存）。change 与防抖互不重复；值未变则跳过。
   const debouncers = {};
   const secretEditors = new Map();
+  const embeddingSaves = {count:0, value:null};
   root.querySelectorAll('[data-cfg][data-key]').forEach(el => {
     const key = el.dataset.key;
     if (!isSecret(cfg[key])) return;
@@ -160,17 +171,23 @@ export function wireConfig(root, cfg) {
     }
     const isBool = el.dataset.bool !== undefined || el.type === 'checkbox';
     const value = isBool ? (el.checked ? 'true' : 'false') : el.value;
-    if (String(cfg[key] ?? '') === String(value)) return; // 未变化，跳过
+    const isEmbedding = key === 'default_embedding_model';
+    const lastValue = isEmbedding && embeddingSaves.count ? embeddingSaves.value : cfg[key];
+    if (String(lastValue ?? '') === String(value)) return;
+    // A -> B -> A must enqueue the last A even while cfg still contains A.
+    if (isEmbedding) { embeddingSaves.count++; embeddingSaves.value = value; }
     if (isBool) applyDim(key, el.checked);
     flashStatus(el, 'saving');
     try {
-      await saveConfig(key, value);
+      await saveConfig(key, value, {...el.embeddingSaveContext});
       cfg[key] = value;
       flashStatus(el, 'ok');
     } catch (err) {
       flashStatus(el, 'fail', err.message);
       toast(`「${CONFIG_META[key]?.label || key}」保存失败：${err.message}`, 'err');
       if (isBool) { el.checked = !el.checked; applyDim(key, el.checked); } // 回滚开关，避免界面骗人
+    } finally {
+      if (isEmbedding) embeddingSaves.count--;
     }
   };
 

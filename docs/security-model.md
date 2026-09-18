@@ -43,3 +43,9 @@ SSE 已建流后用错误帧结束，`[DONE]` 恰一次；错误不作为助手�
 尚未完成全仓错误清扫：`main.py` 附录分类中的其余 49 处异常出口、`daily_digest.py` 的 6 处内部错误字典及其它未列入的 MCP/工具错误通道属于后续 KIWI-ERR-01。调用闭包中已在本票 HTTP 边界拦住的错误，不等于其所有内部调用者都已修复。
 
 MCP 的 Host/Origin 配置与精确挂载由后续 BUILD-01/SEC-01b 交付，本票不宣称它们已经启用。向量身份、重新对齐和面板重建按钮属于 EMB-01。无认证、env 回落和默认地址属于公版设计选择，始终需要上述部署边界。
+
+## EMB-01 探针诊断例外 / Probe diagnostic exception
+
+只有 `/admin/embedding-probe` 返回受控上游摘要。它返回固定体检字段，HTTP 200 不代表测试通过，须读 `ok`。`provider_name/model_id/endpoint_host/upstream_message/upstream_request_id` 全部经过凭据与危险模式检查；完整原文先脱敏，再压空白和截断至 2000 字。无短钥匙豁免，命中字段为 null 并设置 hidden。HTTP 错误、日志和其它端点继续使用 SEC-01a 稳定错误合同，不透传上游整包。原文及 URL 编码之外的编码（如 base64）不在脱敏识别保证内。诊断不持久化，不扩展认证能力，仍需既有网络边界。
+
+Only the embedding probe returns bounded redacted upstream diagnostics. Check `ok`, not HTTP 200. All five controlled string fields pass full-length credential/pattern checks before truncation; short keys are included. Exact and URL-encoded forms are covered, arbitrary encodings are not. Other endpoints retain stable error contracts. This exception adds neither persistence nor authentication. See [embedding identity](embedding-versioning.md).

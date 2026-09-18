@@ -1,6 +1,7 @@
+import { mountEmbeddingPanel } from '../embedding-panel.mjs';
 import { providerLabel } from '../secret-fields.mjs';
 // 🔌 供应商与模型 — CRUD + 连接测试 + 模型管理（决定 /v1/models 与聊天路由）+ 额度 + 默认模型
-import { get, post, put, del, escHtml, escAttr } from '../api.js';
+import { get, post, put, del, escHtml, escAttr, request, errorMessage } from '../api.js';
 import { badge, emptyState, loadingBlock, toast, modal, confirmDialog, delegate, setBusy, ctl } from '../ui.js';
 import { loadConfig, renderConfigGroups, wireConfig, ensureModelDatalist } from '../config.js';
 
@@ -31,8 +32,14 @@ export default {
   renderDefaults() {
     const el = this.root.querySelector('#default-models');
     el.innerHTML = `<div class="section-title">默认模型与路由</div>` + renderConfigGroups('providers', this.cfg);
+    const alignment = document.createElement('div');
+    el.append(alignment);
+    this.embeddingPanel?.unmount();
+    this.embeddingPanel = mountEmbeddingPanel(alignment, {configRoot:el, request, errorMessage, confirmDialog, toast});
     wireConfig(el, this.cfg);
   },
+
+  unmount() { this.embeddingPanel?.unmount(); this.embeddingPanel = null; },
 
   async load() {
     const el = this.root.querySelector('#prov-list');
@@ -90,14 +97,14 @@ export default {
         if (isNew) await post('/admin/providers', body);
         else await put(`/admin/providers/${p.id}`, body);
         mod.root.querySelector('[data-key="api_key"]').value = '';
-        toast('已保存'); mod.close(); this.load();
+        this.embeddingPanel?.invalidate(); toast('已保存'); mod.close(); this.load();
       } catch (e) { toast('保存失败：' + e.message, 'err'); setBusy(ev.currentTarget, false); }
     };
   },
 
   async remove(id) {
     if (!(await confirmDialog({ title: '删除供应商', message: '确定删除该供应商？其已保存的模型也会一并清除。', danger: true, okText: '删除' }))) return;
-    try { await del(`/admin/providers/${id}`); toast('已删除'); this.load(); }
+    try { await del(`/admin/providers/${id}`); this.embeddingPanel?.invalidate(); toast('已删除'); this.load(); }
     catch (e) { toast('删除失败：' + e.message, 'err'); }
   },
 
@@ -143,13 +150,13 @@ export default {
       } catch (e) { box.innerHTML = `<p class="muted">${escHtml(e.message)}</p>`; }
     };
     const addModel = async (model_id) => {
-      try { await post(`/admin/providers/${pid}/saved-models`, { model_id }); toast('已添加 ' + model_id); loadSaved(); }
+      try { await post(`/admin/providers/${pid}/saved-models`, { model_id }); this.embeddingPanel?.invalidate(); toast('已添加 ' + model_id); loadSaved(); }
       catch (e) { toast('添加失败：' + e.message, 'err'); }
     };
     m.addEventListener('click', async (e) => {
       const delBtn = e.target.closest('[data-del]');
       const act = e.target.closest('[data-act]')?.dataset.act;
-      if (delBtn) { try { await del(`/admin/saved-models/${delBtn.dataset.del}`); toast('已删除'); loadSaved(); } catch (er) { toast(er.message, 'err'); } }
+      if (delBtn) { try { await del(`/admin/saved-models/${delBtn.dataset.del}`); this.embeddingPanel?.invalidate(); toast('已删除'); loadSaved(); } catch (er) { toast(er.message, 'err'); } }
       if (act === 'manual') {
         const mid = m.querySelector('#pm-manual').value.trim();
         if (!mid) { toast('请输入模型 ID', 'err'); return; }

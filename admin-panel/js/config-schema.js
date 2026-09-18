@@ -25,7 +25,7 @@ export const CONFIG_META = {
   semantic_threshold:    { label:'语义搜索阈值', type:'float', def:'0.25', input:'float', desc:'低于此相似度的碎片不会被注入。建议 0.15–0.5。' },
   dedup_threshold:       { label:'去重相似度阈值', type:'float', def:'0.55', input:'float', desc:'新碎片与已有碎片文字重叠超过此值判为重复、不存储。建议 0.4–0.7。' },
   default_memory_model:  { label:'记忆提取模型', type:'text', def:'', input:'model', desc:'记忆提取用的模型。建议小模型（如 Haiku）省成本。留空跟随聊天模型。' },
-  default_embedding_model:{ label:'嵌入模型', type:'text', def:'', input:'model', desc:'向量嵌入模型，决定语义搜索质量。更换后需在「记忆碎片」页执行向量迁移。' },
+  default_embedding_model:{ label:'嵌入模型', type:'text', def:'', input:'model', desc:'向量嵌入模型，决定语义搜索质量。更换后请在「向量对齐」处重新检查并对齐旧向量；新记忆保存时会自动生成向量（少量费用）。' },
   prompt_memory_extract: { label:'记忆提取提示词', type:'text', def:'', input:'prompt', hasDefault:true, desc:'指导模型如何从对话中抽取记忆碎片。留空用内置默认。' },
 
   // —— 热度系统 ——
@@ -146,7 +146,7 @@ export const CONFIG_PAGES = {
     master: 'memory_enabled',
     groups: [
       { title:'提取与注入', desc:'记忆系统的核心节奏。', keys:['extract_interval','max_inject','locked_inject_ratio','semantic_threshold','dedup_threshold'] },
-      { title:'模型', desc:'后台任务建议用小模型省成本。', keys:['default_memory_model','default_embedding_model'] },
+      { title:'模型', desc:'后台任务建议用小模型省成本。嵌入模型与向量对齐位于供应商页。', keys:['default_memory_model'] },
       { title:'提示词', keys:['prompt_memory_extract'] },
     ],
   },
@@ -204,7 +204,7 @@ export const CONFIG_PAGES = {
     groups: [ { title:'搜索配置', keys:['search_engine','search_api_key','search_max_results'] } ],
   },
   providers: {
-    groups: [ { title:'默认模型与路由', desc:'未指定时的兜底模型与路由行为。', keys:['default_chat_model','openrouter_provider_order_enabled'] } ],
+    groups: [ { title:'默认模型与路由', desc:'未指定时的兜底模型与路由行为。', keys:['default_chat_model','openrouter_provider_order_enabled','default_embedding_model'] } ],
   },
   gateway: {
     groups: [

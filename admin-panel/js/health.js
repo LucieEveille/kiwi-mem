@@ -3,7 +3,7 @@
 // 找出「启用了却没配好 / 可能坏了」的地方，给首页状态面板用。
 // 返回 [{level:'error'|'warn'|'info', title, detail, route}]
 // ============================================================
-import { get } from './api.js';
+import { get, request, errorMessage } from './api.js';
 import { loadConfig } from './config.js';
 
 export async function runHealthChecks() {
@@ -12,7 +12,7 @@ export async function runHealthChecks() {
     safe(loadConfig(), {}),
     safe(get('/admin/providers'), { providers: [] }),
     safe(get('/admin/all-saved-models'), { models: [] }),
-    safe(get('/admin/embedding-stats'), {}),
+    safe(request('/admin/embedding-status').then(async res => { if (res.status === 404) return null; const body = await res.json(); if (!res.ok || body.error) throw new Error(errorMessage(body,res.status)); return body; }), null),
     safe(get('/admin/search-config'), {}),
     safe(get('/admin/search-engines'), { engines: [] }),
     safe(get('/dream/scenes'), { scenes: [] }),
@@ -30,10 +30,10 @@ export async function runHealthChecks() {
     issues.push({ level: 'warn', title: '没有保存任何模型', detail: '前端模型列表（/v1/models）会回退到环境变量默认（通常是 OpenRouter），聊天可能路由不到你的供应商。去供应商页点「模型」保存。', route: 'providers' });
   }
 
-  if (on('memory_enabled') && embed && !embed.error && embed.embedding_available === false) {
-    issues.push({ level: 'error', title: '向量服务不可用', detail: `嵌入模型「${embed.embedding_model || '?'}」没有可用供应商/Key，记忆向量化与语义搜索会失败。把该嵌入模型在某供应商下保存，或配置 API_KEY。`, route: 'providers' });
-  } else if (on('memory_enabled') && embed && !embed.error && embed.total_memories > 0 && embed.without_embedding > 0) {
-    issues.push({ level: 'warn', title: `有 ${embed.without_embedding} 条记忆缺少向量`, detail: `向量覆盖 ${embed.coverage || ''}，语义搜索不完整。去记忆碎片页执行「向量迁移」。`, route: 'memories' });
+  if (on('memory_enabled') && embed?.route?.available === false) {
+    issues.push({level:'error', title:'向量服务不可用', detail:'请在供应商页检查嵌入模型、格式与密钥，并点击「测试嵌入」。', route:'providers'});
+  } else if (on('memory_enabled') && embed?.totals?.pending_rows > 0) {
+    issues.push({level:'warn', title:`有 ${embed.totals.pending_rows} 条向量待对齐`, detail:'去供应商页默认嵌入模型旁，重新检查并对齐待处理向量。', route:'providers'});
   }
 
   if (scfg && scfg.engine) {

@@ -5,11 +5,33 @@ these serializers only at public response/export boundaries.
 """
 import ipaddress
 import json
+import logging
 import re
 from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 from starlette.responses import JSONResponse
+
+
+class _HTTPReasonFilter(logging.Filter):
+    """Bound the upstream-controlled reason in the HTTP client's summary only."""
+    _kiwi_http_reason_filter = True
+
+    def filter(self, record):
+        if (record.msg == 'HTTP Request: %s %s "%s %d %s"'
+                and isinstance(record.args, tuple) and len(record.args) == 5):
+            record.args = (*record.args[:4], '<reason-redacted>')
+        return True
+
+
+def _install_http_reason_filters():
+    for name in ('httpx', 'httpcore'):
+        logger = logging.getLogger(name)
+        if not any(getattr(f, '_kiwi_http_reason_filter', False) for f in logger.filters):
+            logger.addFilter(_HTTPReasonFilter())
+
+
+_install_http_reason_filters()
 
 
 class InvalidRequest(ValueError):
@@ -128,7 +150,7 @@ def exception_code(exc):
 
 
 def stable_payload(code):
-    if not re.fullmatch(r'(?:invalid_request|not_found|internal_error|upstream_error|parse_failed|timeout|no_route|http_[1-5][0-9]{2}|network:RequestError)', code):
+    if not re.fullmatch(r'(?:invalid_request|not_found|internal_error|upstream_error|parse_failed|timeout|no_route|deprecated|no_embedding_route|invalid_response|http_[1-5][0-9]{2}|network:RequestError)', code):
         code = 'internal_error'
     return {'error': code, 'error_code': code}
 
@@ -137,7 +159,7 @@ def stable_error(error, status_code=None, headers=None):
     code = exception_code(error) if isinstance(error, Exception) else error
     body = stable_payload(code)
     if status_code is None:
-        status_code = 400 if code == 'invalid_request' else 404 if code == 'not_found' else 500 if code == 'internal_error' else 502
+        status_code = 410 if code == 'deprecated' else 409 if code == 'no_embedding_route' else 400 if code == 'invalid_request' else 404 if code == 'not_found' else 500 if code == 'internal_error' else 502
     return JSONResponse(status_code=status_code, content=body, headers=headers)
 
 

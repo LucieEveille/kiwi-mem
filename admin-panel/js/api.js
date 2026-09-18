@@ -20,7 +20,7 @@ export async function request(path, { method = 'GET', body, headers, signal } = 
 export function errorMessage(data, status) {
   if (data?.error_code) {
     const code = data.error_code;
-    const labels = { invalid_request: '配置或输入无效', not_found: '资源不存在', internal_error: '服务内部错误', timeout: '上游请求超时', parse_failed: '上游响应格式无效', upstream_error: '上游请求失败', 'network:RequestError': '无法连接上游服务' };
+    const labels = { no_embedding_route: '未配置可用嵌入服务', deprecated: '接口已停用', invalid_response: '上游响应无法解析', invalid_request: '配置或输入无效', not_found: '资源不存在', internal_error: '服务内部错误', timeout: '上游请求超时', parse_failed: '上游响应格式无效', upstream_error: '上游请求失败', 'network:RequestError': '无法连接上游服务' };
     if (Object.hasOwn(labels, code)) return labels[code];
     if (/^http_[1-5][0-9]{2}$/.test(code)) return `上游请求失败（${code.slice(5)}）`;
     return '请求失败';

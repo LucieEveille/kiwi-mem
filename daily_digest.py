@@ -9,6 +9,7 @@ v1.0 初版
 """
 
 from security import safe_log
+from embedding_versioning import embedding_db_payload, build_memory_embedding_text
 import os
 import json
 import asyncio
@@ -265,16 +266,16 @@ async def _run_daily_digest_impl(date_str: str, now_cst, model_override: str = N
         # 生成 embedding
         embed_text = f"{title} {content_with_date}" if title else content_with_date
         embedding = await get_embedding(embed_text)
-        embedding_json = json.dumps(embedding) if embedding else None
+        payload = embedding_db_payload(embedding, build_memory_embedding_text(title, content_with_date))
         
         # 存入数据库，memory_type = 'daily_digest'
         async with pool.acquire() as conn:
             await conn.execute("""
-                INSERT INTO memories (content, importance, source_session, embedding, title, memory_type, created_at, category_id, source)
-                VALUES ($1, $2, $3, $4, $5, 'daily_digest', $6::timestamptz, $7, 'ai_digest')
+                INSERT INTO memories (content, importance, source_session, embedding, title, memory_type, created_at, category_id, source, embedding_profile, embedding_model, embedding_dim, embedding_source_hash)
+                VALUES ($1, $2, $3, $4, $5, 'daily_digest', $6::timestamptz, $7, 'ai_digest', $8, $9, $10, $11)
             """,
-                content_with_date, importance, "daily_digest", embedding_json, title,
-                f"{date_str}T00:00:00+08:00", cat_id
+                content_with_date, importance, "daily_digest", payload[0], title,
+                datetime.fromisoformat(f"{date_str}T00:00:00+08:00"), cat_id, *payload[1:]
             )
         
         saved_count += 1
@@ -555,13 +556,14 @@ async def daily_digest_scheduler():
 
 async def backfill_scene_embeddings(limit: int = 20):
     """Backfill embeddings for active scenes that do not have one yet."""
+    from database import _cas_embedding
     try:
         from database import get_pool, get_embedding, build_scene_embedding_text
 
         pool = await get_pool()
         async with pool.acquire() as conn:
             rows = await conn.fetch("""
-                SELECT id, title, atomic_facts
+                SELECT *
                 FROM mem_scenes
                 WHERE status = 'active'
                   AND embedding IS NULL
@@ -588,12 +590,11 @@ async def backfill_scene_embeddings(limit: int = 20):
                     print(f"⚠️ 场景 embedding 回填失败: #{scene_id}")
                     continue
                 async with pool.acquire() as conn:
-                    await conn.execute(
-                        "UPDATE mem_scenes SET embedding = $1::jsonb WHERE id = $2",
-                        json.dumps(embedding),
-                        scene_id,
-                    )
-                backfilled += 1
+                    wrote = await _cas_embedding(conn, 'mem_scenes', row, embedding, missing_only=True)
+                if wrote:
+                    backfilled += 1
+                else:
+                    skipped += 1
             except Exception as e:
                 skipped += 1
                 print(f"⚠️ 场景 embedding 回填异常: #{scene_id} {type(e).__name__}: {e}")

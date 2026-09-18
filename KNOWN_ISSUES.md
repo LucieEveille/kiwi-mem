@@ -101,3 +101,9 @@ SEC-01a P3 复核登记（本批未改，后续 ERR-01 / 观察）：OpenAI 的 
 - 面板档位仍为五档（#69 边界），`xhigh` / `max` 由客户端显式传；面板扩档留给专项票。
 - `auto` 对 Anthropic 直连映射 budget 10000 ＋ temperature 1；实际预算受 `max_tokens` 钳制，额度不足时禁用 thinking，详见机制文档。
 - 库中历史非法配置值的通用兜底归排查 #10（2.0.x），本票只兜 `reasoning_effort` 一键。`panel` 来源含出厂默认 off，`default` 只表示空 / 非法值兜底。
+
+## KIWI-EMB-01（2.0 集成分支）
+
+向量状态口扫描三表，复杂度 O(N)。格式守门能排除原生 Anthropic，无法判断 OpenAI 格式中转站背后的模型能力。探针诊断不持久化；脱敏只识别凭据原文及 URL 编码，任意编码不保证。worker 内部异常保留 running，等待两分钟租约过期后继续。换模型有每批前/后及结果身份检查，反馈仍可能延后到下一批或重新检查。重新对齐依据当前待处理行，不保证只重试上一轮失败项；新增/变更内容可能改变数量。部署回退前停止新 worker；不要让旧版继续写入同一库并期待其维护新身份。
+
+Status scans are O(N). Native Anthropic format is excluded, but relay capability requires probing. Diagnostics are not persisted and redaction covers literal/URL-encoded credentials only. Unexpected worker failures resume after the two-minute lease expires. Model-change feedback can lag until the next batch/check. Retry re-enumerates current data. Stop new workers before rollback; old application versions do not maintain identity columns.

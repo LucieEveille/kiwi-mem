@@ -562,17 +562,17 @@ async def _execute_dream_action(action: dict, dream_id: int, stats: dict) -> dic
                 result["reason"] = "merged_content 为空，拒绝软删除原始碎片"
             else:
                 title = action.get("merged_title", "")
-                from database import save_memory, get_embedding
+                from database import save_memory, get_embedding, embedding_db_payload, build_memory_embedding_text
                 embedding = await get_embedding(f"{title} {merged}" if title else merged)
-                embedding_json = json.dumps(embedding) if embedding else None
+                payload = embedding_db_payload(embedding, build_memory_embedding_text(title, merged))
                 from database import get_pool
                 pool = await get_pool()
                 async with pool.acquire() as conn:
                     new_merge_id = await conn.fetchval("""
-                        INSERT INTO memories (content, title, importance, memory_type, embedding, source, source_session, dream_processed_at)
-                        VALUES ($1, $2, 6, 'daily_digest', $3, 'dream_merge', 'dream', NOW())
+                        INSERT INTO memories (content, title, importance, memory_type, embedding, source, source_session, dream_processed_at, embedding_profile, embedding_model, embedding_dim, embedding_source_hash)
+                        VALUES ($1, $2, 6, 'daily_digest', $3, 'dream_merge', 'dream', NOW(), $4, $5, $6, $7)
                         RETURNING id
-                    """, merged, title, embedding_json)
+                    """, merged, title, *payload)
                 await soft_delete_memories(ids)
                 stats["memories_merged"] += len(ids)
                 result["merged"] = len(ids)

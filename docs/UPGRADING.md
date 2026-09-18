@@ -97,3 +97,11 @@ Stable errors are 421 mcp_host_not_allowed, 403 mcp_origin_not_allowed and 400 i
 ### English: 2.0 reasoning effort
 
 Kiwi no longer enables thinking by default in 2.0. When the client omits `reasoning_effort`, the gateway uses the panel setting (off by default). Clients relying on the previous implicit enablement should send an explicit effort or select a panel value. Upstream models may still reason by default. Direct Anthropic requests no longer have temperature changed to 1 due to implicit gateway enablement.
+
+### 2.0 嵌入换尺子 / Embedding identity upgrade
+
+旧向量没有可信模型身份，升级后标记 `unknown`，不参与新身份的语义比较。请在供应商页默认嵌入模型旁「向量对齐」重新检查并确认重建；**重建会产生嵌入模型费用**。新记忆与缺向量自动回填也可能产生少量费用，旧 profile 不自动重建。任务展示成功、失败、跳过数；中断后等两分钟租约过期可继续。`GET /admin/migrate-embeddings` 已停用，返回 410。
+
+Anthropic 格式不用于嵌入。中转站使用 `openai` 格式仍可能选到不支持嵌入的 Claude 等渠道，`api_format` 无法证明模型能力，「测试嵌入」的真实请求才是可靠判法。保存默认嵌入模型会自动发送一次短探针，另有手动测试按钮；测试可能计费。保存成功而测试失败时，设置已经保存，请依据受控诊断检查端点、Key、模型与供应商状态。
+
+Existing vectors become `unknown` and are excluded from new-profile semantic comparisons. Explicitly rebuild beside the default embedding model; **rebuilding incurs embedding-provider charges**. Routine generation/backfill can also cost money. Old profiles are never rebuilt automatically. Interrupted jobs resume after lease expiry (two minutes). The previous GET migration endpoint returns 410. Native Anthropic format is unsuitable for this request; an OpenAI-format relay can still select an unsupported model, so use the actual probe. Default-model saves trigger a short, potentially billable test. A failed test does not undo a successful settings save. See [mechanism and limits](embedding-versioning.md).

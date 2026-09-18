@@ -39,7 +39,6 @@ export default {
       del: (el) => this.remove(el.dataset.id),
       lock: (el) => this.toggleLock(el.dataset.id),
       extract: (el) => this.runAction(el, '/admin/extract-now', 'post', '已触发记忆提取'),
-      migrate: (el) => this.runAction(el, '/admin/migrate-embeddings', 'get', '向量迁移完成'),
       search: () => this.doSearch(),
       page: (el) => { this.state.page = Number(el.dataset.p); this.loadList(); },
     });
@@ -81,7 +80,6 @@ export default {
       </div>
       <div class="btn-row mb16">
         <button class="btn btn-sm btn-secondary" data-act="extract">🧩 立即提取</button>
-        <button class="btn btn-sm btn-secondary" data-act="migrate">🔄 向量迁移</button>
       </div>
       <div id="mem-list">${loadingBlock()}</div>
       <div id="mem-pager" class="pagination"></div>

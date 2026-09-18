@@ -1,0 +1,324 @@
+{
+  "ticket": "KIWI-EMB-01",
+  "head": "9c054a3217ff71c6dfa8988187d72beff5f7bc97",
+  "source_blobs": {
+    "admin-panel/js/config.js": "ec274e9b9ac5afe53b7569faddf5136a74310a73",
+    "admin-panel/js/embedding-panel.mjs": "a6a747ac6c91d2d6b604864a0fc5f26ad23daca4",
+    "admin-panel/js/pages/providers.js": "03b84fec7310d081e89ed3d28e60f442e823d9bc",
+    "daily_digest.py": "be94587798c69f32906d90ba76b046355bd1cd1c",
+    "database.py": "bd6f78f45e37275901f6fad00a7f54ee8231637a",
+    "dream.py": "d6e6535d799988d581159d4cdcb21e1be984142d",
+    "embedding_jobs.py": "44309e254387b33b0a2db5018d99a946879bba35",
+    "embedding_probe.py": "02b2d98c0de06a435d72aa18bc7567cc6ebd6d89",
+    "embedding_versioning.py": "57e9b048fc368921ceb102abeaf557351f53880f",
+    "main.py": "dd30e2d3e7aade4107df64490d653be598a591dd",
+    "scripts/kiwi_emb_01_knives.py": "224b08ebbd9a187296831fbc1b151005f0c53eb6",
+    "scripts/test_kiwi_emb_01.py": "c155b9eba5b22a2a2b2bbd539241341f55b5314b",
+    "scripts/test_kiwi_emb_01_panel.mjs": "294d5d9df86552422cafc3c719099cb6a2d00a5b",
+    "security.py": "bb53938a0e351c3304df643a0bf4a8396df92eed",
+    "tool_drawer.py": "0957983da5bf6cd494ac7b9baaa20d417217c10f"
+  },
+  "preflight": 0,
+  "restored": 0,
+  "kind": "disposable PG16; simulated providers; no production",
+  "results": [
+    {
+      "knife": "K-01",
+      "test": "T-EMB-06",
+      "result": "RED",
+      "reason": [
+        "0 is not None"
+      ]
+    },
+    {
+      "knife": "K-02",
+      "test": "T-EMB-06",
+      "result": "RED",
+      "reason": [
+        "Items in the first set but not the second:"
+      ]
+    },
+    {
+      "knife": "K-03",
+      "test": "T-EMB-06",
+      "result": "RED",
+      "reason": [
+        "Lists differ: [{'id': 1, 'title': 'scene', 'atomic_facts[44 chars]1.0}] != []"
+      ]
+    },
+    {
+      "knife": "K-04",
+      "test": "T-EMB-06",
+      "result": "RED",
+      "reason": [
+        "Lists differ: [{'id': 1, 'file_id': 'f', 'file_name': 'f[58 chars]1.0}] != []"
+      ]
+    },
+    {
+      "knife": "K-05",
+      "test": "T-EMB-06",
+      "result": "RED",
+      "reason": [
+        "Items in the first set but not the second:"
+      ]
+    },
+    {
+      "knife": "K-05e",
+      "test": "T-EMB-06",
+      "result": "EQUIVALENT",
+      "reason": [],
+      "mechanism": "Python classification retains isolation"
+    },
+    {
+      "knife": "K-06",
+      "test": "T-EMB-02",
+      "result": "RED",
+      "reason": [
+        "'16cfcf26556860828b752b0756ebb5a83cb706f801ee11085abb55b9dfc7c550' == '16cfcf26556860828b752b0756ebb5a83cb706f801ee11085abb55b9dfc7c550'"
+      ]
+    },
+    {
+      "knife": "K-07",
+      "test": "T-EMB-03",
+      "result": "RED",
+      "reason": [
+        "Tuples differ: ('provider', 'EMB_synthetic_secret_f01877', 'panel-model') != ('env', 'env-key', 'panel-model')"
+      ]
+    },
+    {
+      "knife": "K-08",
+      "test": "T-EMB-03",
+      "result": "RED",
+      "reason": [
+        "Tuples differ: ('https://provider.example/v1/embeddings', 'env-key', 'panel-model') != ('https://env.example/v1/embeddings', 'env-key', 'panel-model')"
+      ]
+    },
+    {
+      "knife": "K-09",
+      "test": "T-EMB-04",
+      "result": "RED",
+      "reason": [
+        "None != 'c5fabbf823dec4ec289d61dcb314ab6aa8bd81ab457c542cc10d04f67e75899d'"
+      ]
+    },
+    {
+      "knife": "K-10",
+      "test": "T-EMB-05",
+      "result": "RED",
+      "reason": [
+        "Tuples differ: ('[1.0, 0.0]', None, None, None, None) != (None, None, None, None, None)"
+      ]
+    },
+    {
+      "knife": "K-11",
+      "test": "T-EMB-09",
+      "result": "RED",
+      "reason": [
+        "True is not false : expired owner renewed lease",
+        "True is not false : expired lease accepted after waiting for row lock",
+        "True is not false : expired lease accepted after waiting for row lock"
+      ]
+    },
+    {
+      "knife": "K-11e",
+      "test": "T-EMB-09",
+      "result": "EQUIVALENT",
+      "reason": [],
+      "mechanism": "_assert_owner rejects expired leases"
+    },
+    {
+      "knife": "K-12",
+      "test": "T-EMB-09",
+      "result": "RED",
+      "reason": [
+        "Tuples differ: (1, 0, 'done') != (0, 1, 'done')"
+      ]
+    },
+    {
+      "knife": "K-13",
+      "test": "T-EMB-09",
+      "result": "RED",
+      "reason": [
+        "'done' != 'target_changed'"
+      ]
+    },
+    {
+      "knife": "K-14",
+      "test": "T-EMB-09",
+      "result": "RED",
+      "reason": [
+        "True is not false : old owner wrote terminal state",
+        "True is not false : expired lease accepted after waiting for row lock"
+      ]
+    },
+    {
+      "knife": "K-15",
+      "test": "T-EMB-06",
+      "result": "RED",
+      "reason": [
+        "0.0 is not None"
+      ]
+    },
+    {
+      "knife": "K-16",
+      "test": "T-EMB-08",
+      "result": "RED",
+      "reason": [
+        "status outward"
+      ]
+    },
+    {
+      "knife": "K-17",
+      "test": "T-EMB-08",
+      "result": "RED",
+      "reason": [
+        "2 != 1"
+      ]
+    },
+    {
+      "knife": "K-18",
+      "test": "T-EMB-12",
+      "result": "RED",
+      "reason": [
+        "Tuples differ: ('done', 3, 0) != ('done', 3, 2)"
+      ]
+    },
+    {
+      "knife": "K-19",
+      "test": "T-EMB-10",
+      "result": "RED",
+      "reason": [
+        "200 != 410"
+      ]
+    },
+    {
+      "knife": "K-20",
+      "test": "T-EMB-07",
+      "result": "RED",
+      "reason": [
+        "Items in the second set but not the first:"
+      ]
+    },
+    {
+      "knife": "K-21",
+      "test": "T-EMB-11",
+      "result": "RED",
+      "reason": [
+        "Tuples differ: ('http_502', \"{'error': {'message': 'not implemented'}}\") != ('http_502', 'not implemented')"
+      ]
+    },
+    {
+      "knife": "K-22",
+      "test": "T-EMB-16",
+      "result": "RED",
+      "reason": [
+        "'invalid abcde' is not None"
+      ]
+    },
+    {
+      "knife": "K-23",
+      "test": "T-EMB-16",
+      "result": "RED",
+      "reason": [
+        "'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx' is not None"
+      ]
+    },
+    {
+      "knife": "K-24",
+      "test": "T-EMB-16",
+      "result": "RED",
+      "reason": [
+        "'abcde' is not None"
+      ]
+    },
+    {
+      "knife": "K-25",
+      "test": "T-EMB-18",
+      "result": "RED",
+      "reason": [
+        "Lists differ: [EmbeddingResult(vector=[1, 0], model_id='[253 chars]d=7)] != [None, None]",
+        "Lists differ: [EmbeddingResult(vector=[1, 0], model_id='[109 chars]None] != [None, None]",
+        "Lists differ: [EmbeddingResult(vector=[1, 0], model_id='[253 chars]d=7)] != [None, None]",
+        "Lists differ: [EmbeddingResult(vector=[1, 0], model_id='[109 chars]None] != [None, None]"
+      ]
+    },
+    {
+      "knife": "K-26",
+      "test": "T-EMB-04",
+      "result": "RED",
+      "reason": [
+        "Tuples differ: ('[true]', 'c5fabbf823dec4ec289d61dcb314ab[113 chars]9d1') != (None, None, None, None, None)"
+      ]
+    },
+    {
+      "knife": "K-27",
+      "test": "T-EMB-09",
+      "result": "RED",
+      "reason": [
+        "1 != 0"
+      ]
+    },
+    {
+      "knife": "K-28",
+      "test": "T-EMB-12",
+      "result": "RED",
+      "reason": [
+        "Tuples differ: ('running', 1, 0) != ('done', 3, 2)"
+      ]
+    },
+    {
+      "knife": "K-29",
+      "test": "T-EMB-07",
+      "result": "RED",
+      "reason": [
+        "Items in the second set but not the first:"
+      ]
+    },
+    {
+      "knife": "K-30",
+      "test": "T-EMB-16",
+      "result": "RED",
+      "reason": [
+        "'EMBP%2fCase%2bSensitive_1937' is not None : encoded credential escaped: lower/upstream_message",
+        "'EMBP%2fCase%2bSensitive_1937' is not None : encoded credential escaped: lower/provider_name",
+        "'EMBP%2fCase%2BSensitive_1937' is not None : encoded credential escaped: mixed/upstream_message",
+        "'EMBP%2fCase%2BSensitive_1937' is not None : encoded credential escaped: mixed/provider_name",
+        "'%45%4d%42%50%2f%43%61%73%65%2b%53%65%6e%73%69%74%69%76%65%5f%31%39%33%37' is not None : encoded credential escaped: escaped_unreserved/upstream_message",
+        "'%45%4d%42%50%2f%43%61%73%65%2b%53%65%6e%73%69%74%69%76%65%5f%31%' is not None : encoded credential escaped: escaped_unreserved/provider_name"
+      ]
+    },
+    {
+      "knife": "K-31a",
+      "test": "T-EMB-16",
+      "result": "RED",
+      "reason": [
+        "'EMBP_HTTP_reason_sentinel_92835' unexpectedly found in 'HTTP Request: POST http://127.0.0.1:36543/embeddings \"HTTP/1.1 502 EMBP_HTTP_reason_sentinel_92835\"\\nHTTP Request: POST http://localhost/admin/embedding-probe \"HTTP/1.1 200 OK\"\\n'",
+        "'EMBP_HTTP_reason_sentinel_92835' unexpectedly found in 'HTTP Request: GET https://fixture.invalid/x \"HTTP/1.1 502 EMBP_HTTP_reason_sentinel_92835\"\\nunrelated event preserved\\n'",
+        "'EMBP_HTTP_reason_sentinel_92835' unexpectedly found in 'HTTP Request: GET https://fixture.invalid/x \"HTTP/1.1 502 EMBP_HTTP_reason_sentinel_92835\"\\nunrelated event preserved\\n'"
+      ]
+    },
+    {
+      "knife": "K-31b",
+      "test": "T-EMB-16",
+      "result": "RED",
+      "reason": [
+        "'EMBP_HTTP_reason_sentinel_92835' unexpectedly found in 'HTTP Request: GET https://fixture.invalid/x \"HTTP/1.1 502 EMBP_HTTP_reason_sentinel_92835\"\\nunrelated event preserved\\n'"
+      ]
+    },
+    {
+      "knife": "K-32",
+      "test": "T-EMB-09",
+      "result": "RED",
+      "reason": [
+        "True is not false : expired lease accepted after waiting for row lock"
+      ]
+    },
+    {
+      "knife": "K-32e",
+      "test": "T-EMB-09",
+      "result": "EQUIVALENT",
+      "reason": [],
+      "mechanism": "_assert_owner rejects expired leases"
+    }
+  ]
+}

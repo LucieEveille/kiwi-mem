@@ -205,7 +205,7 @@ class SecurityTests(unittest.IsolatedAsyncioTestCase):
             async def __aexit__(self,*a):pass
             async def post(self,*a,**kw):return httpx.Response(502,text=KEY)
         log=io.StringIO()
-        with patch.object(db,'_resolve_embedding_endpoint',AsyncMock(return_value=('https://relay.example/v1/embeddings',KEY,'fixture','env'))),patch.object(httpx,'AsyncClient',return_value=Client()),redirect_stdout(log):
+        with patch.object(db,'_resolve_embedding_route',AsyncMock(return_value=db.EmbeddingRoute('https://relay.example/v1/embeddings',KEY,'fixture',None,'openai','env',None,'f'*64))),patch.object(httpx,'AsyncClient',return_value=Client()),redirect_stdout(log):
             self.assertIsNone(await db.get_embedding('x'))
             self.assertEqual(await db.get_embeddings_batch(['x','y']),[None,None])
         self.safe(log.getvalue())
@@ -487,7 +487,7 @@ class SecurityTests(unittest.IsolatedAsyncioTestCase):
             calls.append(req)
             return httpx.Response(200,content=raw.encode(),headers={'content-type':'application/octet-stream'})
         with ExitStack() as stack:
-            provider=dict(ROW,provider_name='fixture',api_format=fmt)
+            provider=dict(ROW,provider_id=ROW['id'],provider_name='fixture',api_format=fmt)
             for name,value in {'resolve_scope_snapshot':(True,None,'global',None,None),'get_reset_generation':0,'get_memory_enabled':False,'resolve_provider_for_model':provider}.items():
                 stack.enter_context(patch.object(app,name,AsyncMock(return_value=value)))
             stack.enter_context(patch.object(httpx,'AsyncClient',lambda **kw:real_client(transport=httpx.MockTransport(handler),**kw)))
@@ -570,7 +570,7 @@ class SecurityTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_scope_has_no_raw_exception_returns(self):
         # Completeness supplement; behavior is exercised above and by the PG suite.
-        names={'api_migrate_embeddings','api_embedding_stats','api_extract_now','api_get_config','api_set_config','api_get_providers','api_create_provider','api_update_provider','api_delete_provider','api_test_provider','api_get_provider_models','api_set_search_config','api_search_test','api_get_credits','api_process_file_chunks','api_sync_export','api_sync_import_backup','update_single_memory','add_memory_manual','api_daily_digest','api_generate_day_page','api_generate_week_summary','api_generate_month_summary','api_generate_quarter_summary','api_generate_year_summary','api_dream_status','api_dream_history','api_update_scene','api_get_all_saved_models','api_get_saved_models','api_add_saved_model','api_update_saved_model','api_delete_saved_model','api_update_profile_now'}
+        names={'api_embedding_probe','api_embedding_status','api_embedding_rebuild','api_migrate_embeddings','api_embedding_stats','api_extract_now','api_get_config','api_set_config','api_get_providers','api_create_provider','api_update_provider','api_delete_provider','api_test_provider','api_get_provider_models','api_set_search_config','api_search_test','api_get_credits','api_process_file_chunks','api_sync_export','api_sync_import_backup','update_single_memory','add_memory_manual','api_daily_digest','api_generate_day_page','api_generate_week_summary','api_generate_month_summary','api_generate_quarter_summary','api_generate_year_summary','api_dream_status','api_dream_history','api_update_scene','api_get_all_saved_models','api_get_saved_models','api_add_saved_model','api_update_saved_model','api_delete_saved_model','api_update_profile_now'}
         source=(ROOT/'main.py').read_text(encoding='utf-8')
         found={n.name:n for n in ast.parse(source).body if getattr(n,'name',None) in names}
         self.assertEqual(set(found),names)

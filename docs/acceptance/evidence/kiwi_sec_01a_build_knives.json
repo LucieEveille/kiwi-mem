@@ -1,14 +1,14 @@
 {
   "ticket": "KIWI-SEC-01a",
-  "head": "29c3b02aab8407bba27d99779a98aad402ebeb20",
+  "head": "9c054a3217ff71c6dfa8988187d72beff5f7bc97",
   "source_blobs": {
     "anthropic_adapter.py": "bcf29d0ddacfdcdf46322323d406a300624642d5",
     "config.py": "529b494a1c402a9ba8efb02d8ac8df8245f6bdbb",
-    "dream.py": "2f2a66e29cae6c2d3387462567d72a2a82f289a8",
-    "main.py": "105b711ee5de7d4f35aae425fddc4dc7455b3b56",
+    "dream.py": "d6e6535d799988d581159d4cdcb21e1be984142d",
+    "main.py": "dd30e2d3e7aade4107df64490d653be598a591dd",
     "scripts/kiwi_sec_01a_knives.py": "e1a9f46606fca7de31b5f6e380a63a9a574a2ff0",
-    "scripts/test_kiwi_sec_01a.py": "5c6ed434c294a644d0d3c04f77a2bce3acd83791",
-    "security.py": "0a5af840104e3bd777e0e66f25db5e3320babbec"
+    "scripts/test_kiwi_sec_01a.py": "2f7c13612ee455934ab0610e753f4239b9409043",
+    "security.py": "bb53938a0e351c3304df643a0bf4a8396df92eed"
   },
   "kind": "ASGI/functions; fake DB and HTTP; no external calls",
   "preflight": 0,
