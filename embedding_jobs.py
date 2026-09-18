@@ -151,8 +151,11 @@ async def _finish_embedding_job(job_id,token,state):
     try:
         async with pool.acquire() as conn,conn.transaction():
             await _assert_owner(conn,job_id,token)
-            return bool(await conn.fetchval("""UPDATE embedding_rebuild_jobs SET state=$3,updated_at=NOW(),lease_until=NULL
+            finished = bool(await conn.fetchval("""UPDATE embedding_rebuild_jobs SET state=$3,updated_at=NOW(),lease_until=NULL
                 WHERE id=$1 AND owner_token=$2 AND lease_until > NOW() AND state='running' RETURNING id""",job_id,token,state))
+        if finished and state == 'target_changed':
+            db.safe_log('embedding_rebuild_target_changed','internal_error')
+        return finished
     except LeaseLost:
         return False
 

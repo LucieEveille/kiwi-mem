@@ -72,7 +72,7 @@ def mutate(k,s):
         return once(s,'    if scale == 0:\n        return None','    if scale == 0:\n        return [0.]*len(vector), 1.')
     if k=='16': return once(s,'async def get_embedding_status():','async def get_embedding_status():\n    await db.get_embedding("status mutation")')
     if k=='17': return once(s,"NOT IN ('digested','dream_deleted')","NOT IN ('digested')")
-    if k=='18': return once(s,'SET {counter}={counter}+1,','SET {counter}={counter}+0,')
+    if k=='18': return once(s,'SET {counter}={counter}+1,','SET {counter}={counter}+{0 if counter == "failed" else 1},')
     if k=='19': return once(s,"return stable_error('deprecated')","return {'status':'done'}")
     if k=='20': return once(s,'if generation != _refresh_generation:','if False:')
     if k=='21': return once(s,"message = error['message']","message = str(data)")
