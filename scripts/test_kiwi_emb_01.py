@@ -440,6 +440,112 @@ class EmbGuards(unittest.IsolatedAsyncioTestCase):
             self.assertNotIn(KEY,out.text+log.getvalue())
         finally: logging.getLogger().removeHandler(handler)
 
+    async def test_T_EMB_16_patch_percent_variants(self):
+        from urllib.parse import quote
+        key='EMBP/Case+Sensitive_1937'
+        standard=quote(key,safe='')
+        forms={
+            'lower':standard.replace('%2F','%2f').replace('%2B','%2b'),
+            'mixed':standard.replace('%2F','%2f'),
+            'escaped_unreserved':''.join(f'%{b:02x}' for b in key.encode()),
+        }
+        for name,encoded in forms.items():
+            for field in ('upstream_message','provider_name'):
+                with self.subTest(form=name,field=field):
+                    r=replace(self.route(),api_key=key,provider_name=encoded if field=='provider_name' else 'fixture')
+                    stdout,stderr,logs=io.StringIO(),io.StringIO(),io.StringIO()
+                    handler=logging.StreamHandler(logs); logging.getLogger().addHandler(handler)
+                    try:
+                        with redirect_stdout(stdout),redirect_stderr(stderr):
+                            out=await self.probe(httpx.Response(502,json={'error':{'message':encoded if field=='upstream_message' else 'unavailable'}}),r)
+                    finally:
+                        logging.getLogger().removeHandler(handler)
+                    self.assertIsNone(out.json()[field],f'encoded credential escaped: {name}/{field}')
+                    self.assertTrue(out.json()['upstream_message_hidden'])
+                    for output in (out.text,stdout.getvalue(),stderr.getvalue(),logs.getvalue()):
+                        self.assertNotIn(key,output);self.assertNotIn(encoded,output)
+        # Credential text stays case sensitive, and non-matching text is not rewritten.
+        from embedding_probe import redact_for_diagnostic
+        self.assertEqual(redact_for_diagnostic('case-only', ['Case-Only']), 'case-only')
+        self.assertEqual(redact_for_diagnostic('ordinary%2fpath', [key,standard]), 'ordinary%2fpath')
+        self.assertIsNone(redact_for_diagnostic('literal%2fKEY', ['literal%2fKEY',quote('literal%2fKEY',safe='')]))
+
+    async def test_T_EMB_16_patch_http_logs(self):
+        key='EMBP_HTTP_reason_sentinel_92835'
+        seen=[]
+        async def upstream(reader,writer):
+            try:
+                headers=await reader.readuntil(b'\r\n\r\n');seen.append(headers.splitlines()[0])
+                body=json.dumps({'error':{'message':key}}).encode()
+                writer.write(b'HTTP/1.1 502 '+key.encode()+b'\r\nContent-Type: application/json\r\nContent-Length: '+str(len(body)).encode()+b'\r\nConnection: close\r\n\r\n'+body)
+                await writer.drain()
+            finally:
+                writer.close();await writer.wait_closed()
+        server=await asyncio.start_server(upstream,'127.0.0.1',0)
+        port=server.sockets[0].getsockname()[1]
+        r=replace(self.route(url=f'http://127.0.0.1:{port}/embeddings'),api_key=key)
+        root=logging.getLogger();old_level=root.level;root.setLevel(logging.INFO)
+        stdout,stderr,logs=io.StringIO(),io.StringIO(),io.StringIO()
+        handler=logging.StreamHandler(logs);root.addHandler(handler)
+        try:
+            with redirect_stdout(stdout),redirect_stderr(stderr),patch.object(db,'_resolve_embedding_route',AsyncMock(return_value=r)):
+                out=await self.client.post('/admin/embedding-probe')
+            with self.subTest(arm='real_tcp'):
+                self.assertEqual(out.status_code,200);self.assertEqual(len(seen),1)
+                self.assertIsNone(out.json()['upstream_message'])
+                for output in (out.text,stdout.getvalue(),stderr.getvalue(),logs.getvalue()):self.assertNotIn(key,output)
+                self.assertIn(f'HTTP Request: POST http://127.0.0.1:{port}/embeddings "HTTP/1.1 502',logs.getvalue())
+            # httpcore currently emits no INFO summary on this real path. Exercise
+            # the mandated narrow signature on each logger, without claiming it did.
+            for name in ('httpx','httpcore'):
+                logs.seek(0);logs.truncate(0)
+                logging.getLogger(name).info('HTTP Request: %s %s "%s %d %s"','GET','https://fixture.invalid/x','HTTP/1.1',502,key)
+                logging.getLogger(name).info('unrelated event %s','preserved')
+                with self.subTest(arm=name):
+                    self.assertNotIn(key,logs.getvalue())
+                    self.assertIn('HTTP Request: GET https://fixture.invalid/x "HTTP/1.1 502',logs.getvalue())
+                    self.assertIn('unrelated event preserved',logs.getvalue())
+        finally:
+            root.removeHandler(handler);root.setLevel(old_level)
+            server.close();await server.wait_closed()
+
+    async def test_T_EMB_09_patch_lock_expiry(self):
+        import embedding_jobs as jobs
+        for action in ('renew','finish','progress'):
+            with self.subTest(action=action):
+                await self.pool.execute('TRUNCATE embedding_rebuild_items,embedding_rebuild_jobs RESTART IDENTITY CASCADE')
+                jid=await self.pool.fetchval("INSERT INTO embedding_rebuild_jobs(target_profile,state,scope,owner_token,lease_until) VALUES('p','running','stale','owner',clock_timestamp()+interval '1 second') RETURNING id")
+                iid=await self.pool.fetchval("INSERT INTO embedding_rebuild_items(job_id,table_name,row_id,state) VALUES($1,'memories',1,'pending') RETURNING id",jid)
+                original=await self.pool.fetchval('SELECT lease_until FROM embedding_rebuild_jobs WHERE id=$1',jid)
+                async def progress():
+                    try:
+                        async with self.pool.acquire() as conn,conn.transaction():
+                            await jobs._assert_owner(conn,jid,'owner')
+                            await jobs._record_item(conn,jid,iid,'done')
+                        return True
+                    except jobs.LeaseLost:return False
+                async with self.pool.acquire() as locker:
+                    tx=locker.transaction();await tx.start()
+                    pending=None
+                    try:
+                        await locker.execute('SELECT id FROM embedding_rebuild_jobs WHERE id=$1 FOR UPDATE',jid)
+                        coro=jobs._renew_embedding_lease(jid,'owner') if action=='renew' else jobs._finish_embedding_job(jid,'owner','done') if action=='finish' else progress()
+                        pending=asyncio.create_task(coro)
+                        for _ in range(100):
+                            waiting=await self.pool.fetchval("SELECT count(*) FROM pg_stat_activity WHERE datname=$1 AND wait_event_type='Lock'",self.name)
+                            if waiting:break
+                            await asyncio.sleep(.02)
+                        self.assertTrue(waiting,'test must observe a real row-lock wait')
+                        await asyncio.sleep(1.1)
+                        self.assertTrue(await locker.fetchval('SELECT lease_until<clock_timestamp() FROM embedding_rebuild_jobs WHERE id=$1',jid))
+                    finally:
+                        await tx.commit()
+                    accepted=await asyncio.wait_for(pending,5)
+                state=await self.pool.fetchrow('SELECT state,done,lease_until FROM embedding_rebuild_jobs WHERE id=$1',jid)
+                item=await self.pool.fetchval('SELECT state FROM embedding_rebuild_items WHERE id=$1',iid)
+                self.assertFalse(accepted,'expired lease accepted after waiting for row lock')
+                self.assertEqual((state['state'],state['done'],state['lease_until'],item),('running',0,original,'pending'))
+
     async def test_T_EMB_18_batch_attribution(self):
         r=self.route()
         for indices in ((-1,0),(0,0),(False,1),(0,2),(0,1.0),(0,),(0,1,2)):
@@ -457,8 +563,10 @@ if __name__=='__main__':
     parser=argparse.ArgumentParser()
     parser.add_argument('--stage',choices=['b1','all'],default='all')
     parser.add_argument('--case',action='append',default=[])
+    parser.add_argument('--patch-only',action='store_true',help='EMB-01-P regression groups only')
     args=parser.parse_args()
     methods=unittest.defaultTestLoader.getTestCaseNames(EmbGuards)
+    if args.patch_only: methods=[m for m in methods if '_patch_' in m]
     methods=[m for m in methods if (args.stage!='b1' or m.split('_')[3] not in B2) and (not args.case or m.split('_')[3] in args.case)]
     result=unittest.TextTestRunner(verbosity=2).run(unittest.TestSuite(EmbGuards(m) for m in methods))
     print(f'EMB guards: tests={result.testsRun} failures={len(result.failures)} errors={len(result.errors)}; PG=real disposable; model=mock')
