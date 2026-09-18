@@ -65,5 +65,10 @@ await check('T-EMB-17 input changes and unmount suppress late responses',async()
   calls[1].resolve({ok:true}); await new Promise(r=>setImmediate(r));
   assert.equal(rendered.length,count);
 });
-console.log(`EMB panel: ${5-failed} PASS / ${failed} FAIL / 0 ERROR; pure runtime state, no real provider`);
+await check('T-EMB-15 model selector and probe share the same page',async()=>{
+  const {CONFIG_PAGES}=await import('../admin-panel/js/config-schema.js');
+  const keys=CONFIG_PAGES.providers.groups.flatMap(g=>g.keys || []);
+  assert.ok(keys.includes('default_embedding_model'),'embedding selector must render beside alignment, so automatic probe can capture its generation');
+});
+console.log(`EMB panel: ${6-failed} PASS / ${failed} FAIL / 0 ERROR; pure runtime state, no real provider`);
 process.exitCode=failed?1:0;

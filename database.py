@@ -2737,7 +2737,7 @@ async def search_memories(query: str, limit: int = 10, track_recall: bool = True
     return results
 
 
-async def _vector_search(query_embedding: list, limit: int, heat_params: dict, project_id: str = None) -> list:
+async def _vector_search(query_embedding: EmbeddingResult, limit: int, heat_params: dict, project_id: str = None) -> list:
     """
     纯向量语义搜索 —— 不做召回追踪，仅返回评分结果。
     project_id: 提供时搜全局(NULL)+该项目；不提供时只搜全局(NULL)
@@ -5823,7 +5823,7 @@ async def get_active_scenes():
     return [dict(r) for r in rows]
 
 
-async def search_scenes(query_embedding: list, limit: int = 2, min_sim: float = 0.5) -> list:
+async def search_scenes(query_embedding: EmbeddingResult, limit: int = 2, min_sim: float = 0.5) -> list:
     """Search active scenes by embedding similarity for Dream scene injection."""
     if not isinstance(query_embedding, EmbeddingResult):
         return []

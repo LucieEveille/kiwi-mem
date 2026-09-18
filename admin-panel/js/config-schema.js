@@ -146,7 +146,7 @@ export const CONFIG_PAGES = {
     master: 'memory_enabled',
     groups: [
       { title:'提取与注入', desc:'记忆系统的核心节奏。', keys:['extract_interval','max_inject','locked_inject_ratio','semantic_threshold','dedup_threshold'] },
-      { title:'模型', desc:'后台任务建议用小模型省成本。', keys:['default_memory_model','default_embedding_model'] },
+      { title:'模型', desc:'后台任务建议用小模型省成本。嵌入模型与向量对齐位于供应商页。', keys:['default_memory_model'] },
       { title:'提示词', keys:['prompt_memory_extract'] },
     ],
   },
@@ -204,7 +204,7 @@ export const CONFIG_PAGES = {
     groups: [ { title:'搜索配置', keys:['search_engine','search_api_key','search_max_results'] } ],
   },
   providers: {
-    groups: [ { title:'默认模型与路由', desc:'未指定时的兜底模型与路由行为。', keys:['default_chat_model','openrouter_provider_order_enabled'] } ],
+    groups: [ { title:'默认模型与路由', desc:'未指定时的兜底模型与路由行为。', keys:['default_chat_model','openrouter_provider_order_enabled','default_embedding_model'] } ],
   },
   gateway: {
     groups: [

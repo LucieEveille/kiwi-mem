@@ -309,6 +309,40 @@ class EmbGuards(unittest.IsolatedAsyncioTestCase):
             state=await self.pool.fetchrow('SELECT * FROM embedding_rebuild_jobs WHERE id=$1',jid)
             self.assertEqual((state['done'],state['skipped'],state['state']),(0,1,'done'))
             self.assertIsNone(await self.pool.fetchval('SELECT embedding FROM memories LIMIT 1'))
+            # Steal an expired lease while the original worker is awaiting HTTP.
+            job,_=await create('stale'); jid=job['id']
+            started,release=asyncio.Event(),asyncio.Event()
+            async def held(texts):
+                started.set(); await release.wait(); return [self.result(r) for _ in texts]
+            with patch.object(db,'get_embeddings_batch',held):
+                task=asyncio.create_task(run(jid)); await asyncio.wait_for(started.wait(),3)
+                await self.pool.execute("UPDATE embedding_rebuild_jobs SET lease_until=NOW()-INTERVAL '1 second' WHERE id=$1",jid)
+                self.assertTrue(await claim(jid,'replacement'))
+                release.set(); await asyncio.wait_for(task,3)
+            state=await self.pool.fetchrow('SELECT * FROM embedding_rebuild_jobs WHERE id=$1',jid)
+            self.assertEqual((state['done'],state['failed'],state['skipped'],state['state']),(0,0,0,'running'))
+            self.assertIsNone(await self.pool.fetchval('SELECT embedding FROM memories LIMIT 1'))
+            self.assertTrue(await finish(jid,'replacement','target_changed'))
+            # Rebuild only writes the five vector fields; concurrent scene edits win.
+            with patch.object(db,'get_embedding',AsyncMock(return_value=None)):
+                scene=await db.create_mem_scene('scene','narrative',['before'])
+                await db.save_file_chunks('p','f','name','before')
+            job,_=await create('stale')
+            async def changed_all(texts):
+                await self.pool.execute("UPDATE mem_scenes SET atomic_facts='[\"after\"]'::jsonb")
+                await self.pool.execute("UPDATE project_file_chunks SET content='after'")
+                return [self.result(r) for _ in texts]
+            with patch.object(db,'get_embeddings_batch',changed_all): await run(job['id'])
+            # Scene/chunk snapshots may be read after the earlier memory batch.
+            # Direct CAS checks hold the original snapshots deterministically.
+            async with self.pool.acquire() as conn:
+                for table,column,value in (('mem_scenes','title','new title'),('project_file_chunks','content','new content')):
+                    row=await conn.fetchrow(f'SELECT * FROM {table} LIMIT 1')
+                    before_vector=tuple(row[k] for k in COLUMNS)
+                    await conn.execute(f'UPDATE {table} SET {column}=$1 WHERE id=$2',value,row['id'])
+                    self.assertFalse(await db._cas_embedding(conn,table,row,self.result(r)))
+                    after=await conn.fetchrow(f'SELECT * FROM {table} WHERE id=$1',row['id'])
+                    self.assertEqual(tuple(after[k] for k in COLUMNS),before_vector)
 
     async def test_T_EMB_10_compatibility(self):
         self.need('get_embedding_status')

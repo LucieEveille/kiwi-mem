@@ -57,7 +57,7 @@ export function describeAlignment(status) {
   const job = status.job || {state:'idle'}, totals = status.totals || {};
   const common = {disabled:false, poll:false, action:'重新检查并对齐待处理向量'};
   if (!status.route?.available) {
-    const reasons = {db_error:'配置暂时无法读取', no_key:'缺少 API Key', no_model:'未选择模型', no_route:'缺少可用路由', unsupported_format:'此接口格式不支持嵌入', invalid_url:'端点地址无效'};
+    const reasons = {db_error:'配置暂时无法读取', no_model:'未选择模型', provider_missing:'模型未绑定可用供应商', provider_no_key:'供应商缺少 API Key', env_incomplete:'环境变量的端点或 Key 不完整', provider_format_anthropic:'Anthropic 格式不支持此嵌入请求', url_invalid:'端点地址无效'};
     return {...common, disabled:true, action:null, text:`未配置可用嵌入服务（${reasons[status.route?.reason] || '请检查模型、格式与密钥'}）`};
   }
   if (job.state === 'running') return job.lease_expired
@@ -85,7 +85,7 @@ export function mountEmbeddingPanel(root, {configRoot, request, errorMessage, co
   const input = configRoot.querySelector('[data-key="default_embedding_model"]');
   const receipt = async (path, options) => {
     const response = await request(path, options);
-    if (response.status === 404) { root.hidden = true; return null; }
+    if (response.status === 404) { if (active && !options?.signal?.aborted) root.hidden = true; return null; }
     const body = await response.json();
     if (!response.ok || body.error) throw new Error(errorMessage(body, response.status));
     return body;
