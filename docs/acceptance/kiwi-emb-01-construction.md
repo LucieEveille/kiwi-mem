@@ -2,6 +2,8 @@
 
 2026-09-18. Constructor self-verification; independent review and deployment acceptance remain pending.
 
+Historical pre-patch delivery record. The later [EMB-01-P patch evidence](kiwi-emb-01-p.md) supersedes its diagnostic/lease results, current source commit and mutation totals after constructor adversarial review found three gaps.
+
 ## Behavior
 
 Embedding vectors now carry route profile, model, dimension and source-text hash. Searches exclude different identities and invalid vectors. Existing unversioned vectors become `unknown`; users explicitly confirm a potentially billable alignment. Missing-vector backfill remains available. Durable rebuild jobs use owner tokens, expiring leases, compare-and-swap writes and transactional counters. Provider response indices must form a complete permutation before identities are assigned.

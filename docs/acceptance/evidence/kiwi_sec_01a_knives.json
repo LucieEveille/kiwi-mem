@@ -1,6 +1,6 @@
 {
   "ticket": "KIWI-SEC-01a",
-  "head": "a9d07bf9264feafffada296cbc3ccd894799a958",
+  "head": "9c054a3217ff71c6dfa8988187d72beff5f7bc97",
   "source_blobs": {
     "anthropic_adapter.py": "bcf29d0ddacfdcdf46322323d406a300624642d5",
     "config.py": "529b494a1c402a9ba8efb02d8ac8df8245f6bdbb",
@@ -8,7 +8,7 @@
     "main.py": "dd30e2d3e7aade4107df64490d653be598a591dd",
     "scripts/kiwi_sec_01a_knives.py": "e1a9f46606fca7de31b5f6e380a63a9a574a2ff0",
     "scripts/test_kiwi_sec_01a.py": "2f7c13612ee455934ab0610e753f4239b9409043",
-    "security.py": "06e469515e47f9dc33e025d0c8518a3c38e4efc6"
+    "security.py": "bb53938a0e351c3304df643a0bf4a8396df92eed"
   },
   "kind": "ASGI/functions; fake DB and HTTP; no external calls",
   "preflight": 0,
