@@ -277,6 +277,9 @@ def get_directory_text():
 # ============================================================
 
 _category_embeddings = {}
+_category_profile = None
+_refresh_generation = 0
+_embedding_refresh_task = None
 _initialized = False
 _COMMON_EXTERNAL_KEYWORDS = {
     "get", "set", "list", "search", "query", "read", "write", "create", "delete",
@@ -550,15 +553,9 @@ async def _refresh_external_drawers_impl(force=False):
                 "server_name": server["name"],
             }
 
-            try:
-                emb = await get_embedding(description)
-                if emb:
-                    _category_embeddings[cat_id] = emb
-            except Exception as e:
-                print(f"\u26a0\ufe0f  外部 MCP [{server['name']}] 类别 embedding 失败，走关键词降级：{e}")
-
             registered += 1
 
+        await refresh_category_embeddings()
         META_TOOLS.clear()
         META_TOOLS.extend(_build_meta_tools())
         if registered:
@@ -627,12 +624,8 @@ async def init_drawer():
     cat_ids = list(CATEGORIES.keys())
     descriptions = [CATEGORIES[c]["description"] for c in cat_ids]
     print(f"\U0001f5c3\ufe0f  工具抽屉：正在预计算 {len(cat_ids)} 个类别的 embedding...")
-    embeddings = await get_embeddings_batch(descriptions)
-    success = 0
-    for cat_id, emb in zip(cat_ids, embeddings):
-        if emb:
-            _category_embeddings[cat_id] = emb
-            success += 1
+    await refresh_category_embeddings()
+    success = len(_category_embeddings)
     _initialized = True
     if success == len(cat_ids):
         print(f"\U0001f5c3\ufe0f  工具抽屉：{success} 个类别 embedding 就绪")
@@ -837,6 +830,7 @@ async def route_tools(
     # 注意：这些快照在同一把锁内同一瞬间取，彼此口径一致。
     async with _refresh_lock:
         cat_embeddings_snapshot = dict(_category_embeddings)
+        category_profile_snapshot = _category_profile
         categories_snapshot = dict(CATEGORIES)
         external_categories_snapshot = dict(_external_categories)
         tool_schemas_snapshot = dict(TOOL_SCHEMAS)
@@ -851,13 +845,21 @@ async def route_tools(
     external_keyword_hits = _external_keyword_match(user_message, external_categories_snapshot, categories_snapshot) if external_auto else set()
     external_scores = {}
 
+    if user_embedding is not None and category_profile_snapshot != user_embedding.profile:
+        schedule_embedding_refresh()
+        from security import safe_log
+        safe_log('drawer_profile_mismatch','internal_error')
+        user_embedding = None
+
     if user_embedding and cat_embeddings_snapshot:
         scores = {}
         for cat_id, cat_emb in cat_embeddings_snapshot.items():
             is_external = cat_id in external_categories_snapshot
             if is_external and not external_auto:
                 continue
-            score = cosine_similarity(user_embedding, cat_emb)
+            score = cosine_similarity(user_embedding.vector, cat_emb.vector)
+            if score is None:
+                continue
             scores[cat_id] = score
             if is_external:
                 external_scores[cat_id] = score
@@ -1202,3 +1204,42 @@ def get_drawer_stats():
         "threshold": SIMILARITY_THRESHOLD,
         "external_categories": len(_external_categories),
     }
+
+
+async def refresh_category_embeddings():
+    """Publish one generation atomically, including an empty current result."""
+    from database import get_embeddings_batch
+    from security import safe_log
+    global _refresh_generation, _category_embeddings, _category_profile
+    _refresh_generation += 1
+    generation = _refresh_generation
+    ids = tuple(CATEGORIES)
+    descriptions = [CATEGORIES[c]['description'] for c in ids]
+    results = await get_embeddings_batch(descriptions)
+    if generation != _refresh_generation:
+        return
+    ok = [(cid,result) for cid,result in zip(ids,results) if result is not None]
+    profiles = {result.profile for _,result in ok}
+    if len(profiles) > 1:
+        safe_log('drawer_profile_mismatch','internal_error')
+        return
+    _category_embeddings = dict(ok)
+    _category_profile = next(iter(profiles),None)
+
+
+def schedule_embedding_refresh():
+    """Invalidate in-flight publication, then coalesce into a fresh request."""
+    global _embedding_refresh_task, _refresh_generation
+    if not _initialized:
+        return
+    _refresh_generation += 1
+    if _embedding_refresh_task is not None and not _embedding_refresh_task.done():
+        _embedding_refresh_task.cancel()
+    async def refresh():
+        from security import safe_log
+        try:
+            await asyncio.sleep(1)
+            await refresh_category_embeddings()
+        except Exception as e:
+            safe_log('drawer_embedding_refresh_failed',e)
+    _embedding_refresh_task = asyncio.create_task(refresh())

@@ -25,6 +25,7 @@ from contextlib import asynccontextmanager
 from urllib.parse import urlparse
 from fastapi import FastAPI, Request, UploadFile, File
 from fastapi.responses import StreamingResponse, JSONResponse, Response
+from fastapi.encoders import jsonable_encoder
 from fastapi.middleware.cors import CORSMiddleware
 
 from database import (
@@ -34,7 +35,8 @@ from database import (
     track_memory_recall, touch_permanent_memories, search_scenes,
     get_all_memories_count, get_recent_memories, get_recent_conversation, delete_memory,
     batch_delete_memories_guarded, clear_all_memories, update_memory, check_memory_duplicate,
-    migrate_embeddings, backfill_permanent_memory_embeddings, get_embedding_stats,
+    backfill_permanent_memory_embeddings, get_embedding_stats,
+    get_embedding_status, create_or_resume_rebuild_job, run_embedding_rebuild_job, resume_embedding_rebuilds,
     # v5.3 时间有效期 + 矛盾检测
     invalidate_memory, create_memory_edge, detect_contradictions,
     get_embedding, _invalidate_memory_tx, _create_memory_edge_tx,
@@ -270,6 +272,7 @@ async def lifespan(app: FastAPI):
                 print(f"⚠️  默认 prompt 初始化失败: {e}")
 
             _spawn_background_task(_backfill_permanent_embeddings_background())
+            await resume_embedding_rebuilds(_spawn_background_task)
             
             # 启动每日记忆整理调度器
             from daily_digest import daily_digest_scheduler
@@ -4083,12 +4086,41 @@ async def toggle_memory_permanent(memory_id: int):
 
 @app.get("/admin/migrate-embeddings")
 async def api_migrate_embeddings():
-    """为所有缺少向量的记忆生成 embedding"""
-    if not await get_memory_enabled():
-        return {"error": "记忆系统未启用"}
+    """Compatibility tombstone: rebuilding requires explicit paid-work consent."""
+    return stable_error('deprecated')
+
+
+
+def _schedule_embedding_drawer_refresh():
+    from tool_drawer import schedule_embedding_refresh
+    schedule_embedding_refresh()
+
+
+@app.get('/admin/embedding-status')
+async def api_embedding_status():
     try:
-        result = await migrate_embeddings()
-        return public_model_result(result)
+        return await get_embedding_status()
+    except Exception as e:
+        return stable_error(e)
+
+
+@app.post('/admin/embedding-rebuild')
+async def api_embedding_rebuild(request: Request):
+    try:
+        try:
+            data = await request.json()
+        except ValueError:
+            return stable_error('invalid_request')
+        if not isinstance(data, dict) or data.get('scope','stale') not in ('stale','all'):
+            return stable_error('invalid_request')
+        outcome = await create_or_resume_rebuild_job(data.get('scope','stale'))
+        if outcome is None:
+            return stable_error('no_embedding_route')
+        job, spawned = outcome
+        if spawned:
+            _spawn_background_task(run_embedding_rebuild_job(job['id']))
+        status = await get_embedding_status()
+        return JSONResponse(status_code=202, content=jsonable_encoder({'status':'ok','job':status['job'],'spawned':spawned}))
     except Exception as e:
         return stable_error(e)
 
@@ -4775,6 +4807,8 @@ async def api_set_config(key: str, request: Request):
             return {"status": "updated", "key": key, "config": item}
         value = str(data.get("value", ""))
         if await set_config(key, value):
+            if key == "default_embedding_model":
+                _schedule_embedding_drawer_refresh()
             return {"status": "updated", "key": key, "value": value}
         return stable_error("invalid_request")
     except Exception as e:
@@ -4961,6 +4995,7 @@ async def api_create_provider(request: Request):
             return {"error": "API Base URL 不能为空"}
 
         provider = await create_provider(name, api_base_url, api_key, enabled, api_format=data.get("api_format", "openai"))
+        _schedule_embedding_drawer_refresh()
         return {"status": "created", "provider": serialize_provider(provider)}
     except Exception as e:
         safe_log("api_create_provider_failed", e)
@@ -4979,6 +5014,7 @@ async def api_update_provider(provider_id: int, request: Request):
             data["api_base_url"] = validate_upstream_url(data["api_base_url"])
         provider = await update_provider(provider_id, **data)
         if provider:
+            _schedule_embedding_drawer_refresh()
             return {"status": "updated", "provider": serialize_provider(provider)}
         return stable_error("not_found")
     except Exception as e:
@@ -4992,6 +5028,7 @@ async def api_delete_provider(provider_id: int):
     try:
         success = await delete_provider(provider_id)
         if success:
+            _schedule_embedding_drawer_refresh()
             return {"status": "deleted"}
         return stable_error("not_found")
     except Exception as e:
@@ -5234,6 +5271,7 @@ async def api_add_saved_model(provider_id: int, request: Request):
             api_format=data.get("api_format"),
         )
         if model:
+            _schedule_embedding_drawer_refresh()
             return {"status": "created", "model": model}
         return {"error": "模型已存在"}
     except Exception as e:
@@ -5247,6 +5285,7 @@ async def api_update_saved_model(model_pk_id: int, request: Request):
         data = await request.json()
         model = await update_provider_model(model_pk_id, **data)
         if model:
+            _schedule_embedding_drawer_refresh()
             return {"status": "updated", "model": model}
         return {"error": "模型不存在"}
     except Exception as e:
@@ -5259,6 +5298,7 @@ async def api_delete_saved_model(model_pk_id: int):
     try:
         success = await delete_provider_model(model_pk_id)
         if success:
+            _schedule_embedding_drawer_refresh()
             return {"status": "deleted"}
         return {"error": "模型不存在"}
     except Exception as e:

@@ -390,8 +390,8 @@ async def test_s2() -> None:
     content_secret = "内容密钥-ASCII-SECRET-9988-🧪-尾巴"
     title_secret = "标题密钥-TITLE-SECRET-7766-🌙"
 
-    async def vector_embedding(_text: str) -> list[float]:
-        return [0.1, 0.2, 0.3]
+    async def vector_embedding(_text: str):
+        return database.EmbeddingResult([0.1, 0.2, 0.3], 'fixture', 'f'*64, 3, None)
 
     output = io.StringIO()
     with patch.object(database, "get_embedding", vector_embedding), redirect_stdout(output):
@@ -880,7 +880,11 @@ async def test_s6(client: httpx.AsyncClient) -> None:
     active_scene = await _seed_scene(active_running, title="active-visible")
     deleted_scene = await _seed_scene(active_running, status="deleted", title="deleted-hidden")
     active_ids = {row["id"] for row in await database.get_active_scenes()}
-    search_ids = {row["id"] for row in await database.search_scenes([1.0, 0.0], limit=10, min_sim=0.0)}
+    for scene_id in (active_scene, deleted_scene):
+        row = await _pool_fetchrow("SELECT * FROM mem_scenes WHERE id=$1", scene_id)
+        await _pool_execute("UPDATE mem_scenes SET embedding_profile=$2,embedding_model='fixture',embedding_dim=2,embedding_source_hash=$3 WHERE id=$1", scene_id, 'f'*64, database.embedding_source_hash(database.build_scene_embedding_text(row['title'],row['atomic_facts'])))
+    query = database.EmbeddingResult([1.0,0.0], 'fixture', 'f'*64, 2, None)
+    search_ids = {row["id"] for row in await database.search_scenes(query, limit=10, min_sim=0.0)}
     require(active_scene in active_ids and deleted_scene not in active_ids, "active scene query leaks deleted scene")
     require(active_scene in search_ids and deleted_scene not in search_ids, "scene search leaks deleted scene")
     passed("T-S6-7 soft-deleted scenes are absent from active/search paths")

@@ -167,10 +167,12 @@ class EmbGuards(unittest.IsolatedAsyncioTestCase):
         await self.stamp(mid,result,'title a sufficiently long original memory text')
         with patch.object(db,'get_embedding',AsyncMock(return_value=None)):
             await db.update_memory(mid,content='new content')
-            self.assertEqual(tuple((await self.pool.fetchrow('SELECT * FROM memories WHERE id=$1',mid))[k] for k in COLUMNS),(None,)*5)
+            row = await self.pool.fetchrow('SELECT * FROM memories WHERE id=$1',mid)
+            self.assertEqual(tuple(row[k] for k in COLUMNS),(None,)*5)
             await self.stamp(mid,result,'title new content')
             await db.soften_memory(mid,'summary',target_resolution=0.5)
-        self.assertEqual(tuple((await self.pool.fetchrow('SELECT * FROM memories WHERE id=$1',mid))[k] for k in COLUMNS),(None,)*5)
+        row = await self.pool.fetchrow('SELECT * FROM memories WHERE id=$1',mid)
+        self.assertEqual(tuple(row[k] for k in COLUMNS),(None,)*5)
 
     async def test_T_EMB_06_comparison(self):
         classify = self.need('classify_embedding_row')

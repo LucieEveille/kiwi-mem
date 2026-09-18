@@ -128,7 +128,7 @@ def exception_code(exc):
 
 
 def stable_payload(code):
-    if not re.fullmatch(r'(?:invalid_request|not_found|internal_error|upstream_error|parse_failed|timeout|no_route|http_[1-5][0-9]{2}|network:RequestError)', code):
+    if not re.fullmatch(r'(?:invalid_request|not_found|internal_error|upstream_error|parse_failed|timeout|no_route|deprecated|no_embedding_route|invalid_response|http_[1-5][0-9]{2}|network:RequestError)', code):
         code = 'internal_error'
     return {'error': code, 'error_code': code}
 
@@ -137,7 +137,7 @@ def stable_error(error, status_code=None, headers=None):
     code = exception_code(error) if isinstance(error, Exception) else error
     body = stable_payload(code)
     if status_code is None:
-        status_code = 400 if code == 'invalid_request' else 404 if code == 'not_found' else 500 if code == 'internal_error' else 502
+        status_code = 410 if code == 'deprecated' else 409 if code == 'no_embedding_route' else 400 if code == 'invalid_request' else 404 if code == 'not_found' else 500 if code == 'internal_error' else 502
     return JSONResponse(status_code=status_code, content=body, headers=headers)
 
 

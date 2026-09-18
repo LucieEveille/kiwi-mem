@@ -22,6 +22,14 @@ import re
 import json
 import math
 import hashlib
+import secrets
+from dataclasses import replace
+from embedding_versioning import (
+    EmbeddingRoute, EmbeddingResult, is_usable_vector, cosine_similarity,
+    embedding_endpoint_identity, embedding_profile_for_route, embedding_source_hash,
+    build_memory_embedding_text, build_file_chunk_embedding_text,
+    embedding_db_payload, classify_embedding_row,
+)
 from datetime import datetime, timezone
 from types import MappingProxyType
 from typing import Optional, List
@@ -29,6 +37,11 @@ from typing import Optional, List
 import asyncio
 import asyncpg
 import httpx
+from embedding_jobs import (
+    _init_embedding_schema, get_embedding_status, create_or_resume_rebuild_job,
+    run_embedding_rebuild_job, resume_embedding_rebuilds, _cas_embedding,
+    _assert_owner, _claim_embedding_job, _renew_embedding_lease, _finish_embedding_job,
+)
 import jieba
 import jieba.analyse
 
@@ -785,6 +798,8 @@ async def init_tables():
             await conn.execute("ALTER TABLE provider_models ADD COLUMN api_format TEXT DEFAULT NULL")
             print("✅ provider_models 表已添加 api_format 列（模型级覆盖）")
 
+        await _init_embedding_schema(conn)
+
     _w2_04_ready = True
     print("✅ 数据库表结构已就绪（v6.2b 模型级 API 格式支持）")
 
@@ -822,123 +837,115 @@ async def probe_w2_04_schema() -> bool:
 # Embedding 生成
 # ============================================================
 
-async def _resolve_embedding_endpoint():
-    """决定 embedding 的「模型 / 供应商 / 端点」。
+def _embedding_url(base):
+    base = validate_upstream_url(base).rstrip('/')
+    for suffix in ('/chat/completions', '/messages', '/completions'):
+        if base.endswith(suffix):
+            base = base[:-len(suffix)]
+            break
+    return validate_upstream_url(base + '/embeddings')
 
-    · 模型：面板配置 default_embedding_model（空则回落 env EMBEDDING_MODEL）。
-    · 供应商：该模型在已保存供应商里解析到的 base+key（与聊天路由同源 resolve_provider_for_model）；
-              解析不到再回落 env API_KEY / API_BASE_URL。
-    返回 (url, api_key, model, source)；url 或 api_key 为 None 表示「向量服务不可用」。
-    """
-    model = EMBEDDING_MODEL
+
+async def _resolve_embedding_route_detail():
+    from config import get_config
     try:
-        from config import get_config
-        model = (await get_config("default_embedding_model")) or EMBEDDING_MODEL
+        panel_model = await get_config('default_embedding_model')
+        model = panel_model or EMBEDDING_MODEL
+        provider = await resolve_provider_for_model(panel_model) if panel_model else None
     except Exception:
-        pass
-    prov = None
-    try:
-        prov = await resolve_provider_for_model(model)
-    except Exception:
-        prov = None
-    if prov and prov.get("api_key"):
-        base = (prov.get("api_base_url") or "").rstrip("/")
-        for suffix in ("/chat/completions", "/messages", "/completions"):
-            if base.endswith(suffix):
-                base = base[: -len(suffix)]
-                break
-        return base + "/embeddings", prov["api_key"], model, (prov.get("provider_name") or "provider")
-    if API_KEY:
-        return _get_embedding_url(), API_KEY, model, "env"
-    return None, None, model, "none"
+        safe_log('embedding_route_db_error', 'internal_error')
+        return None, 'db_error'
+    reason = 'no_model' if not model else 'provider_missing'
+    if model and provider:
+        if not provider.get('api_key'):
+            reason = 'provider_no_key'
+        elif (provider.get('api_format') or 'openai') != 'openai':
+            reason = 'provider_format_anthropic'
+        else:
+            try:
+                url = _embedding_url(provider.get('api_base_url') or '')
+                r = EmbeddingRoute(url,provider['api_key'],model,provider['provider_id'],
+                                   'openai','provider',provider.get('provider_name'),'')
+                return replace(r,profile=embedding_profile_for_route(r)), 'ok'
+            except (ValueError, TypeError):
+                reason = 'url_invalid'
+            except KeyError:
+                safe_log('embedding_route_db_error','internal_error')
+                return None, 'db_error'
+    if model and API_BASE_URL and API_KEY:
+        try:
+            url = _embedding_url(API_BASE_URL)
+            r = EmbeddingRoute(url,API_KEY,model,None,'openai','env',None,'')
+            return replace(r,profile=embedding_profile_for_route(r)), 'ok'
+        except (ValueError, TypeError):
+            reason = 'url_invalid'
+    elif reason == 'provider_missing' and (not API_BASE_URL or not API_KEY):
+        reason = 'env_incomplete'
+    return None, reason
 
 
-async def get_embedding(text: str) -> Optional[List[float]]:
-    """生成向量。优先走已保存供应商（按嵌入模型解析），否则回落环境变量。失败返回 None（触发降级搜索）。"""
-    try:
-        url, key, model, _ = await _resolve_embedding_endpoint()
-        if url: url = validate_upstream_url(url)
-    except Exception as e:
-        safe_log("embedding_route_failed", e)
+async def _resolve_embedding_route():
+    return (await _resolve_embedding_route_detail())[0]
+
+
+def _embedding_result(route, vector):
+    if not is_usable_vector(vector):
         return None
-    if not url or not key:
-        print("⚠️  无可用 embedding 供应商/Key：把默认嵌入模型在某供应商下保存，或设置 API_KEY")
-        return None
+    return EmbeddingResult(vector,route.model_id,route.profile,len(vector),route.provider_id)
+
+
+async def get_embedding(text: str) -> Optional[EmbeddingResult]:
     try:
-        async with httpx.AsyncClient(follow_redirects=False, timeout=15) as client:
-            resp = await client.post(
-                url,
-                headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
-                json={"model": model, "input": text},
-            )
-            if resp.status_code == 200:
-                return resp.json()["data"][0]["embedding"]
-            safe_log("embedding_failed", f"http_{resp.status_code}")
+        route = await _resolve_embedding_route()
+        if route is None:
             return None
+        url = validate_upstream_url(route.url)
+        async with httpx.AsyncClient(follow_redirects=False, timeout=15) as client:
+            resp = await client.post(url,headers={'Authorization':f'Bearer {route.api_key}', 'Content-Type':'application/json'},
+                                     json={'model':route.model_id,'input':text})
+        if resp.status_code == 200:
+            return _embedding_result(route,resp.json()['data'][0]['embedding'])
+        safe_log('embedding_failed',f'http_{resp.status_code}')
     except Exception as e:
-        safe_log("embedding_failed", e)
-        return None
+        safe_log('embedding_failed',e)
+    return None
 
 
-async def get_embeddings_batch(texts: List[str]) -> List[Optional[List[float]]]:
-    """
-    批量生成 embedding（OpenRouter 支持批量输入）
-    返回与 texts 等长的列表，失败的位置为 None
-    """
-    if not texts:
+async def get_embeddings_batch(texts: List[str]) -> List[Optional[EmbeddingResult]]:
+    n = len(texts)
+    if not n:
         return []
     try:
-        url, key, model, _ = await _resolve_embedding_endpoint()
-        if url: url = validate_upstream_url(url)
-    except Exception as e:
-        safe_log("embedding_route_failed", e)
-        return [None] * len(texts)
-    if not url or not key:
-        return [None] * len(texts)
-
-    try:
+        route = await _resolve_embedding_route()
+        if route is None:
+            return [None] * n
+        url = validate_upstream_url(route.url)
         async with httpx.AsyncClient(follow_redirects=False, timeout=30) as client:
-            resp = await client.post(
-                url,
-                headers={
-                    "Authorization": f"Bearer {key}",
-                    "Content-Type": "application/json",
-                },
-                json={
-                    "model": model,
-                    "input": texts,
-                },
-            )
-            
-            if resp.status_code == 200:
-                data = resp.json()
-                # API 返回的 data 列表按 index 排序
-                results = [None] * len(texts)
-                for item in data["data"]:
-                    idx = item["index"]
-                    results[idx] = item["embedding"]
-                return results
-            else:
-                safe_log("embedding_failed", f"http_{resp.status_code}")
-                return [None] * len(texts)
-                
+            resp = await client.post(url,headers={'Authorization':f'Bearer {route.api_key}', 'Content-Type':'application/json'},
+                                     json={'model':route.model_id,'input':texts})
+        if resp.status_code != 200:
+            safe_log('embedding_failed',f'http_{resp.status_code}')
+            return [None] * n
+        data = resp.json().get('data')
+        valid = isinstance(data,list) and len(data) == n
+        seen = set()
+        if valid:
+            for item in data:
+                idx = item.get('index') if isinstance(item,dict) else None
+                if type(idx) is not int or not 0 <= idx < n or idx in seen:
+                    valid = False
+                    break
+                seen.add(idx)
+        if not valid:
+            safe_log('embedding_batch_index_invalid','internal_error')
+            return [None] * n
+        results = [None] * n
+        for item in data:
+            results[item['index']] = _embedding_result(route,item.get('embedding'))
+        return results
     except Exception as e:
-        safe_log("embedding_failed", e)
-        return [None] * len(texts)
-
-
-# ============================================================
-# 向量数学工具
-# ============================================================
-
-def cosine_similarity(a: List[float], b: List[float]) -> float:
-    """计算两个向量的余弦相似度"""
-    dot = sum(x * y for x, y in zip(a, b))
-    norm_a = math.sqrt(sum(x * x for x in a))
-    norm_b = math.sqrt(sum(x * x for x in b))
-    if norm_a == 0 or norm_b == 0:
-        return 0.0
-    return dot / (norm_a * norm_b)
+        safe_log('embedding_failed',e)
+        return [None] * n
 
 
 # ============================================================
@@ -2403,22 +2410,22 @@ async def save_memory(content: str, importance: int = 5, source_session: str = "
 async def _insert_memory_tx(conn, *, content: str, importance: int = 5, source_session: str = "",
                             title: str = "", category_id: int = None, source: str = "ai_extracted",
                             emotional_weight: int = 0, project_id: str = None,
-                            embedding: list = None) -> int:
+                            embedding: Optional[EmbeddingResult] = None) -> int:
     """在调用方的事务里写一条记忆，返回新 ID。
 
     conn-aware 原语：不自取第二条连接、不做任何外部调用——向量由调用方在锁外算好传进来。
     整批提取靠这一点做到"要么全落、要么全不落"。
     """
-    embedding_json = json.dumps(embedding) if embedding else None
+    payload = embedding_db_payload(embedding, build_memory_embedding_text(title, content))
     new_id = await conn.fetchval(
-        "INSERT INTO memories (content, importance, source_session, embedding, title, category_id, source, emotional_weight, project_id) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id",
-        content, importance, source_session, embedding_json, title, category_id, source, emotional_weight, project_id,
+        "INSERT INTO memories (content, importance, source_session, embedding, title, category_id, source, emotional_weight, project_id, embedding_profile, embedding_model, embedding_dim, embedding_source_hash) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) RETURNING id",
+        content, importance, source_session, payload[0], title, category_id, source, emotional_weight, project_id, *payload[1:],
     )
 
     emo_tag = f" 🩷emo={emotional_weight}" if emotional_weight > 0 else ""
     proj_tag = f" 📂proj={project_id}" if project_id else ""
     category_tag = f" category={category_id}" if category_id is not None else ""
-    vector_tag = f"含向量，{len(embedding)}维" if embedding else "无向量"
+    vector_tag = f"含向量，{payload[3]}维" if payload[0] is not None else "无向量"
     print(
         f"💎 记忆已存储 #{new_id}（{vector_tag}，{len(content)}字符"
         f"{category_tag}{emo_tag}{proj_tag}）"
@@ -2523,11 +2530,12 @@ async def update_memory(memory_id: int, content: str = None, importance: int = N
         if need_re_embed:
             embed_text = f"{new_title} {new_content}" if new_title else new_content
             embedding = await get_embedding(embed_text)
-            embedding_json = json.dumps(embedding) if embedding else None
+            payload = embedding_db_payload(embedding, build_memory_embedding_text(new_title, new_content))
             
-            sets.append(f"embedding = ${idx}")
-            params.append(embedding_json)
-            idx += 1
+            for column, value in zip(('embedding','embedding_profile','embedding_model','embedding_dim','embedding_source_hash'), payload):
+                sets.append(f'{column} = ${idx}')
+                params.append(value)
+                idx += 1
             
             if content is not None:
                 sets.append(f"content = ${idx}")
@@ -2734,14 +2742,16 @@ async def _vector_search(query_embedding: list, limit: int, heat_params: dict, p
     纯向量语义搜索 —— 不做召回追踪，仅返回评分结果。
     project_id: 提供时搜全局(NULL)+该项目；不提供时只搜全局(NULL)
     """
+    if not isinstance(query_embedding, EmbeddingResult):
+        return []
     semantic_threshold = heat_params.get("_semantic_threshold", 0.25)
     pool = await get_pool()
     async with pool.acquire() as conn:
         # 构建项目过滤条件
         if project_id:
-            project_filter = "AND (m.project_id IS NULL OR m.project_id = $1)"
+            project_filter = "AND (m.project_id IS NULL OR m.project_id = $1) AND m.embedding_profile = $2"
             rows = await conn.fetch(
-                f"""SELECT m.id, m.content, m.importance, m.created_at, m.embedding, 
+                f"""SELECT m.id, m.content, m.importance, m.created_at, m.embedding, m.embedding_profile, m.embedding_dim, m.embedding_source_hash, 
                           COALESCE(m.title, '') as title, COALESCE(m.memory_type, 'fragment') as memory_type,
                           m.category_id, COALESCE(c.name, '') as category_name, COALESCE(c.color, '') as category_color,
                           COALESCE(m.source, 'ai_extracted') as source,
@@ -2755,11 +2765,11 @@ async def _vector_search(query_embedding: list, limit: int, heat_params: dict, p
                    WHERE COALESCE(m.memory_type, 'fragment') NOT IN ('digested', 'dream_deleted')
                      AND (m.valid_until IS NULL OR m.valid_until > NOW())
                      {project_filter}""",
-                project_id,
+                project_id, query_embedding.profile,
             )
         else:
             rows = await conn.fetch(
-                """SELECT m.id, m.content, m.importance, m.created_at, m.embedding,
+                """SELECT m.id, m.content, m.importance, m.created_at, m.embedding, m.embedding_profile, m.embedding_dim, m.embedding_source_hash,
                           COALESCE(m.title, '') as title, COALESCE(m.memory_type, 'fragment') as memory_type,
                           m.category_id, COALESCE(c.name, '') as category_name, COALESCE(c.color, '') as category_color,
                           COALESCE(m.source, 'ai_extracted') as source,
@@ -2772,7 +2782,7 @@ async def _vector_search(query_embedding: list, limit: int, heat_params: dict, p
                    FROM memories m LEFT JOIN memory_categories c ON m.category_id = c.id
                    WHERE COALESCE(m.memory_type, 'fragment') NOT IN ('digested', 'dream_deleted')
                      AND (m.valid_until IS NULL OR m.valid_until > NOW())
-                     AND m.project_id IS NULL"""
+                     AND m.project_id IS NULL AND m.embedding_profile = $1""", query_embedding.profile
             )
     
     if not rows:
@@ -2780,23 +2790,19 @@ async def _vector_search(query_embedding: list, limit: int, heat_params: dict, p
     
     scored = []
     no_embedding_count = 0
+    stale_count = 0
     
     for row in rows:
-        if row["embedding"] is None:
-            no_embedding_count += 1
+        kind = classify_embedding_row(row['embedding'],row['embedding_profile'],row['embedding_dim'],row['embedding_source_hash'],query_embedding.profile,build_memory_embedding_text(row['title'],row['content']))
+        if kind != 'current':
+            no_embedding_count += kind == 'missing'
+            stale_count += kind == 'stale'
             continue
-        
-        try:
-            mem_embedding = json.loads(row["embedding"])
-        except (json.JSONDecodeError, TypeError):
-            no_embedding_count += 1
+        mem_embedding = json.loads(row['embedding'])
+        sim = cosine_similarity(query_embedding.vector, mem_embedding)
+        if sim is None or sim < semantic_threshold:
             continue
-        
-        sim = cosine_similarity(query_embedding, mem_embedding)
-        
-        if sim < semantic_threshold:
-            continue
-        
+
         _ca = row["created_at"]
         _ca_utc = _ca.astimezone(timezone.utc) if _ca.tzinfo is not None else _ca.replace(tzinfo=timezone.utc)
         age_seconds = (datetime.now(timezone.utc) - _ca_utc).total_seconds()
@@ -2836,6 +2842,8 @@ async def _vector_search(query_embedding: list, limit: int, heat_params: dict, p
     if no_embedding_count:
         print(f"   ⚠️  {no_embedding_count} 条记忆缺少向量")
     
+    if stale_count:
+        print(f'event=embedding_skipped stale={stale_count}')
     return scored[:limit]
 
 
@@ -3000,21 +3008,22 @@ async def soften_memory(memory_id: int, softened_content: str, target_resolution
         title = row["title"] or ""
         embed_text = f"{title} {softened_content}" if title else softened_content
         embedding = await get_embedding(embed_text)
-        embedding_json = json.dumps(embedding) if embedding else None
+        payload = embedding_db_payload(embedding, build_memory_embedding_text(title, softened_content))
         if embedding is None:
-            print(f"   ⚠️ 软化 embedding 生成失败: #{memory_id} 保留旧向量")
+            print(f"   ⚠️ 软化 embedding 生成失败: #{memory_id} 清空旧向量")
         await conn.execute("""
             UPDATE memories
             SET content = $1,
                 resolution = $2,
-                embedding = COALESCE($3, embedding),
+                embedding = $3,
+                embedding_profile = $6, embedding_model = $7, embedding_dim = $8, embedding_source_hash = $9,
                 valid_until = GREATEST(
                     COALESCE(valid_until, NOW() + $4 * INTERVAL '1 day'),
                     NOW() + $4 * INTERVAL '1 day'
                 ),
                 softened_at = NOW()
             WHERE id = $5
-        """, softened_content, target_resolution, embedding_json, extend_days, memory_id)
+        """, softened_content, target_resolution, payload[0], extend_days, memory_id, *payload[1:])
         title_tag = row["title"] or f"#{memory_id}"
         old_len = len(row["content"])
         new_len = len(softened_content)
@@ -3422,60 +3431,6 @@ async def check_memory_duplicate(new_content: str, threshold: float = None, new_
 # Embedding 迁移工具
 # ============================================================
 
-async def migrate_embeddings(batch_size: int = 20) -> dict:
-    """
-    为所有缺少 embedding 的记忆生成向量
-    
-    分批处理，避免一次性调用太多 API
-    返回迁移统计信息
-    """
-    pool = await get_pool()
-    
-    async with pool.acquire() as conn:
-        # 找出所有没有 embedding 的记忆
-        rows = await conn.fetch(
-            "SELECT id, content FROM memories WHERE embedding IS NULL ORDER BY id"
-        )
-    
-    if not rows:
-        return {"status": "done", "message": "所有记忆都已有向量", "migrated": 0, "failed": 0}
-    
-    total = len(rows)
-    migrated = 0
-    failed = 0
-    
-    print(f"🔄 开始迁移 {total} 条记忆的向量...")
-    
-    # 分批处理
-    for i in range(0, total, batch_size):
-        batch = rows[i:i + batch_size]
-        texts = [row["content"] for row in batch]
-        ids = [row["id"] for row in batch]
-        
-        print(f"   批次 {i//batch_size + 1}: 处理 {len(batch)} 条 (#{ids[0]} ~ #{ids[-1]})")
-        
-        embeddings = await get_embeddings_batch(texts)
-        
-        async with pool.acquire() as conn:
-            for j, (row_id, emb) in enumerate(zip(ids, embeddings)):
-                if emb is not None:
-                    await conn.execute(
-                        "UPDATE memories SET embedding = $1 WHERE id = $2",
-                        json.dumps(emb), row_id
-                    )
-                    migrated += 1
-                else:
-                    failed += 1
-                    print(f"   ⚠️  #{row_id} embedding 生成失败")
-    
-    print(f"✅ 迁移完成：{migrated} 成功，{failed} 失败，共 {total} 条")
-    
-    return {
-        "status": "done",
-        "total": total,
-        "migrated": migrated,
-        "failed": failed,
-    }
 
 
 async def backfill_permanent_memory_embeddings(batch_size: int = 20) -> dict:
@@ -3489,7 +3444,7 @@ async def backfill_permanent_memory_embeddings(batch_size: int = 20) -> dict:
 
     async with pool.acquire() as conn:
         rows = await conn.fetch("""
-            SELECT id, COALESCE(title, '') as title, content
+            SELECT *
             FROM memories
             WHERE COALESCE(is_permanent, false) = TRUE
               AND embedding IS NULL
@@ -3516,13 +3471,13 @@ async def backfill_permanent_memory_embeddings(batch_size: int = 20) -> dict:
         embeddings = await get_embeddings_batch(texts)
 
         async with pool.acquire() as conn:
-            for row_id, emb in zip(ids, embeddings):
+            for row, emb in zip(batch, embeddings):
+                row_id = row["id"]
                 if emb is not None:
-                    await conn.execute(
-                        "UPDATE memories SET embedding = $1 WHERE id = $2",
-                        json.dumps(emb), row_id,
-                    )
-                    migrated += 1
+                    if await _cas_embedding(conn,'memories',row,emb,missing_only=True):
+                        migrated += 1
+                    else:
+                        failed += 1
                 else:
                     failed += 1
                     print(f"   ⚠️  锁定记忆 #{row_id} embedding 生成失败")
@@ -3544,15 +3499,19 @@ async def get_embedding_stats() -> dict:
         with_embedding = await conn.fetchval(
             "SELECT COUNT(*) FROM memories WHERE embedding IS NOT NULL"
         )
-    url, key, emb_model, source = await _resolve_embedding_endpoint()
+    route = await _resolve_embedding_route()
+    from config import get_config
+    emb_model = route.model_id if route else ((await get_config('default_embedding_model')) or EMBEDDING_MODEL)
+    source = (route.provider_name or 'provider') if route and route.source == 'provider' else ('env' if route else 'none')
     return {
+        "embedding_status": await get_embedding_status(),
         "total_memories": total,
         "with_embedding": with_embedding,
         "without_embedding": total - with_embedding,
         "coverage": f"{with_embedding/total*100:.1f}%" if total > 0 else "N/A",
         "embedding_model": emb_model,
         "embedding_source": source,                 # 供应商名 / "env" / "none"
-        "embedding_available": bool(url and key),    # 向量服务是否可用
+        "embedding_available": route is not None,    # 向量服务是否可用
     }
 
 async def get_all_providers():
@@ -3777,7 +3736,7 @@ async def resolve_provider_for_model(model_id: str, provider_model_id: int = Non
     async with pool.acquire() as conn:
         if provider_model_id is not None:
             row = await conn.fetchrow("""
-                SELECT p.api_base_url, p.api_key,
+                SELECT p.id AS provider_id, p.api_base_url, p.api_key,
                        COALESCE(pm.api_format, p.api_format, 'openai') as api_format,
                        p.name as provider_name,
                        pm.model_id,
@@ -3793,7 +3752,7 @@ async def resolve_provider_for_model(model_id: str, provider_model_id: int = Non
                 return dict(row)
 
         row = await conn.fetchrow("""
-            SELECT p.api_base_url, p.api_key,
+            SELECT p.id AS provider_id, p.api_base_url, p.api_key,
                    COALESCE(pm.api_format, p.api_format, 'openai') as api_format,
                    p.name as provider_name,
                    pm.model_id,
@@ -5783,18 +5742,13 @@ def build_scene_embedding_text(title: str, atomic_facts) -> str:
 
 
 async def _get_scene_embedding_json(title: str, atomic_facts, scene_label: str = ""):
-    embed_text = build_scene_embedding_text(title, atomic_facts)
-    if not embed_text:
-        return None
+    text = build_scene_embedding_text(title, atomic_facts)
     try:
-        embedding = await get_embedding(embed_text)
+        result = await get_embedding(text) if text else None
+        return embedding_db_payload(result, text)
     except Exception as e:
-        print(f"⚠️ 场景 embedding 生成异常 {scene_label}: {type(e).__name__}: {e}")
-        return None
-    if embedding is None:
-        print(f"⚠️ 场景 embedding 生成失败 {scene_label}，将保留 NULL")
-        return None
-    return json.dumps(embedding)
+        safe_log('scene_embedding_failed', e)
+        return (None,) * 5
 
 
 async def create_mem_scene(title: str, narrative: str, atomic_facts: list = None,
@@ -5805,13 +5759,13 @@ async def create_mem_scene(title: str, narrative: str, atomic_facts: list = None
     af = json.dumps(atomic_facts or [], ensure_ascii=False)
     fs = json.dumps(foresight or [], ensure_ascii=False)
     rm = json.dumps(related_memory_ids or [], ensure_ascii=False)
-    embedding_json = await _get_scene_embedding_json(title, atomic_facts, f"scene:{title or 'untitled'}")
+    embedding_payload = await _get_scene_embedding_json(title, atomic_facts, f"scene:{title or 'untitled'}")
     async with pool.acquire() as conn:
         row = await conn.fetchrow("""
-            INSERT INTO mem_scenes (title, narrative, atomic_facts, foresight, related_memory_ids, created_by_dream_id, embedding)
-            VALUES ($1, $2, $3::jsonb, $4::jsonb, $5::jsonb, $6, $7::jsonb)
+            INSERT INTO mem_scenes (title, narrative, atomic_facts, foresight, related_memory_ids, created_by_dream_id, embedding, embedding_profile, embedding_model, embedding_dim, embedding_source_hash)
+            VALUES ($1, $2, $3::jsonb, $4::jsonb, $5::jsonb, $6, $7::jsonb, $8, $9, $10, $11)
             RETURNING id
-        """, title, narrative, af, fs, rm, dream_id, embedding_json)
+        """, title, narrative, af, fs, rm, dream_id, *embedding_payload)
     return row["id"] if row else None
 
 
@@ -5819,7 +5773,7 @@ async def update_mem_scene(scene_id: int, **kwargs):
     """更新记忆场景"""
     pool = await get_pool()
     refresh_embedding = any(key in kwargs for key in ("title", "atomic_facts"))
-    embedding_json = None
+    embedding_payload = None
     if refresh_embedding:
         async with pool.acquire() as conn:
             current = await conn.fetchrow(
@@ -5830,7 +5784,7 @@ async def update_mem_scene(scene_id: int, **kwargs):
             return False
         effective_title = kwargs.get("title", current["title"])
         effective_facts = kwargs.get("atomic_facts", current["atomic_facts"])
-        embedding_json = await _get_scene_embedding_json(effective_title, effective_facts, f"scene:{scene_id}")
+        embedding_payload = await _get_scene_embedding_json(effective_title, effective_facts, f"scene:{scene_id}")
     sets = []
     vals = []
     idx = 1
@@ -5844,9 +5798,11 @@ async def update_mem_scene(scene_id: int, **kwargs):
             vals.append(json.dumps(val, ensure_ascii=False))
             idx += 1
     if refresh_embedding:
-        sets.append(f"embedding = ${idx}::jsonb")
-        vals.append(embedding_json)
-        idx += 1
+        for column, value in zip(('embedding','embedding_profile','embedding_model','embedding_dim','embedding_source_hash'), embedding_payload):
+            cast = '::jsonb' if column == 'embedding' else ''
+            sets.append(f'{column} = ${idx}{cast}')
+            vals.append(value)
+            idx += 1
     if not sets:
         return False
     sets.append(f"updated_at = NOW()")
@@ -5869,29 +5825,31 @@ async def get_active_scenes():
 
 async def search_scenes(query_embedding: list, limit: int = 2, min_sim: float = 0.5) -> list:
     """Search active scenes by embedding similarity for Dream scene injection."""
-    if not query_embedding:
+    if not isinstance(query_embedding, EmbeddingResult):
         return []
 
     pool = await get_pool()
     async with pool.acquire() as conn:
         rows = await conn.fetch("""
-            SELECT id, title, atomic_facts, foresight, embedding
+            SELECT id, title, atomic_facts, foresight, embedding, embedding_profile, embedding_dim, embedding_source_hash
             FROM mem_scenes
             WHERE status = 'active'
-              AND embedding IS NOT NULL
-        """)
+              AND embedding IS NOT NULL AND embedding_profile = $1
+        """, query_embedding.profile)
 
     matches = []
     for row in rows:
         r = dict(row)
         emb = _jsonb_to_python(r.get("embedding"), None)
-        if not emb:
+        kind = classify_embedding_row(emb,r['embedding_profile'],r['embedding_dim'],r['embedding_source_hash'],query_embedding.profile,build_scene_embedding_text(r['title'],r['atomic_facts']))
+        if kind != 'current':
+            print(f'event=embedding_skipped table=mem_scenes kind={kind}')
             continue
         try:
-            sim = cosine_similarity(query_embedding, emb)
+            sim = cosine_similarity(query_embedding.vector, emb)
         except Exception:
             continue
-        if sim < min_sim:
+        if sim is None or sim < min_sim:
             continue
         matches.append({
             "id": r["id"],
@@ -6406,13 +6364,13 @@ async def save_file_chunks(project_id: str, file_id: str, file_name: str, text_c
     
     for i, chunk in enumerate(chunks):
         embedding = await get_embedding(chunk)
-        embedding_json = json.dumps(embedding) if embedding else None
+        payload = embedding_db_payload(embedding, build_file_chunk_embedding_text(chunk))
         
         async with pool.acquire() as conn:
             await conn.execute(
-                """INSERT INTO project_file_chunks (project_id, file_id, file_name, chunk_index, content, embedding)
-                   VALUES ($1, $2, $3, $4, $5, $6)""",
-                project_id, file_id, file_name, i, chunk, embedding_json,
+                """INSERT INTO project_file_chunks (project_id, file_id, file_name, chunk_index, content, embedding, embedding_profile, embedding_model, embedding_dim, embedding_source_hash)
+                   VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)""",
+                project_id, file_id, file_name, i, chunk, *payload,
             )
         saved += 1
     
@@ -6431,8 +6389,8 @@ async def search_file_chunks(project_id: str, query: str, limit: int = 6) -> lis
     pool = await get_pool()
     async with pool.acquire() as conn:
         rows = await conn.fetch(
-            "SELECT id, file_id, file_name, chunk_index, content, embedding FROM project_file_chunks WHERE project_id = $1",
-            project_id,
+            "SELECT id, file_id, file_name, chunk_index, content, embedding, embedding_profile, embedding_dim, embedding_source_hash FROM project_file_chunks WHERE project_id = $1 AND embedding_profile = $2",
+            project_id, query_embedding.profile,
         )
     
     if not rows:
@@ -6440,17 +6398,15 @@ async def search_file_chunks(project_id: str, query: str, limit: int = 6) -> lis
     
     scored = []
     for row in rows:
-        if row["embedding"] is None:
+        kind = classify_embedding_row(row['embedding'],row['embedding_profile'],row['embedding_dim'],row['embedding_source_hash'],query_embedding.profile,build_file_chunk_embedding_text(row['content']))
+        if kind != 'current':
+            print(f'event=embedding_skipped table=project_file_chunks kind={kind}')
             continue
-        try:
-            chunk_emb = json.loads(row["embedding"])
-        except (json.JSONDecodeError, TypeError):
+        chunk_emb = json.loads(row['embedding'])
+        sim = cosine_similarity(query_embedding.vector, chunk_emb)
+        if sim is None or sim < 0.3:
             continue
-        
-        sim = cosine_similarity(query_embedding, chunk_emb)
-        if sim < 0.3:  # 文件块用更低的阈值（内容可能不是对话式的）
-            continue
-        
+
         scored.append({
             "id": row["id"],
             "file_id": row["file_id"],

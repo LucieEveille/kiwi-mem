@@ -309,6 +309,8 @@ async def check_reserved_external_name():
         "tool_to_category": dict(td._tool_to_category),
         "external": dict(td._external_categories),
         "embeddings": dict(td._category_embeddings),
+        "profile": td._category_profile,
+        "generation": td._refresh_generation,
         "meta": list(td.META_TOOLS),
         "hash": td._external_config_hash,
     }
@@ -327,7 +329,10 @@ async def check_reserved_external_name():
         return ""
 
     async def get_embedding(_text):
-        return []
+        return None
+
+    async def get_embeddings_batch(texts):
+        return [None] * len(texts)
 
     async def get_tools_for_servers(_servers):
         schema = {
@@ -348,6 +353,7 @@ async def check_reserved_external_name():
 
     fake_config.get_config = get_config
     fake_database.get_embedding = get_embedding
+    fake_database.get_embeddings_batch = get_embeddings_batch
     fake_mcp.get_tools_for_servers = get_tools_for_servers
 
     try:
@@ -381,6 +387,8 @@ async def check_reserved_external_name():
         td._external_categories.update(snapshots["external"])
         td._category_embeddings.clear()
         td._category_embeddings.update(snapshots["embeddings"])
+        td._category_profile = snapshots["profile"]
+        td._refresh_generation = snapshots["generation"]
         td.META_TOOLS.clear()
         td.META_TOOLS.extend(snapshots["meta"])
         td._external_config_hash = snapshots["hash"]

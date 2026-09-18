@@ -60,7 +60,7 @@ class ThinkGuards(unittest.IsolatedAsyncioTestCase):
         if panel is not MISSING: values['reasoning_effort'] = panel
         pool = ConfigPool(values)
         url, fmt = PROVIDERS[provider]
-        row = dict(id=7, name='fixture', provider_name='fixture', api_base_url=url,
+        row = dict(id=7, provider_id=7, name='fixture', provider_name='fixture', api_base_url=url,
                    api_key=KEY, api_format=fmt, enabled=True)
         calls = []
         console, logs = io.StringIO(), io.StringIO()
