@@ -2751,7 +2751,7 @@ async def _vector_search(query_embedding: EmbeddingResult, limit: int, heat_para
         if project_id:
             project_filter = "AND (m.project_id IS NULL OR m.project_id = $1) AND m.embedding_profile = $2"
             rows = await conn.fetch(
-                f"""SELECT m.id, m.content, m.importance, m.created_at, m.embedding, m.embedding_profile, m.embedding_dim, m.embedding_source_hash, 
+                f"""SELECT m.id, m.content, m.importance, m.created_at, m.embedding, m.embedding_profile, m.embedding_dim, m.embedding_source_hash,
                           COALESCE(m.title, '') as title, COALESCE(m.memory_type, 'fragment') as memory_type,
                           m.category_id, COALESCE(c.name, '') as category_name, COALESCE(c.color, '') as category_color,
                           COALESCE(m.source, 'ai_extracted') as source,
