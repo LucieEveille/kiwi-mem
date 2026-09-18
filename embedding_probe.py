@@ -2,7 +2,7 @@
 import re
 import time
 from datetime import datetime, timezone
-from urllib.parse import quote, urlsplit
+from urllib.parse import quote, unquote, urlsplit
 
 import httpx
 import database as db
@@ -12,7 +12,10 @@ from security import exception_code, validate_upstream_url
 def redact_for_diagnostic(value, secrets):
     if not isinstance(value, str):
         return None
-    if any(secret and secret in value for secret in secrets):
+    # Comparison copies only: preserve key case and the original safe diagnostic.
+    normalized = re.sub(r'%[0-9a-fA-F]{2}', lambda m: m.group(0).upper(), value)
+    candidates = (value, normalized, unquote(value))
+    if any(secret and any(secret in candidate for candidate in candidates) for secret in secrets):
         return None
     if re.search(r'Bearer\s+\S+|sk-[A-Za-z0-9_-]{8,}|://[^/\s]+@|[\x00-\x08\x0b\x0c\x0e-\x1f]', value, re.I):
         return None

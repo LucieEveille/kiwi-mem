@@ -27,6 +27,8 @@ CASES={
  '23':('embedding_probe.py','16'), '24':('embedding_probe.py','16'),
  '25':('database.py','18'), '26':('embedding_versioning.py','04'),
  '27':('embedding_jobs.py','09'), '28':('embedding_jobs.py','12'), '29':('tool_drawer.py','07'),
+ '30':('embedding_probe.py','16'), '31a':('security.py','16'), '31b':('security.py','16'),
+ '32':('embedding_jobs.py','09'), '32e':('embedding_jobs.py','09'),
 }
 
 
@@ -62,12 +64,12 @@ def mutate(k,s):
     if k=='09': return function(s,'_insert_memory_tx',lambda p:once(p,'    new_id = await conn.fetchval(',"    payload = (payload[0],None,*payload[2:])\n    new_id = await conn.fetchval("))
     if k=='10': return function(s,'soften_memory',lambda p:once(p,'embedding = $3,','embedding = COALESCE($3,embedding),'))
     if k in ('11','11e'):
-        if k=='11': s=function(s,'_assert_owner',lambda p:once(p,' AND lease_until > NOW()',''))
-        return function(s,'_renew_embedding_lease',lambda p:once(p,' AND lease_until > NOW()',''))
+        if k=='11': s=function(s,'_assert_owner',lambda p:once(p,'lease_until > clock_timestamp()','TRUE'))
+        return function(s,'_renew_embedding_lease',lambda p:once(p,' AND lease_until > clock_timestamp()',''))
     if k=='12': return once(s,' AND content IS NOT DISTINCT FROM $8',' AND $8::text IS NOT NULL')
     if k=='13': return once(s,'if result.profile!=target:','if False:')
     if k=='14':
-        return function(s,'_finish_embedding_job',lambda p:once(once(p,'            await _assert_owner(conn,job_id,token)\n',''),'AND owner_token=$2 AND lease_until > NOW()', 'AND $2::text IS NOT NULL'))
+        return function(s,'_finish_embedding_job',lambda p:once(once(p,'            await _assert_owner(conn,job_id,token)\n',''),'AND owner_token=$2 AND lease_until > clock_timestamp()', 'AND $2::text IS NOT NULL'))
     if k=='15':
         return once(s,'    if scale == 0:\n        return None','    if scale == 0:\n        return [0.]*len(vector), 1.')
     if k=='16': return once(s,'async def get_embedding_status():','async def get_embedding_status():\n    await db.get_embedding("status mutation")')
@@ -76,7 +78,7 @@ def mutate(k,s):
     if k=='19': return once(s,"return stable_error('deprecated')","return {'status':'done'}")
     if k=='20': return once(s,'if generation != _refresh_generation:','if False:')
     if k=='21': return once(s,"message = error['message']","message = str(data)")
-    if k=='22': return once(s,'secret and secret in value','secret and len(secret)>=8 and secret in value')
+    if k=='22': return once(s,'secret and any(secret in candidate','secret and len(secret)>=8 and any(secret in candidate')
     if k=='23': return once(s,'    for name, value in controlled.items():',"    if controlled['upstream_message'] is not None: controlled['upstream_message']=controlled['upstream_message'][:2000]\n    for name, value in controlled.items():")
     if k=='24': return once(s,'clean = redact_for_diagnostic(value, secrets)',"clean = value if name == 'upstream_request_id' else redact_for_diagnostic(value, secrets)")
     if k=='25':
@@ -86,6 +88,13 @@ def mutate(k,s):
     if k=='27': return once(s,'if after is None or after.profile!=target:','if False:')
     if k=='28': return once(s,'                if result is None:',"                if result.profile != target:\n                    await _finish_embedding_job(job_id,token,'target_changed'); return\n                if result is None:")
     if k=='29': return once(s,'if generation != _refresh_generation:', 'if any(result is not None for result in results) and generation != _refresh_generation:')
+    # Normalization alone is redundant with unquote: remove both comparison
+    # copies to test the encoded-key boundary, rather than claiming a false RED.
+    if k=='30': return once(s,'candidates = (value, normalized, unquote(value))','candidates = (value,)')
+    if k=='31a': return once(s,"for name in ('httpx', 'httpcore'):", 'for name in ():')
+    if k=='31b': return once(s,"for name in ('httpx', 'httpcore'):", "for name in ('httpx',):")
+    if k=='32': return function(s,'_assert_owner',lambda p:once(p,'clock_timestamp()','NOW()'))
+    if k=='32e': return function(s,'_renew_embedding_lease',lambda p:once(p,'lease_until > clock_timestamp()','lease_until > NOW()'))
     raise ValueError(k)
 
 

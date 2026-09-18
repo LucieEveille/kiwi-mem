@@ -1,6 +1,6 @@
 # Embedding identity and alignment / 向量身份与对齐
 
-KIWI-EMB-01 · 2.0 integration mechanism (2026-09-18)
+KIWI-EMB-01 · 2.0 integration mechanism v2 (2026-09-18; EMB-01-P diagnostics and lease hardening)
 
 ## 理念与身份
 
@@ -39,6 +39,8 @@ profile = SHA-256(UTF-8 JSON `["emb-v1", source_tag, endpoint_identity, model_id
 
 任务及条目落库，只有一个 running 任务。worker 使用随机 owner token、两分钟租约与行锁；认领用条件 UPDATE，后续每次写都先在同一事务确认 owner/token/未过期/running。向量 CAS、条目和计数同一事务提交。CAS 核源文本及类型/状态，变化则 skipped，避免覆盖并发编辑。恢复只处理 pending 条目，不重复累计。
 
+租约判断与续租期限使用 `clock_timestamp()`。`_assert_owner` 先取得 job 行锁，再单独读取真实当前时间核租约；把时间条件只放在 `FOR UPDATE` 的 WHERE 中仍可能在等锁前求值。事务内 `NOW()` 固定于事务开始，不能证明等锁结束后的租约有效。拿锁后已过期则抛 `LeaseLost` 并回滚，续租、终态与进度均不写入；有效 owner 持锁到事务提交，其他 owner 的认领等待同一行锁。普通记录时间戳仍可用 `NOW()`。
+
 启动时恢复 running 任务；其他进程持有租约时每十秒检查。非上游异常记录稳定错误码，保留 running，租约过期后可继续。上游单槽失败计入 failed，任务仍可结束；失败保留待处理身份，下一次重新检查可选中。
 
 换模型检查点为每批前、外呼后、每个结果写入前核结果 profile。当前路由消失也按 target_changed 中止，本批外呼后发现变化则整批丢弃。它不提供跨任意配置写入瞬间的全局原子保证；结果不会冒用其他身份，任务反馈可能延后到下一批或重新检查。
@@ -51,7 +53,9 @@ profile = SHA-256(UTF-8 JSON `["emb-v1", source_tag, endpoint_identity, model_id
 
 诊断固定键：`ok,error_code,source,provider_id,http_status,profile,dim,elapsed_ms,tested_at,upstream_message_truncated,upstream_message_hidden,provider_name,model_id,endpoint_host,upstream_message,upstream_request_id`。后五项可控字符串统一脱敏；程序生成身份/分类/时间等不脱敏。请求编号仅接受 1–128 位字母数字下划线横线。
 
-摘要只取 `error.message` 或顶层 `message` 字符串。先检查完整内容中的已知 Key（无最小长度）与 URL 编码 Key、Bearer、sk-模式、URL userinfo、危险控制字符；命中则该字段 null，hidden=true。随后折叠空白并截到 2000 字；面板先显示 200 字，可展开并复制完整受控诊断。只识别原文和 URL 编码，不识别 base64 或任意编码。诊断仅存页面内存，不写库或触发抽屉刷新。
+摘要只取 `error.message` 或顶层 `message` 字符串。先检查完整内容中的已知 Key（无最小长度）与 URL 编码 Key、Bearer、sk-模式、URL userinfo、危险控制字符；命中则该字段 null，hidden=true。已知 Key 比对使用原文、仅把 `%xx` 十六进制转为大写的副本、一次 `unquote` 的副本，覆盖标准、小写、混合大小写百分号及被编码的普通字符。钥匙本身仍区分大小写；安全字段的原文不受这些比对副本影响。随后折叠空白并截到 2000 字；面板先显示 200 字，可展开并复制完整受控诊断。不承诺 base64、任意编码或任意层数的递归 URL 解码。诊断仅存页面内存，不写库或触发抽屉刷新。
+
+`security.py` 在进程启动时向 `httpx` 与 `httpcore` logger 注册幂等窄过滤器，仅匹配客户端 `HTTP Request: %s %s "%s %d %s"` 五参数摘要，把供应商控制的原因短语替换为 `<reason-redacted>`，保留方法、URL、协议与状态码。其它日志及日志级别保持原状。这是覆盖该日志格式的进程级防御纵深，不代表任意 HTTP 调试日志都已脱敏，也不替代业务诊断脱敏。当前真实 TCP 路径产生 httpx INFO 摘要；httpcore 同格式注册另有合成日志守卫。
 
 ## English
 
@@ -63,6 +67,10 @@ Finite nonzero numeric lists exclude booleans; scaled cosine rejects invalid/dif
 
 Status performs no model requests and scans eligible rows in O(N). Rebuilds use one durable running job, two-minute leases, owner checks and compare-and-swap writes. Vector, item state and counters commit together. Crashes resume pending work after lease expiry. Model changes or loss of a route stop work; checks before and after each batch plus per-result identity checks prevent mislabeling, without promising atomic configuration changes across all concurrent requests. Finished receipts remain visible for 24 hours. Failure/skipped counts remain explicit; retry re-enumerates current pending data.
 
+Lease checks use live `clock_timestamp()`. The owner check acquires the job row lock first, then checks expiration in a separate statement: transaction-start `NOW()` and pre-lock predicates cannot establish validity after a lock wait. An expired owner rolls back without renewing or writing progress/final state; a valid owner holds the lock through the vector/item/counter transaction, serializing new claims.
+
 The probe sends a fixed short text with a 15-second timeout and redirects disabled. Its HTTP 200 receipt can describe upstream failure; 409 means no route and 500 an internal failure. It never persists or refreshes drawers. Only bounded, redacted diagnostic fields cross this special endpoint. Full-text redaction precedes the 2000-character limit; the UI initially shows 200 characters. Exact and URL-encoded credentials are detected without a length exemption; arbitrary encodings are outside the guarantee. Save and edit generations prevent stale receipts; leaving the page cancels polling and ignores late responses.
+
+Credential comparisons preserve key case and check the original, percent-hex-normalized and once-URL-decoded strings. Lower/mixed hex and escaped unreserved characters are covered; base64 and arbitrary recursive encoding are not guaranteed. A process-wide narrow filter on the httpx and httpcore loggers replaces only the reason argument in their five-argument HTTP Request summary signature. Method, URL, protocol, status, unrelated records and logger levels remain intact. This is defense in depth for that signature, not a guarantee for arbitrary debug logs.
 
 Native Anthropic format is excluded, but an OpenAI-format relay may still route to an unsuitable model. Use the actual embedding probe to establish capability. Rebuild and routine missing-vector generation incur provider embedding charges. The retired GET migration endpoint returns 410. The panel never estimates dollar cost or promises an exact failed-item-only retry.

@@ -5,11 +5,33 @@ these serializers only at public response/export boundaries.
 """
 import ipaddress
 import json
+import logging
 import re
 from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 from starlette.responses import JSONResponse
+
+
+class _HTTPReasonFilter(logging.Filter):
+    """Bound the upstream-controlled reason in the HTTP client's summary only."""
+    _kiwi_http_reason_filter = True
+
+    def filter(self, record):
+        if (record.msg == 'HTTP Request: %s %s "%s %d %s"'
+                and isinstance(record.args, tuple) and len(record.args) == 5):
+            record.args = (*record.args[:4], '<reason-redacted>')
+        return True
+
+
+def _install_http_reason_filters():
+    for name in ('httpx', 'httpcore'):
+        logger = logging.getLogger(name)
+        if not any(getattr(f, '_kiwi_http_reason_filter', False) for f in logger.filters):
+            logger.addFilter(_HTTPReasonFilter())
+
+
+_install_http_reason_filters()
 
 
 class InvalidRequest(ValueError):

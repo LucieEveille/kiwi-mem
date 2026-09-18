@@ -122,16 +122,20 @@ async def create_or_resume_rebuild_job(scope='stale'):
 
 async def _assert_owner(conn, job_id, token):
     row=await conn.fetchrow("""SELECT id FROM embedding_rebuild_jobs
-        WHERE id=$1 AND owner_token=$2 AND lease_until > NOW() AND state='running' FOR UPDATE""",job_id,token)
+        WHERE id=$1 AND owner_token=$2 AND state='running' FOR UPDATE""",job_id,token)
     if not row:
+        raise LeaseLost()
+    # A WHERE predicate can run before FOR UPDATE waits. Read live time only
+    # after acquiring the row lock; NOW() is frozen at transaction start.
+    if not await conn.fetchval("SELECT lease_until > clock_timestamp() FROM embedding_rebuild_jobs WHERE id=$1",job_id):
         raise LeaseLost()
 
 
 async def _claim_embedding_job(job_id,token):
     pool=await db.get_pool()
     return bool(await pool.fetchval("""UPDATE embedding_rebuild_jobs SET owner_token=$2,
-        lease_until=NOW()+INTERVAL '2 minutes',updated_at=NOW() WHERE id=$1 AND state='running'
-        AND (owner_token IS NULL OR lease_until IS NULL OR lease_until<=NOW()) RETURNING id""",job_id,token))
+        lease_until=clock_timestamp()+INTERVAL '2 minutes',updated_at=NOW() WHERE id=$1 AND state='running'
+        AND (owner_token IS NULL OR lease_until IS NULL OR lease_until<=clock_timestamp()) RETURNING id""",job_id,token))
 
 
 async def _renew_embedding_lease(job_id,token):
@@ -139,8 +143,8 @@ async def _renew_embedding_lease(job_id,token):
     try:
         async with pool.acquire() as conn,conn.transaction():
             await _assert_owner(conn,job_id,token)
-            return bool(await conn.fetchval("""UPDATE embedding_rebuild_jobs SET lease_until=NOW()+INTERVAL '2 minutes',updated_at=NOW()
-                WHERE id=$1 AND owner_token=$2 AND lease_until > NOW() AND state='running' RETURNING id""",job_id,token))
+            return bool(await conn.fetchval("""UPDATE embedding_rebuild_jobs SET lease_until=clock_timestamp()+INTERVAL '2 minutes',updated_at=NOW()
+                WHERE id=$1 AND owner_token=$2 AND lease_until > clock_timestamp() AND state='running' RETURNING id""",job_id,token))
     except LeaseLost:
         return False
 
@@ -152,7 +156,7 @@ async def _finish_embedding_job(job_id,token,state):
         async with pool.acquire() as conn,conn.transaction():
             await _assert_owner(conn,job_id,token)
             finished = bool(await conn.fetchval("""UPDATE embedding_rebuild_jobs SET state=$3,updated_at=NOW(),lease_until=NULL
-                WHERE id=$1 AND owner_token=$2 AND lease_until > NOW() AND state='running' RETURNING id""",job_id,token,state))
+                WHERE id=$1 AND owner_token=$2 AND lease_until > clock_timestamp() AND state='running' RETURNING id""",job_id,token,state))
         if finished and state == 'target_changed':
             db.safe_log('embedding_rebuild_target_changed','internal_error')
         return finished
