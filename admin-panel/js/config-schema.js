@@ -25,7 +25,7 @@ export const CONFIG_META = {
   semantic_threshold:    { label:'语义搜索阈值', type:'float', def:'0.25', input:'float', desc:'低于此相似度的碎片不会被注入。建议 0.15–0.5。' },
   dedup_threshold:       { label:'去重相似度阈值', type:'float', def:'0.55', input:'float', desc:'新碎片与已有碎片文字重叠超过此值判为重复、不存储。建议 0.4–0.7。' },
   default_memory_model:  { label:'记忆提取模型', type:'text', def:'', input:'model', desc:'记忆提取用的模型。建议小模型（如 Haiku）省成本。留空跟随聊天模型。' },
-  default_embedding_model:{ label:'嵌入模型', type:'text', def:'', input:'model', desc:'向量嵌入模型，决定语义搜索质量。更换后需在「记忆碎片」页执行向量迁移。' },
+  default_embedding_model:{ label:'嵌入模型', type:'text', def:'', input:'model', desc:'向量嵌入模型，决定语义搜索质量。更换后请在「向量对齐」处重新检查并对齐旧向量；新记忆保存时会自动生成向量（少量费用）。' },
   prompt_memory_extract: { label:'记忆提取提示词', type:'text', def:'', input:'prompt', hasDefault:true, desc:'指导模型如何从对话中抽取记忆碎片。留空用内置默认。' },
 
   // —— 热度系统 ——

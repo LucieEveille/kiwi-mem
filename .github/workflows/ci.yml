@@ -136,6 +136,7 @@ jobs:
         run: |
           python scripts/test_kiwi_emb_01.py
           node scripts/test_kiwi_emb_01_panel.mjs
+          python scripts/kiwi_emb_01_knives.py --output /tmp/kiwi_emb_01_knives.json
 
       - name: 保存 BUILD 验证证据
         if: always()
@@ -150,3 +151,4 @@ jobs:
             /tmp/prep-resolved.txt
             /tmp/kiwi_sec_01b_knives.json
             /tmp/kiwi_think_01_knives.json
+            /tmp/kiwi_emb_01_knives.json

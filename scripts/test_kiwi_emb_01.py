@@ -160,6 +160,29 @@ class EmbGuards(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(scene_row['embedding_source_hash'],db.embedding_source_hash(db.build_scene_embedding_text('scene',['edited'])))
             await db.save_file_chunks('project','file','fixture','chunk text')
             self.assertEqual(await self.pool.fetchval('SELECT embedding_profile FROM project_file_chunks LIMIT 1'),result.profile)
+            import daily_digest, dream
+            from datetime import datetime, timezone
+            permanent = await self.seed('locked missing', permanent=True)
+            with patch.object(db,'get_embeddings_batch',AsyncMock(return_value=[result])):
+                await db.backfill_permanent_memory_embeddings()
+            self.assertEqual(await self.pool.fetchval('SELECT embedding_profile FROM memories WHERE id=$1',permanent),result.profile)
+            await self.pool.execute('UPDATE mem_scenes SET embedding=NULL WHERE id=$1',scene)
+            await daily_digest.backfill_scene_embeddings()
+            self.assertEqual(await self.pool.fetchval('SELECT embedding_profile FROM mem_scenes WHERE id=$1',scene),result.profile)
+            outcome = await dream._execute_dream_action({'type':'merge','memory_ids':[mid],'merged_title':'merged','merged_content':'merged content'},0,{'memories_merged':0})
+            self.assertTrue(outcome['success'])
+            merged = await self.pool.fetchrow("SELECT * FROM memories WHERE source='dream_merge'")
+            self.assertEqual(tuple(merged[k] for k in COLUMNS),payload(result,'merged merged content'))
+            await self.pool.execute("UPDATE memories SET created_at='2026-09-10T10:00:00+08:00' WHERE id=$1",locked)
+            for text in ('digest source 2','digest source 3'):
+                extra=await self.seed(text)
+                await self.pool.execute("UPDATE memories SET created_at='2026-09-10T10:00:00+08:00' WHERE id=$1",extra)
+            data = {'choices':[{'message':{'content':json.dumps([{'title':'digest','content':'digest text'}])}}]}
+            with patch.object(db,'resolve_model_endpoint',AsyncMock(return_value=('https://fixture.example/v1/chat/completions',KEY,'openai'))),self.outbound(lambda req:httpx.Response(200,json=data)):
+                receipt = await daily_digest._run_daily_digest_impl('2026-09-10',datetime.now(timezone.utc))
+            self.assertEqual(receipt.get('digests'),1)
+            digest = await self.pool.fetchrow("SELECT * FROM memories WHERE source='ai_digest'")
+            self.assertEqual(tuple(digest[k] for k in COLUMNS),payload(result,db.build_memory_embedding_text(digest['title'],digest['content'])))
 
     async def test_T_EMB_05_changed_text_failure(self):
         result = self.result()
@@ -254,6 +277,12 @@ class EmbGuards(unittest.IsolatedAsyncioTestCase):
             state=await self.pool.fetchrow('SELECT * FROM embedding_rebuild_jobs WHERE id=$1',jid)
             self.assertEqual(state['state'],'target_changed'); self.assertEqual(state['done'],0)
             self.assertIsNone(await self.pool.fetchval('SELECT embedding FROM memories LIMIT 1'))
+
+            job,_=await create('stale')
+            with patch.object(db,'get_embeddings_batch',AsyncMock(return_value=[self.result(self.route(model='wrong'))])):
+                await run(job['id'])
+            self.assertEqual(await self.pool.fetchval('SELECT state FROM embedding_rebuild_jobs WHERE id=$1',job['id']),'target_changed')
+            self.assertIsNone(await self.pool.fetchval('SELECT embedding FROM memories LIMIT 1'))
             current[0]=r
             job,_=await create('stale')
             async def lost_route(texts): current[0]=None; return [self.result(r) for _ in texts]
@@ -308,6 +337,14 @@ class EmbGuards(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(out.json()['ok']); self.assertEqual(out.json()['dim'],2)
         out=await self.probe(httpx.Response(200,json={'data':[{'embedding':[0,0]}]}))
         self.assertEqual(out.json()['error_code'],'invalid_response')
+        with patch.object(db,'_resolve_embedding_route',AsyncMock(return_value=None)):
+            self.assertEqual((await self.client.post('/admin/embedding-probe')).status_code,409)
+        for error,code in ((httpx.ReadTimeout(KEY),'timeout'),(httpx.ConnectError(KEY),'network:RequestError')):
+            def fail(req): raise error
+            with patch.object(db,'_resolve_embedding_route',AsyncMock(return_value=self.route())),self.outbound(fail):
+                out=await self.client.post('/admin/embedding-probe')
+            self.assertEqual(out.status_code,200); self.assertEqual(out.json()['error_code'],code)
+            self.assertNotIn(KEY,out.text)
 
     async def test_T_EMB_12_partial_failures(self):
         create=self.need('create_or_resume_rebuild_job'); run=self.need('run_embedding_rebuild_job')
@@ -352,6 +389,22 @@ class EmbGuards(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(out.json()['upstream_message'])
         out=await self.probe(httpx.Response(400,json={'error':{'message':'x'*2500}}),r)
         self.assertEqual(len(out.json()['upstream_message']),2000); self.assertTrue(out.json()['upstream_message_truncated'])
+        from urllib.parse import quote
+        for unsafe in ('Bearer sample-token','sk-12345678','https://user:pass@example.org','bad\x01text',quote('space key',safe='')):
+            out=await self.probe(httpx.Response(400,json={'error':{'message':unsafe}}),replace(r,api_key='space key'))
+            self.assertIsNone(out.json()['upstream_message']); self.assertTrue(out.json()['upstream_message_hidden'])
+        r=replace(r,api_key='a',provider_name='a',model_id='a',url='https://a.example/v1/embeddings')
+        out=await self.probe(httpx.Response(401,json={'error':{'message':'a'}},headers={'x-request-id':'a'}),r)
+        for field in ('provider_name','model_id','endpoint_host','upstream_message','upstream_request_id'):
+            self.assertIsNone(out.json()[field])
+        self.assertEqual(out.json()['error_code'],'http_401'); self.assertEqual(out.json()['source'],'provider')
+        self.assertEqual(out.json()['profile'],r.profile); self.assertTrue(out.json()['upstream_message_hidden'])
+        log=io.StringIO(); handler=logging.StreamHandler(log); logging.getLogger().addHandler(handler)
+        try:
+            with redirect_stdout(log),redirect_stderr(log):
+                out=await self.probe(httpx.Response(401,json={'error':{'message':KEY}},headers={'x-request-id':KEY}))
+            self.assertNotIn(KEY,out.text+log.getvalue())
+        finally: logging.getLogger().removeHandler(handler)
 
     async def test_T_EMB_18_batch_attribution(self):
         r=self.route()
@@ -361,6 +414,9 @@ class EmbGuards(unittest.IsolatedAsyncioTestCase):
         with patch.object(db,'_resolve_embedding_route',AsyncMock(return_value=r)),self.outbound(lambda req: httpx.Response(200,json={'data':[{'index':1,'embedding':[0,1]},{'index':0,'embedding':[1,0]}]})):
             results=await db.get_embeddings_batch(['a','b'])
         self.assertEqual([r.vector for r in results],[[1,0],[0,1]])
+        with patch.object(db,'_resolve_embedding_route',AsyncMock(return_value=r)),self.outbound(lambda req:httpx.Response(200,json={'data':[{'index':0,'embedding':[0,0]},{'index':1,'embedding':[1,0]}]})):
+            results=await db.get_embeddings_batch(['a','b'])
+        self.assertIsNone(results[0]); self.assertEqual(results[1].vector,[1,0])
 
 
 if __name__=='__main__':

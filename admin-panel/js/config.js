@@ -24,8 +24,18 @@ export async function loadConfig() {
   return flat;
 }
 
-export async function saveConfig(key, value) {
-  await put(`/admin/config/${key}`, { value: String(value ?? '') });
+let configSaveSequence = 0;
+let embeddingSaveQueue = Promise.resolve();
+export async function saveConfig(key, value, context = {}) {
+  const detail = {key, value, ...context, saveId:++configSaveSequence};
+  const write = () => put(`/admin/config/${key}`, {value:String(value ?? '')});
+  // Preserve save ordering across A -> B -> A. UI generation gates the receipt.
+  if (key === 'default_embedding_model') {
+    const pending = embeddingSaveQueue.catch(() => {}).then(write);
+    embeddingSaveQueue = pending;
+    await pending;
+  } else await write();
+  document.dispatchEvent(new CustomEvent('kiwi:config-saved',{detail}));
 }
 
 // 单个 key 的控件（带 data-cfg + data-key，供 wireConfig 自动保存）
@@ -164,7 +174,7 @@ export function wireConfig(root, cfg) {
     if (isBool) applyDim(key, el.checked);
     flashStatus(el, 'saving');
     try {
-      await saveConfig(key, value);
+      await saveConfig(key, value, {...el.embeddingSaveContext});
       cfg[key] = value;
       flashStatus(el, 'ok');
     } catch (err) {

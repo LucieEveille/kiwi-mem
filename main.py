@@ -4098,6 +4098,8 @@ def _schedule_embedding_drawer_refresh():
 
 @app.get('/admin/embedding-status')
 async def api_embedding_status():
+    if not await get_memory_enabled():
+        return {'error': '记忆系统未启用'}
     try:
         return await get_embedding_status()
     except Exception as e:
@@ -4121,6 +4123,19 @@ async def api_embedding_rebuild(request: Request):
             _spawn_background_task(run_embedding_rebuild_job(job['id']))
         status = await get_embedding_status()
         return JSONResponse(status_code=202, content=jsonable_encoder({'status':'ok','job':status['job'],'spawned':spawned}))
+    except Exception as e:
+        return stable_error(e)
+
+
+@app.post('/admin/embedding-probe')
+async def api_embedding_probe():
+    try:
+        import database
+        from embedding_probe import probe_embedding
+        route = await database._resolve_embedding_route()
+        if route is None:
+            return stable_error('no_embedding_route')
+        return await probe_embedding(route)
     except Exception as e:
         return stable_error(e)
 
