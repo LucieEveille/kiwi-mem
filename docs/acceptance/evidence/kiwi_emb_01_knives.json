@@ -1,0 +1,275 @@
+{
+  "ticket": "KIWI-EMB-01",
+  "head": "277fbcd18ca36e30d4044ab2e2ab68b67d11e27c",
+  "source_blobs": {
+    "admin-panel/js/config.js": "ec274e9b9ac5afe53b7569faddf5136a74310a73",
+    "admin-panel/js/embedding-panel.mjs": "a6a747ac6c91d2d6b604864a0fc5f26ad23daca4",
+    "admin-panel/js/pages/providers.js": "03b84fec7310d081e89ed3d28e60f442e823d9bc",
+    "daily_digest.py": "be94587798c69f32906d90ba76b046355bd1cd1c",
+    "database.py": "c30591030f4fe65bba9902dcc2eb838f8fa14f85",
+    "dream.py": "d6e6535d799988d581159d4cdcb21e1be984142d",
+    "embedding_jobs.py": "3a9c78ca2835c4824dedf51093be44f59234b12b",
+    "embedding_probe.py": "6156b126ef61e8b4e11a19175b32e4ff412c68fe",
+    "embedding_versioning.py": "57e9b048fc368921ceb102abeaf557351f53880f",
+    "main.py": "dd30e2d3e7aade4107df64490d653be598a591dd",
+    "scripts/kiwi_emb_01_knives.py": "7c218308e2395a458f8953d5511c0810ed3bdc52",
+    "scripts/test_kiwi_emb_01.py": "0be79535ce867c1dfdc923185c62430d2cf3b267",
+    "scripts/test_kiwi_emb_01_panel.mjs": "294d5d9df86552422cafc3c719099cb6a2d00a5b",
+    "security.py": "06e469515e47f9dc33e025d0c8518a3c38e4efc6",
+    "tool_drawer.py": "0957983da5bf6cd494ac7b9baaa20d417217c10f"
+  },
+  "preflight": 0,
+  "restored": 0,
+  "kind": "disposable PG16; simulated providers; no production",
+  "results": [
+    {
+      "knife": "K-01",
+      "test": "T-EMB-06",
+      "result": "RED",
+      "reason": [
+        "0 is not None"
+      ]
+    },
+    {
+      "knife": "K-02",
+      "test": "T-EMB-06",
+      "result": "RED",
+      "reason": [
+        "Items in the first set but not the second:"
+      ]
+    },
+    {
+      "knife": "K-03",
+      "test": "T-EMB-06",
+      "result": "RED",
+      "reason": [
+        "Lists differ: [{'id': 1, 'title': 'scene', 'atomic_facts[44 chars]1.0}] != []"
+      ]
+    },
+    {
+      "knife": "K-04",
+      "test": "T-EMB-06",
+      "result": "RED",
+      "reason": [
+        "Lists differ: [{'id': 1, 'file_id': 'f', 'file_name': 'f[58 chars]1.0}] != []"
+      ]
+    },
+    {
+      "knife": "K-05",
+      "test": "T-EMB-06",
+      "result": "RED",
+      "reason": [
+        "Items in the first set but not the second:"
+      ]
+    },
+    {
+      "knife": "K-05e",
+      "test": "T-EMB-06",
+      "result": "EQUIVALENT",
+      "reason": [],
+      "mechanism": "Python classification retains isolation"
+    },
+    {
+      "knife": "K-06",
+      "test": "T-EMB-02",
+      "result": "RED",
+      "reason": [
+        "'16cfcf26556860828b752b0756ebb5a83cb706f801ee11085abb55b9dfc7c550' == '16cfcf26556860828b752b0756ebb5a83cb706f801ee11085abb55b9dfc7c550'"
+      ]
+    },
+    {
+      "knife": "K-07",
+      "test": "T-EMB-03",
+      "result": "RED",
+      "reason": [
+        "Tuples differ: ('provider', 'EMB_synthetic_secret_f01877', 'panel-model') != ('env', 'env-key', 'panel-model')"
+      ]
+    },
+    {
+      "knife": "K-08",
+      "test": "T-EMB-03",
+      "result": "RED",
+      "reason": [
+        "Tuples differ: ('https://provider.example/v1/embeddings', 'env-key', 'panel-model') != ('https://env.example/v1/embeddings', 'env-key', 'panel-model')"
+      ]
+    },
+    {
+      "knife": "K-09",
+      "test": "T-EMB-04",
+      "result": "RED",
+      "reason": [
+        "None != 'c5fabbf823dec4ec289d61dcb314ab6aa8bd81ab457c542cc10d04f67e75899d'"
+      ]
+    },
+    {
+      "knife": "K-10",
+      "test": "T-EMB-05",
+      "result": "RED",
+      "reason": [
+        "Tuples differ: ('[1.0, 0.0]', None, None, None, None) != (None, None, None, None, None)"
+      ]
+    },
+    {
+      "knife": "K-11",
+      "test": "T-EMB-09",
+      "result": "RED",
+      "reason": [
+        "True is not false : expired owner renewed lease"
+      ]
+    },
+    {
+      "knife": "K-11e",
+      "test": "T-EMB-09",
+      "result": "EQUIVALENT",
+      "reason": [],
+      "mechanism": "_assert_owner rejects expired leases"
+    },
+    {
+      "knife": "K-12",
+      "test": "T-EMB-09",
+      "result": "RED",
+      "reason": [
+        "Tuples differ: (1, 0, 'done') != (0, 1, 'done')"
+      ]
+    },
+    {
+      "knife": "K-13",
+      "test": "T-EMB-09",
+      "result": "RED",
+      "reason": [
+        "'done' != 'target_changed'"
+      ]
+    },
+    {
+      "knife": "K-14",
+      "test": "T-EMB-09",
+      "result": "RED",
+      "reason": [
+        "True is not false : old owner wrote terminal state"
+      ]
+    },
+    {
+      "knife": "K-15",
+      "test": "T-EMB-06",
+      "result": "RED",
+      "reason": [
+        "0.0 is not None"
+      ]
+    },
+    {
+      "knife": "K-16",
+      "test": "T-EMB-08",
+      "result": "RED",
+      "reason": [
+        "status outward"
+      ]
+    },
+    {
+      "knife": "K-17",
+      "test": "T-EMB-08",
+      "result": "RED",
+      "reason": [
+        "2 != 1"
+      ]
+    },
+    {
+      "knife": "K-18",
+      "test": "T-EMB-12",
+      "result": "RED",
+      "reason": [
+        "Tuples differ: ('done', 3, 0) != ('done', 3, 2)"
+      ]
+    },
+    {
+      "knife": "K-19",
+      "test": "T-EMB-10",
+      "result": "RED",
+      "reason": [
+        "200 != 410"
+      ]
+    },
+    {
+      "knife": "K-20",
+      "test": "T-EMB-07",
+      "result": "RED",
+      "reason": [
+        "Items in the second set but not the first:"
+      ]
+    },
+    {
+      "knife": "K-21",
+      "test": "T-EMB-11",
+      "result": "RED",
+      "reason": [
+        "Tuples differ: ('http_502', \"{'error': {'message': 'not implemented'}}\") != ('http_502', 'not implemented')"
+      ]
+    },
+    {
+      "knife": "K-22",
+      "test": "T-EMB-16",
+      "result": "RED",
+      "reason": [
+        "'invalid abcde' is not None"
+      ]
+    },
+    {
+      "knife": "K-23",
+      "test": "T-EMB-16",
+      "result": "RED",
+      "reason": [
+        "'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx' is not None"
+      ]
+    },
+    {
+      "knife": "K-24",
+      "test": "T-EMB-16",
+      "result": "RED",
+      "reason": [
+        "'abcde' is not None"
+      ]
+    },
+    {
+      "knife": "K-25",
+      "test": "T-EMB-18",
+      "result": "RED",
+      "reason": [
+        "Lists differ: [EmbeddingResult(vector=[1, 0], model_id='[253 chars]d=7)] != [None, None]",
+        "Lists differ: [EmbeddingResult(vector=[1, 0], model_id='[109 chars]None] != [None, None]",
+        "Lists differ: [EmbeddingResult(vector=[1, 0], model_id='[253 chars]d=7)] != [None, None]",
+        "Lists differ: [EmbeddingResult(vector=[1, 0], model_id='[109 chars]None] != [None, None]"
+      ]
+    },
+    {
+      "knife": "K-26",
+      "test": "T-EMB-04",
+      "result": "RED",
+      "reason": [
+        "Tuples differ: ('[true]', 'c5fabbf823dec4ec289d61dcb314ab[113 chars]9d1') != (None, None, None, None, None)"
+      ]
+    },
+    {
+      "knife": "K-27",
+      "test": "T-EMB-09",
+      "result": "RED",
+      "reason": [
+        "1 != 0"
+      ]
+    },
+    {
+      "knife": "K-28",
+      "test": "T-EMB-12",
+      "result": "RED",
+      "reason": [
+        "Tuples differ: ('running', 1, 0) != ('done', 3, 2)"
+      ]
+    },
+    {
+      "knife": "K-29",
+      "test": "T-EMB-07",
+      "result": "RED",
+      "reason": [
+        "Items in the second set but not the first:"
+      ]
+    }
+  ]
+}

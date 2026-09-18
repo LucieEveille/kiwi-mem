@@ -1,8 +1,8 @@
 {
   "ticket": "KIWI-SEC-01b",
-  "head": "5be86798e5ec3d3ce6976b3e2e517ebaaf5b78a3",
+  "head": "277fbcd18ca36e30d4044ab2e2ab68b67d11e27c",
   "source_blobs": {
-    "main.py": "58503986865b3209484156c4e5736f6a59ec22fb",
+    "main.py": "dd30e2d3e7aade4107df64490d653be598a591dd",
     "mcp_server.py": "8ee2860cea185fcc54af64ce2da2e96a508cdea4",
     "mcp_access.py": "f9ac3de21f7173646aa4db3509d2148fe2af3027",
     "scripts/test_kiwi_sec_01b.py": "94ee2e14bef112beb5a55bdda3774b3838e8de3c",
@@ -21,7 +21,7 @@
       ],
       "status": "RED",
       "reason": [
-        "33 not less than 4",
+        "36 not less than 4",
         "b'text/event-stream' not found in b'application/json'",
         "200 != 406",
         "[call('mcp', 'day'), call('mcp', 'day')] != [] : MCP GET must never call calendar business handler"
@@ -91,7 +91,7 @@
       "reason": [
         "'Calendar & Dream' != 'Memory Garden'",
         "'Memory Garden' != 'Calendar & Dream'",
-        "Lists differ: [('Calendar & Dream', {'get_day_page', 'stop[295 chars]y'})] != [('Memory Garden', {'save_memory', 'search_m[295 chars]e'})]"
+        "Lists differ: [('Calendar & Dream', {'trigger_dream', 'get[295 chars]t'})] != [('Memory Garden', {'trigger_digest', 'lock_[295 chars]s'})]"
       ],
       "exit_code": 1
     },
