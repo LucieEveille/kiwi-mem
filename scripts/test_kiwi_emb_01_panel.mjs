@@ -70,5 +70,21 @@ await check('T-EMB-15 model selector and probe share the same page',async()=>{
   const keys=CONFIG_PAGES.providers.groups.flatMap(g=>g.keys || []);
   assert.ok(keys.includes('default_embedding_model'),'embedding selector must render beside alignment, so automatic probe can capture its generation');
 });
-console.log(`EMB panel: ${6-failed} PASS / ${failed} FAIL / 0 ERROR; pure runtime state, no real provider`);
+await check('T-EMB-15 returning to the saved value while another save is pending',async()=>{
+  // Execute the real save handler, with only UI/network dependencies replaced.
+  const source=await fs.readFile(new URL('../admin-panel/js/config.js',import.meta.url),'utf8');
+  const start=source.indexOf('  const doSave = async (el) => {');
+  const end=source.indexOf("\n  root.addEventListener('change'",start);
+  assert.ok(start>=0 && end>start,'save handler seam');
+  const body=source.slice(start,end).replace('const doSave =','return');
+  const cfg={default_embedding_model:'A'}, pending=[];
+  const handler=new Function('cfg','saveConfig','flashStatus','toast','applyDim','secretEditors','embeddingSaves','CONFIG_META',body)(
+    cfg,(key,value)=>new Promise(resolve=>pending.push({value,resolve})),()=>{},()=>{},()=>{},new Map(),{count:0,value:null},{});
+  const el={dataset:{key:'default_embedding_model'},type:'select-one',value:'B',embeddingSaveContext:{generation:1}};
+  const first=handler(el); el.value='A'; el.embeddingSaveContext={generation:2}; const second=handler(el);
+  const sent=pending.map(p=>p.value); for (const p of pending) p.resolve(); await Promise.all([first,second]);
+  assert.deepEqual(sent,['B','A'],'A must be enqueued even though the last completed save was A');
+  assert.equal(cfg.default_embedding_model,'A');
+});
+console.log(`EMB panel: ${7-failed} PASS / ${failed} FAIL / 0 ERROR; pure runtime state, no real provider`);
 process.exitCode=failed?1:0;
