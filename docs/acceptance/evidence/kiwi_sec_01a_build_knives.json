@@ -1,6 +1,6 @@
 {
   "ticket": "KIWI-SEC-01a",
-  "head": "277fbcd18ca36e30d4044ab2e2ab68b67d11e27c",
+  "head": "a9d07bf9264feafffada296cbc3ccd894799a958",
   "source_blobs": {
     "anthropic_adapter.py": "bcf29d0ddacfdcdf46322323d406a300624642d5",
     "config.py": "529b494a1c402a9ba8efb02d8ac8df8245f6bdbb",

@@ -15,7 +15,7 @@ See [the mechanism](../embedding-versioning.md) and [upgrade instructions](../UP
 - Base: `6936db7e8a09bbe25e4e1c37bb0cd9ba18416c3d` (`release/kiwi-sync`).
 - Tests-only stage A: `5699bca`; two new files, no implementation or legacy fixture changes. Disposable Linux PostgreSQL 16: 16 Python groups, 19 named assertion failures, zero errors; initial Node suite: five failures, zero errors.
 - B1: `9ed3611`; 13 applicable EMB Python groups passed. B2: `29571eb`; probe, UI, docs and full mutation suite. Subsequent commits added direct write-path/lease checks and fixed actual-page/save-order issues.
-- Final implementation and checked-in ledger source: `277fbcd18ca36e30d4044ab2e2ab68b67d11e27c`.
+- Final implementation and checked-in ledger source: `a9d07bf9264feafffada296cbc3ccd894799a958`.
 - This delivery commit changes only documentation/evidence. All 44 distinct `source_blobs` entries from the six ledgers match its tree.
 - PR: [#88](https://github.com/LucieEveille/kiwi-mem/pull/88), Draft, base `release/kiwi-sync`. No merge, deployment or version bump.
 
@@ -43,9 +43,27 @@ Independent Linux sandbox with disposable PostgreSQL 16, simulated model HTTP an
 
 All preflight and restored-suite exit codes are zero. EMB K-05e is contained by the Python filter, K-11e by the transactional owner check. CRASH is not RED. K-28 is exercised by the T-12 partial-None worker case rather than the specification's T-09 label. The historical SEC build-ledger filename is refreshed from the same SEC run, not counted as a seventh independent suite.
 
+Reproduction commands (set `KIWI_TEST_DATABASE_URL` to a disposable local PostgreSQL 16 instance first; each mutation runner requires its own clean checkout):
+
+```sh
+python scripts/test_kiwi_emb_01.py
+node scripts/test_kiwi_emb_01_panel.mjs
+python scripts/kiwi_emb_01_knives.py --output /tmp/kiwi_emb_01_knives.json
+python scripts/kiwi_think_01_knives.py --output /tmp/kiwi_think_01_knives.json
+python scripts/kiwi_sec_01b_knives.py --output /tmp/kiwi_sec_01b_knives.json
+python scripts/kiwi_build_01_knives.py --output /tmp/kiwi_build_01_knives.json
+python scripts/kiwi_prep_01_knives.py --output /tmp/kiwi_prep_01_knives.json
+python scripts/kiwi_sec_01a_knives.py --run --output /tmp/kiwi_sec_01a_knives.json
+python -m compileall -q .
+python -m pip check
+git diff --check 6936db7 HEAD
+```
+
+The remaining regression commands are enumerated by `.github/workflows/ci.yml`; this delivery runs that full behavior-script list, not only the new ticket tests.
+
 Actual isolated Chrome ran the real panel against local API fixtures: seven alignment states; probe success/failure/expand/copy; literal script-like diagnostic text; confirmation with current counts; model A/B save ordering under delayed responses; 404 hiding, 500 remaining visible, and polling stopping after navigation. This is UI evidence, not a real-provider or production end-to-end claim. The fixture omitted `/sync/projects`, producing an expected unrelated 404.
 
-GitHub Actions for the implementation head: [run 35348530911](https://github.com/LucieEveille/kiwi-mem/actions/runs/35348530911). The current PR check identifies the delivery commit's own run; it also performs Docker build, dependency audit and all six mutation suites. Local WSL did not provide Docker or the optional busybox parser, so those optional local capabilities are not claimed.
+GitHub Actions for the last behavior-changing head (277fbcd; before the whitespace-only cleanup): [run 35348530911](https://github.com/LucieEveille/kiwi-mem/actions/runs/35348530911). The current PR check identifies the delivery commit's own run; it also performs Docker build, dependency audit and all six mutation suites. Local WSL did not provide Docker or the optional busybox parser, so those optional local capabilities are not claimed.
 
 ## Clarifications and review boundaries
 
