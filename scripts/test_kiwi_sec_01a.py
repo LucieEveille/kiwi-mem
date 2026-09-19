@@ -7,6 +7,7 @@ import asyncio
 import ast
 import io
 import json
+import logging
 import os
 import sys
 import unittest
@@ -53,6 +54,12 @@ class Pool:
 
 class SecurityTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
+        self.log_capture = io.StringIO()
+        self.log_handler = logging.StreamHandler(self.log_capture)
+        self.log_root = logging.getLogger()
+        self.log_previous_level = self.log_root.level
+        self.log_root.addHandler(self.log_handler)
+        self.log_root.setLevel(logging.INFO)
         self.pool = Pool()
         self.patches = [patch.object(cfg, 'get_pool', AsyncMock(return_value=self.pool)),
                         patch.object(app, 'get_pool', AsyncMock(return_value=self.pool)),
@@ -60,10 +67,15 @@ class SecurityTests(unittest.IsolatedAsyncioTestCase):
         for p in self.patches: p.start()
         self.client = httpx.AsyncClient(transport=httpx.ASGITransport(app=app.app), base_url='http://localhost:8000')
     async def asyncTearDown(self):
-        await self.client.aclose()
-        for p in reversed(self.patches): p.stop()
+        try:
+            await self.client.aclose()
+            for p in reversed(self.patches): p.stop()
+        finally:
+            self.log_root.removeHandler(self.log_handler)
+            self.log_root.setLevel(self.log_previous_level)
     def safe(self, value, key=KEY):
         text = json.dumps(value, ensure_ascii=False) if not isinstance(value, str) else value
+        text += self.log_capture.getvalue()
         for i in range(len(key)-4): self.assertNotIn(key[i:i+5], text)
     def provider(self, row, key=KEY):
         self.assertEqual(set(row), PROVIDER_KEYS)

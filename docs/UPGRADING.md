@@ -105,3 +105,44 @@ Kiwi no longer enables thinking by default in 2.0. When the client omits `reason
 Anthropic 格式不用于嵌入。中转站使用 `openai` 格式仍可能选到不支持嵌入的 Claude 等渠道，`api_format` 无法证明模型能力，「测试嵌入」的真实请求才是可靠判法。保存默认嵌入模型会自动发送一次短探针，另有手动测试按钮；测试可能计费。保存成功而测试失败时，设置已经保存，请依据受控诊断检查端点、Key、模型与供应商状态。
 
 Existing vectors become `unknown` and are excluded from new-profile semantic comparisons. Explicitly rebuild beside the default embedding model; **rebuilding incurs embedding-provider charges**. Routine generation/backfill can also cost money. Old profiles are never rebuilt automatically. Interrupted jobs resume after lease expiry (two minutes). The previous GET migration endpoint returns 410. Native Anthropic format is unsuitable for this request; an OpenAI-format relay can still select an unsupported model, so use the actual probe. Default-model saves trigger a short, potentially billable test. A failed test does not undo a successful settings save. See [mechanism and limits](embedding-versioning.md).
+
+### 2.0 错误出口稳定形 / Stable error boundaries (ERR-01)
+
+错误是客户端可依赖的协议。枚举的50个普通HTTP异常出口、客户端解码错误和三处输入错误统一返回 `{"error":"<code>","error_code":"<code>"}`；日志仅记受控事件与白名单码。脚本应按HTTP状态和 `error_code` 判断，停止解析异常原文。24个原HTTP 200错误端点现在按来源返回400（输入）、404（不存在）、500（内部）、502（上游）；原500出口的超时/上游错误现在为502：
+
+- `GET /debug/memories`
+- `DELETE /debug/memories/{memory_id}`
+- `POST /debug/memories/batch-delete`
+- `POST /debug/memories/batch-update`
+- `DELETE /debug/memories`
+- `GET /debug/memory-heat`
+- `POST /debug/memories/{memory_id}/toggle-permanent`
+- `GET /calendar/{date}`
+- `GET /calendar`
+- `PUT /admin/calendar/{date}`
+- `DELETE /admin/calendar/{date}`
+- `POST /comments`
+- `GET /comments`
+- `DELETE /comments/{comment_id}`
+- `GET /dream/scenes`
+- `DELETE /admin/dream/{dream_id}`
+- `GET /admin/default-prompts`
+- `POST /admin/restore-prompt/{key}`
+- `GET /admin/categories`
+- `POST /admin/categories`
+- `PUT /admin/categories/{category_id}`
+- `DELETE /admin/categories/{category_id}`
+- `GET /admin/system-prompt`
+- `PUT /admin/system-prompt`
+
+客户端坏JSON或非UTF-8体/备份JSON成员现在返回400 `invalid_request`，替代原500/502/固定中文。`/debug/memories` DELETE、`/admin/extract-now`、`/dream/start`、`/dream/start-detached` 的空体及纯空白体仍按空对象；非空坏体返回400。reset需要body，解码错误400；确认码错误固定中文、其它失败“重置失败”保持。可选体的非对象JSON：clear保留原确认错误，其余按空对象；其它入口的非对象处理不在本票统一。
+
+供应商空名称、空搜索query、非ZIP文件改400 `invalid_request`。后台任务枚举失败字典增加 `error_code`，其余字段及日页面三元组保留；使用 public_model_result 的管理接口按码返回状态，不再恒502。未知stable_error码规范为500 `internal_error`。
+
+保留合同：X1 reasoning_effort错误仍为OpenAI兼容嵌套对象，param/合法档位保留，但字符串输入值不回显；W2导入/删除/重置失败及invalid_project_id、sources_changed五处保持；记忆未启用仍200单键；周/月/周期总结的 `model returned invalid format` 字典不变；embedding-probe诊断仍200。面板已兼容，无需改版。
+
+**English.** The 50 enumerated ordinary HTTP exception exits, client decoding failures and three input errors now use the two-field `error`/`error_code` envelope. Update scripts to read the status and code, rather than raw exception text. The 24 routes above formerly returned error bodies with HTTP 200; status now follows input (400), missing resource (404), internal failure (500), or upstream failure (502). Previously-500 paths return 502 for upstream failures/timeouts. Unknown stable_error codes normalize to HTTP 500/internal_error.
+
+Malformed JSON and non-UTF-8 request/backup-member bytes return 400/invalid_request. The four optional-body routes listed above preserve empty/whitespace bodies as `{}`; malformed nonempty bodies fail. Reset requires a body, while its fixed confirmation and generic failure responses remain intact. Non-object JSON is otherwise not standardized here. Empty provider names/search queries and non-ZIP uploads use the same 400 envelope. Enumerated background failure dictionaries gain error_code, preserving other fields and the day-page tuple; admin model-result endpoints map status by code.
+
+Exceptions remain explicit: the reasoning_effort nested error shape and allowed choices (without echoing input), five W2 fixed responses, HTTP-200 memory-disabled response, three calendar `model returned invalid format` dictionaries, and HTTP-200 embedding diagnostics. No new authentication, error codes, or panel changes are introduced.

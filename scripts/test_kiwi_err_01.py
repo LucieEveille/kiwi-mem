@@ -715,6 +715,19 @@ class FakePool:
     async def fetchval(self,*args):return 0
     async def execute(self,*args):return 'UPDATE 0'
 
+def find_raw_exception_returns(source_text):
+    tree=ast.parse(source_text);bad=[]
+    for fn in tree.body:
+        if not isinstance(fn,(ast.AsyncFunctionDef,ast.FunctionDef)):continue
+        if not any(isinstance(d,ast.Call) and isinstance(d.func,ast.Attribute) and isinstance(d.func.value,ast.Name) and d.func.value.id=='app' for d in fn.decorator_list):continue
+        for handler in (h for h in ast.walk(fn) if isinstance(h,ast.ExceptHandler) and h.name):
+            for ret in (n for n in ast.walk(handler) if isinstance(n,ast.Return)):
+                raw=any(isinstance(n,ast.Call) and isinstance(n.func,ast.Name) and n.func.id=='str' and any(isinstance(a,ast.Name) and a.id==handler.name for a in n.args) or isinstance(n,ast.JoinedStr) and any(isinstance(x,ast.FormattedValue) and isinstance(x.value,ast.Name) and x.value.id==handler.name for x in n.values) for n in ast.walk(ret))
+                literal_param=any(isinstance(n,ast.Dict) and any(isinstance(k,ast.Constant) and k.value=='param' and isinstance(v,ast.Constant) and v.value=='reasoning_effort' for k,v in zip(n.keys,n.values)) for n in ast.walk(ret))
+                x1=fn.name=='chat_completions' and isinstance(handler.type,ast.Name) and handler.type.id=='ValueError' and literal_param
+                if raw and not x1:bad.append((fn.name,ret.lineno,'raw_exception'))
+    return bad
+
 class ErrGuards(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.stack=ExitStack();self.addCleanup(self.stack.close)
@@ -854,17 +867,7 @@ class ErrGuards(unittest.IsolatedAsyncioTestCase):
     async def test_T07_zip(self):await self.fixed('zip')
 
     def test_T01_source_main(self):
-        source=(ROOT/'main.py').read_text(encoding='utf8');tree=ast.parse(source);bad=[]
-        for fn in tree.body:
-            if not isinstance(fn,(ast.AsyncFunctionDef,ast.FunctionDef)):continue
-            if not any(isinstance(d,ast.Call) and isinstance(d.func,ast.Attribute) and isinstance(d.func.value,ast.Name) and d.func.value.id=='app' for d in fn.decorator_list):continue
-            for handler in (h for h in ast.walk(fn) if isinstance(h,ast.ExceptHandler) and h.name):
-                for ret in (n for n in ast.walk(handler) if isinstance(n,ast.Return)):
-                    raw=any(isinstance(n,ast.Call) and isinstance(n.func,ast.Name) and n.func.id=='str' and any(isinstance(a,ast.Name) and a.id==handler.name for a in n.args) or isinstance(n,ast.JoinedStr) and any(isinstance(x,ast.FormattedValue) and isinstance(x.value,ast.Name) and x.value.id==handler.name for x in n.values) for n in ast.walk(ret))
-                    literal_param=any(isinstance(n,ast.Dict) and any(isinstance(k,ast.Constant) and k.value=='param' and isinstance(v,ast.Constant) and v.value=='reasoning_effort' for k,v in zip(n.keys,n.values)) for n in ast.walk(ret))
-                    x1=fn.name=='chat_completions' and isinstance(handler.type,ast.Name) and handler.type.id=='ValueError' and literal_param
-                    if raw and not x1:bad.append((fn.name,ret.lineno))
-        self.assertEqual(bad,[],'T01: raw exception HTTP returns remain')
+        self.assertEqual(find_raw_exception_returns((ROOT/'main.py').read_text(encoding='utf8')), [], 'T01: raw exception HTTP returns remain')
 
     def test_T01_source_daily(self):
         tree=ast.parse((ROOT/'daily_digest.py').read_text(encoding='utf8'))
@@ -1044,6 +1047,14 @@ class ErrGuards(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(r.status_code,400);routing.assert_not_called()
         self.assertEqual(r.json()['error']['param'],'reasoning_effort')
         self.assertIn('/'.join(config.REASONING_EFFORT_VALUES),r.json()['error']['message'])
+
+    def test_T09_sec_logging_calibration(self):
+        import subprocess
+        result=subprocess.run([sys.executable,'-B',str(ROOT/'scripts/test_kiwi_sec_01a.py')],
+                              cwd=ROOT,capture_output=True,text=True,encoding='utf8',errors='replace',
+                              env=dict(os.environ,PYTHONUTF8='1'),timeout=120)
+        self.assertEqual(result.returncode,0,result.stdout+result.stderr)
+        self.assertIn('Ran 37 tests',result.stderr)
 
 REAL_TRANSPORT=httpx.AsyncHTTPTransport.handle_async_request
 

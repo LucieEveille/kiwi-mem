@@ -8,7 +8,7 @@
 v1.0 初版
 """
 
-from security import safe_log
+from security import safe_log, exception_code, stable_payload, public_model_summary
 from embedding_versioning import embedding_db_payload, build_memory_embedding_text
 import os
 import json
@@ -85,7 +85,7 @@ async def run_daily_digest(target_date: str = None, model_override: str = None, 
         try:
             date_cls.fromisoformat(target_date)
         except (ValueError, TypeError):
-            return {"error": f"无效日期格式: {target_date!r}，需要 YYYY-MM-DD"}
+            return {**stable_payload("invalid_request")}
         date_str = target_date
     else:
         yesterday = now_cst - timedelta(days=1)
@@ -199,13 +199,13 @@ async def _run_daily_digest_impl(date_str: str, now_cst, model_override: str = N
 
             if response.status_code != 200:
                 print(f"   ⚠️ Haiku 请求失败: {response.status_code}")
-                return {"date": date_str, "fragments": len(fragments), "digests": 0, "error": f"HTTP {response.status_code}"}
+                return {'date': date_str, 'fragments': len(fragments), 'digests': 0, **stable_payload(f"http_{response.status_code}")}
 
             data = parse_background_response(response.json(), use_api_format)
             text = data.get("choices", [{}])[0].get("message", {}).get("content", "")
             
             # 日志
-            print(f"   🔍 整理模型返回（前200字）: {text[:200]}...")
+            print(f"model_output text_chars={len(text)}")
             
             # 清理 markdown
             text = text.strip()
@@ -233,11 +233,11 @@ async def _run_daily_digest_impl(date_str: str, now_cst, model_override: str = N
             
             if not digests or not isinstance(digests, list):
                 print(f"   ⚠️ 整理模型返回格式错误")
-                return {"date": date_str, "fragments": len(fragments), "digests": 0, "error": "invalid format"}
+                return {'date': date_str, 'fragments': len(fragments), 'digests': 0, **stable_payload("parse_failed")}
     
     except Exception as e:
-        print(f"   ⚠️ 每日整理出错: {e}")
-        return {"date": date_str, "fragments": len(fragments), "digests": 0, "error": str(e)}
+        safe_log("_run_daily_digest_impl_failed", e)
+        return {'date': date_str, 'fragments': len(fragments), 'digests': 0, **stable_payload(exception_code(e))}
     
     # ---- 4. 存储整理后的事件条目 ----
     saved_count = 0
@@ -438,18 +438,18 @@ async def update_user_profile(digest_text: str = None, model_override: str = Non
 
             if response.status_code != 200:
                 print(f"   ⚠️ 画像更新请求失败: {response.status_code}")
-                return {"status": "error", "error": f"HTTP {response.status_code}"}
+                return {'status': 'error', **stable_payload(f"http_{response.status_code}")}
 
             data = parse_background_response(response.json(), use_api_format)
             new_profile = data.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
             
             if not new_profile:
                 print("   ⚠️ 模型返回空内容")
-                return {"status": "error", "error": "empty response"}
+                return {'status': 'error', **stable_payload("upstream_error")}
     
     except Exception as e:
-        print(f"   ⚠️ 画像更新出错: {e}")
-        return {"status": "error", "error": str(e)}
+        safe_log("update_user_profile_failed", e)
+        return {'status': 'error', **stable_payload(exception_code(e))}
     
     # 6. 保存更新后的画像
     changed = new_profile != current_profile
@@ -503,54 +503,54 @@ async def daily_digest_scheduler():
             # 1. 日页面生成（从碎片生成详细日页面）
             try:
                 page_result = await generate_day_page(yesterday)
-                print(f"📅 日页面生成结果：{page_result}")
+                print(public_model_summary(page_result))
             except Exception as e:
-                print(f"⚠️ 日页面生成出错: {e}")
+                safe_log("daily_digest_scheduler_failed", e)
             
             # 2. 用户画像更新（从日页面读素材）
             try:
                 profile_result = await update_user_profile()
-                print(f"🪞 画像更新结果：{profile_result}")
+                print(public_model_summary(profile_result))
             except Exception as e:
-                print(f"⚠️ 画像更新出错: {e}")
+                safe_log("daily_digest_scheduler_failed", e)
             
             # 3. 检查是否需要生成周/月/季/年总结
             try:
                 await check_and_generate_summaries()
             except Exception as e:
-                print(f"⚠️ 总结生成出错: {e}")
+                safe_log("daily_digest_scheduler_failed", e)
             
             # 4. 场景向量回填 + 锁定退役 + 自动软化（先模糊降级，再清理）
             try:
                 scene_backfill_result = await backfill_scene_embeddings()
-                print(f"scene embedding backfill result: {scene_backfill_result}")
+                print(public_model_summary(scene_backfill_result))
             except Exception as e:
-                print(f"scene embedding backfill failed: {e}")
+                safe_log("daily_digest_scheduler_failed", e)
 
             try:
                 retire_result = await retire_stale_locks()
-                print(f"auto lock retire result: {retire_result}")
+                print(public_model_summary(retire_result))
             except Exception as e:
-                print(f"auto lock retire failed: {e}")
+                safe_log("daily_digest_scheduler_failed", e)
 
             try:
                 soften_result = await auto_soften_aging_memories()
-                print(f"🫧 自动软化结果：{soften_result}")
+                print(public_model_summary(soften_result))
             except Exception as e:
-                print(f"⚠️ 自动软化出错: {e}")
+                safe_log("daily_digest_scheduler_failed", e)
 
             # 5. 清理过期碎片
             try:
                 cleanup_result = await cleanup_expired_fragments()
-                print(f"🧹 碎片清理结果：{cleanup_result}")
+                print(public_model_summary(cleanup_result))
             except Exception as e:
-                print(f"⚠️ 碎片清理出错: {e}")
+                safe_log("daily_digest_scheduler_failed", e)
             
         except asyncio.CancelledError:
             print("🕐 每日整理调度器已停止")
             break
         except Exception as e:
-            print(f"⚠️ 调度器出错: {e}，60秒后重试")
+            safe_log("daily_digest_scheduler_failed", e)
             await asyncio.sleep(60)
 
 
@@ -597,7 +597,7 @@ async def backfill_scene_embeddings(limit: int = 20):
                     skipped += 1
             except Exception as e:
                 skipped += 1
-                print(f"⚠️ 场景 embedding 回填异常: #{scene_id} {type(e).__name__}: {e}")
+                safe_log("backfill_scene_embeddings_failed", e)
 
         return {
             "status": "success",
@@ -606,8 +606,8 @@ async def backfill_scene_embeddings(limit: int = 20):
             "candidates": len(rows),
         }
     except Exception as e:
-        print(f"scene embedding backfill failed: {type(e).__name__}: {e}")
-        return {"status": "error", "backfilled": 0, "skipped": 0, "error": str(e)}
+        safe_log("backfill_scene_embeddings_failed", e)
+        return {'status': 'error', 'backfilled': 0, 'skipped': 0, **stable_payload(exception_code(e))}
 
 
 async def retire_stale_locks():
@@ -652,8 +652,8 @@ async def retire_stale_locks():
             print("auto lock retire: no stale locks")
         return {"status": "success", "retired": len(titles), "retire_days": retire_days, "titles": titles}
     except Exception as e:
-        print(f"auto lock retire failed: {type(e).__name__}: {e}")
-        return {"status": "error", "retired": 0, "error": str(e)}
+        safe_log("retire_stale_locks_failed", e)
+        return {'status': 'error', 'retired': 0, **stable_payload(exception_code(e))}
 
 
 AUTO_SOFTEN_PROMPT = """你是记忆整理助手。把下面这条记忆压缩到原长度的 40% 以内：
@@ -780,7 +780,7 @@ async def auto_soften_aging_memories(model_override: str = None):
 
             except Exception as e:
                 skipped += 1
-                print(f"   ⚠️ 自动软化失败: #{mem_id} {type(e).__name__}: {e}")
+                safe_log("auto_soften_aging_memories_failed", e)
 
         print(f"   🫧 自动软化完成: 成功 {softened} 条 / 跳过 {skipped} 条")
         return {
@@ -794,8 +794,8 @@ async def auto_soften_aging_memories(model_override: str = None):
         }
 
     except Exception as e:
-        print(f"   ⚠️ 自动软化整体失败: {type(e).__name__}: {e}")
-        return {"status": "error", "error": str(e), "softened": 0, "skipped": 0}
+        safe_log("auto_soften_aging_memories_failed", e)
+        return {'status': 'error', 'softened': 0, 'skipped': 0, **stable_payload(exception_code(e))}
 
 
 # ============================================================
@@ -1281,7 +1281,7 @@ async def _generate_day_page_impl(target_date: str = None, model_override: str =
         try:
             date_cls.fromisoformat(target_date)
         except (ValueError, TypeError):
-            return {"error": f"无效日期格式: {target_date!r}，需要 YYYY-MM-DD"}
+            return {**stable_payload("invalid_request")}
         date_str = target_date
     else:
         yesterday = now_cst - timedelta(days=1)
@@ -1448,8 +1448,7 @@ async def _render_day_page(date_str: str, messages: list, model_override: str = 
 
             if response.status_code != 200:
                 print(f"   ⚠️ 日页面生成请求失败: {response.status_code}")
-                return None, {"date": date_str, "status": "error",
-                              "error": f"HTTP {response.status_code}"}, use_model
+                return None, {'date': date_str, 'status': 'error', **stable_payload(f"http_{response.status_code}")}, use_model
 
             data = parse_background_response(response.json(), use_api_format)
             choices = data.get("choices") or [{}]
@@ -1463,18 +1462,16 @@ async def _render_day_page(date_str: str, messages: list, model_override: str = 
                     f"finish_reason=length completion_tokens={usage.get('completion_tokens')} "
                     f"text_chars={len(text)} max_tokens=6000"
                 )
-                return None, {"date": date_str, "status": "error",
-                              "error": "invalid format"}, use_model
+                return None, {'date': date_str, 'status': 'error', **stable_payload("parse_failed")}, use_model
 
             result = _parse_calendar_model_json(text, "day")
             if result is None:
-                print(f"   ⚠️ 日页面模型返回格式错误：{text[:200]}")
-                return None, {"date": date_str, "status": "error",
-                              "error": "invalid format"}, use_model
+                print(f"model_output text_chars={len(text)}")
+                return None, {'date': date_str, 'status': 'error', **stable_payload("parse_failed")}, use_model
 
     except Exception as e:
-        print(f"   ⚠️ 日页面生成出错: {e}")
-        return None, {"date": date_str, "status": "error", "error": str(e)}, use_model
+        safe_log("_render_day_page_failed", e)
+        return None, {'date': date_str, 'status': 'error', **stable_payload(exception_code(e))}, use_model
 
     return result, None, use_model
 
@@ -1511,9 +1508,9 @@ async def check_and_generate_summaries():
         print(f"📅 发现缺失的日页面：{day}，补生成中…")
         try:
             result = await generate_day_page(day.isoformat())
-            print(f"📅 补生成日页面结果：{result}")
+            print(public_model_summary(result))
         except Exception as e:
-            print(f"⚠️ 补生成日页面失败：{e}")
+            safe_log("check_and_generate_summaries_failed", e)
 
     # ── 周总结：检查最近4周 ──
     days_since_monday = today.weekday()  # 0=周一
@@ -1540,9 +1537,9 @@ async def check_and_generate_summaries():
         print(f"📊 发现缺失的周总结：{week_monday} ~ {week_sunday}，补生成中…")
         try:
             result = await generate_week_summary(week_monday.isoformat(), week_sunday.isoformat())
-            print(f"📊 补生成周总结结果：{result}")
+            print(public_model_summary(result))
         except Exception as e:
-            print(f"⚠️ 补生成周总结失败：{e}")
+            safe_log("check_and_generate_summaries_failed", e)
 
     # ── 月总结：检查最近3个月 ──
     for months_ago in range(1, 4):
@@ -1575,9 +1572,9 @@ async def check_and_generate_summaries():
         print(f"📊 发现缺失的月总结：{month_str}，补生成中…")
         try:
             result = await generate_month_summary(month_start.isoformat(), month_end.isoformat(), month_str)
-            print(f"📊 补生成月总结结果：{result}")
+            print(public_model_summary(result))
         except Exception as e:
-            print(f"⚠️ 补生成月总结失败：{e}")
+            safe_log("check_and_generate_summaries_failed", e)
 
     # ── 季度总结：检查最近2个季度 ──
     current_quarter = (today.month - 1) // 3 + 1
@@ -1610,9 +1607,9 @@ async def check_and_generate_summaries():
         print(f"📊 发现缺失的季度总结：{q_label}，补生成中…")
         try:
             result = await generate_period_summary(q_start.isoformat(), q_end.isoformat(), "quarter", q_label, "月总结")
-            print(f"📊 补生成季度总结结果：{result}")
+            print(public_model_summary(result))
         except Exception as e:
-            print(f"⚠️ 补生成季度总结失败：{e}")
+            safe_log("check_and_generate_summaries_failed", e)
 
     # ── 年总结：检查去年（2月以后再查，给1月的季度/月总结留生成时间）──
     if today.month >= 2:
@@ -1627,9 +1624,9 @@ async def check_and_generate_summaries():
                 print(f"📊 发现缺失的年总结：{last_year}，补生成中…")
                 try:
                     result = await generate_period_summary(y_start.isoformat(), y_end.isoformat(), "year", str(last_year), "季度总结")
-                    print(f"📊 补生成年总结结果：{result}")
+                    print(public_model_summary(result))
                 except Exception as e:
-                    print(f"⚠️ 补生成年总结失败：{e}")
+                    safe_log("check_and_generate_summaries_failed", e)
 
 
 # ---- 周总结 ----
