@@ -803,6 +803,8 @@ class ErrGuards(unittest.IsolatedAsyncioTestCase):
             st.enter_context(patch.object(dream,'run_dream',no_dream))
             st.enter_context(patch.object(app,'_dream_is_running',AsyncMock(return_value=False)))
             st.enter_context(patch.object(app,'_launch_dream_detached',Mock()))
+            st.enter_context(patch.object(app,'get_extract_interval',AsyncMock(return_value=10)))
+            st.enter_context(patch.object(app,'snapshot_recent_conversation',AsyncMock(return_value={'rows':[]})))
             if point['call']=='json.loads':
                 import re
                 member=re.search(r'"([^\"]+\.json)"',point['source']).group(1)
@@ -814,6 +816,27 @@ class ErrGuards(unittest.IsolatedAsyncioTestCase):
         # recorded baseline lines are only evidence, not a future line-number gate.
         self.assertTrue(hits,case+': FIXTURE decoder function not executed')
         self.outcome(case,r,streams,'invalid_request',400,parse_line=point['line'],route=selected,trace_lines=hits)
+
+    async def optional_empty(self,kind):
+        async def no_dream(*args,**kwargs):
+            yield {'type':'done','data':'fixture'}
+        routes={'clear':'DELETE /debug/memories','extract':'POST /admin/extract-now',
+                'dream':'POST /dream/start','detached':'POST /dream/start-detached'}
+        expected={'clear':(400,{'error':"清空全部记忆需同时携带 JSON force=true 与 confirm='DELETE_ALL_MEMORIES'"}),
+                  'extract':(200,{'status':'ok','action':'extract','saved':0,'skipped':0,'message':'没有最近的对话可提取'}),
+                  'dream':(200,'event: done\ndata: fixture\n\n'),
+                  'detached':(200,{'status':'started'})}
+        with ExitStack() as st:
+            st.enter_context(patch.object(dream,'run_dream',no_dream))
+            st.enter_context(patch.object(app,'_dream_is_running',AsyncMock(return_value=False)))
+            st.enter_context(patch.object(app,'_launch_dream_detached',Mock()))
+            st.enter_context(patch.object(app,'get_extract_interval',AsyncMock(return_value=10)))
+            st.enter_context(patch.object(app,'snapshot_recent_conversation',AsyncMock(return_value={'rows':[]})))
+            method,path=routes[kind].split(' ',1)
+            response=await self.client.request(method,path,content=b'')
+        actual=response.text if kind=='dream' else response.json()
+        self.assertEqual((response.status_code,actual),expected[kind])
+        OBSERVATIONS.append({'case':'T05_empty_'+kind,'status':response.status_code,'body':actual,'request_body_bytes':0})
 
     def test_T06_unknown_code(self):
         response=security.stable_error('not_in_whitelist')
@@ -1053,12 +1076,14 @@ def install_cases():
         setattr(ErrGuards,'test_T04_'+code,test)
     shared=['POST /sync/conversations','PATCH /sync/conversations/{conv_id}','PUT /sync/conversations/{conv_id}/messages/{msg_id}','POST /sync/projects','PATCH /sync/projects/{proj_id}','POST /sync/import']
     for point in PARSES:
-        if point['line'] in (3953,4166):continue
         routes=shared if point['function']=='_read_json_object' else [None]
         for number,route in enumerate(routes):
             for encoding in ('json','utf8'):
                 async def test(self,point=point,encoding=encoding,route=route):await self.json_case(point,encoding,route)
                 setattr(ErrGuards,f"test_T05_{point['line']}_{number}_{encoding}",test)
+    for kind in ('clear','extract','dream','detached'):
+        async def test(self,kind=kind):await self.optional_empty(kind)
+        setattr(ErrGuards,'test_T05_empty_'+kind,test)
     fragments={
         'str':('return {"error": str(e)}',True),
         'fstring':('return {"error": f"oops {e}"}',True),
