@@ -1818,10 +1818,8 @@ async def extract_file_content(file: UploadFile = File(...)):
         }
     
     except Exception as e:
-        return JSONResponse(
-            status_code=500,
-            content={"error": f"文件处理失败: {str(e)}"}
-        )
+        safe_log("extract_file_content_failed", e)
+        return stable_error(e)
 
 
 def _normalize_reasoning_effort(value):
@@ -1839,7 +1837,7 @@ def _normalize_reasoning_effort(value):
         raise ValueError(
             "reasoning_effort 必须是 "
             + "/".join(REASONING_EFFORT_VALUES)
-            + f" 之一，收到 {value[:40]!r}"
+            + " 之一"
         )
     return normalized
 
@@ -2026,7 +2024,10 @@ async def chat_completions(request: Request):
     """核心转发接口"""
     # API_KEY 检查移到供应商路由的 else 分支：只有「既没匹配到供应商、又没有环境变量
     # API_KEY」时才报 500。否则面板里配了供应商、但 env API_KEY 留空的用户会被误拦。
-    body = await request.json()
+    try:
+        body = await request.json()
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        return stable_error("invalid_request")
     try:
         reasoning_effort = _normalize_reasoning_effort(body.pop("reasoning_effort", None))
     except ValueError as e:
@@ -3849,7 +3850,8 @@ async def debug_memories(
             ],
         }
     except Exception as e:
-        return {"error": str(e)}
+        safe_log("debug_memories_failed", e)
+        return stable_error(e)
 
 
 @app.delete("/debug/memories/{memory_id}")
@@ -3870,7 +3872,8 @@ async def delete_single_memory(memory_id: int, force: bool = False):
             )
         return JSONResponse(status_code=404, content={"error": f"记忆 #{memory_id} 不存在"})
     except Exception as e:
-        return {"error": str(e)}
+        safe_log("delete_single_memory_failed", e)
+        return stable_error(e)
 
 
 @app.post("/debug/memories/batch-delete")
@@ -3879,7 +3882,10 @@ async def batch_delete_memories(request: Request):
     if not await get_memory_enabled():
         return {"error": "记忆系统未启用"}
     try:
-        body = await request.json()
+        try:
+            body = await request.json()
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            return stable_error("invalid_request")
         ids = body.get("ids", [])
         force = body.get("force") is True
         if not ids:
@@ -3891,7 +3897,8 @@ async def batch_delete_memories(request: Request):
             response["rejected_reason"] = "锁定记忆需先解锁或显式使用 JSON force=true"
         return response
     except Exception as e:
-        return {"error": str(e)}
+        safe_log("batch_delete_memories_failed", e)
+        return stable_error(e)
 
 
 @app.post("/debug/memories/batch-update")
@@ -3900,7 +3907,10 @@ async def batch_update_memories(request: Request):
     if not await get_memory_enabled():
         return {"error": "记忆系统未启用"}
     try:
-        body = await request.json()
+        try:
+            body = await request.json()
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            return stable_error("invalid_request")
         ids = body.get("ids", [])
         if not ids:
             return {"error": "ids 不能为空"}
@@ -3939,7 +3949,8 @@ async def batch_update_memories(request: Request):
         
         return {"status": "updated", "count": len(ids)}
     except Exception as e:
-        return {"error": str(e)}
+        safe_log("batch_update_memories_failed", e)
+        return stable_error(e)
 
 
 @app.delete("/debug/memories")
@@ -3950,7 +3961,10 @@ async def clear_memories(request: Request):
     
     try:
         try:
-            body = await request.json()
+            raw = await request.body()
+            body = json.loads(raw) if raw.strip() else {}
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            return stable_error("invalid_request")
         except Exception:
             body = {}
         if not isinstance(body, dict) or not (
@@ -3966,7 +3980,8 @@ async def clear_memories(request: Request):
         count = await clear_all_memories()
         return {"status": "cleared", "deleted_count": count}
     except Exception as e:
-        return {"error": str(e)}
+        safe_log("clear_memories_failed", e)
+        return stable_error(e)
 
 
 @app.get("/debug/memory-heat")
@@ -4001,7 +4016,8 @@ async def debug_memory_heat(limit: int = 50):
             "memories": report,
         }
     except Exception as e:
-        return {"error": str(e)}
+        safe_log("debug_memory_heat_failed", e)
+        return stable_error(e)
 
 
 @app.put("/debug/memories/{memory_id}")
@@ -4015,7 +4031,10 @@ async def update_single_memory(memory_id: int, request: Request):
         return {"error": "记忆系统未启用"}
     
     try:
-        body = await request.json()
+        try:
+            body = await request.json()
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            return stable_error("invalid_request")
         content = body.get("content")
         importance = body.get("importance")
         title = body.get("title")
@@ -4041,7 +4060,10 @@ async def add_memory_manual(request: Request):
         return {"error": "记忆系统未启用"}
     
     try:
-        body = await request.json()
+        try:
+            body = await request.json()
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            return stable_error("invalid_request")
         content = body.get("content", "")
         importance = body.get("importance", 5)
         title = body.get("title", "")
@@ -4081,7 +4103,8 @@ async def toggle_memory_permanent(memory_id: int):
             print(f"🔒 记忆 #{memory_id} {'锁定' if new_val else '解锁'}")
             return {"status": status, "memory_id": memory_id, "is_permanent": new_val}
     except Exception as e:
-        return {"error": str(e)}
+        safe_log("toggle_memory_permanent_failed", e)
+        return stable_error(e)
 
 
 @app.get("/admin/migrate-embeddings")
@@ -4163,8 +4186,13 @@ async def api_extract_now(request: Request):
         # 解析 project_id
         project_id = None
         try:
-            body = await request.json()
+            raw = await request.body()
+            body = json.loads(raw) if raw.strip() else {}
+            if not isinstance(body, dict):
+                body = {}
             project_id = body.get("project_id")
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            return stable_error("invalid_request")
         except Exception:
             pass
         extract_interval = await get_extract_interval()
@@ -4410,7 +4438,10 @@ async def api_generate_year_summary(year: str = None):
 async def api_save_compression_summary(request: Request):
     """前端压缩成功后调此端点存储摘要（为无缝换窗 v2 预留）"""
     try:
-        body = await request.json()
+        try:
+            body = await request.json()
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            return stable_error("invalid_request")
         conv_id = body.get("conversation_id")
         summary = body.get("summary", "")
         if not conv_id or not summary:
@@ -4429,7 +4460,8 @@ async def api_save_compression_summary(request: Request):
             return JSONResponse(status_code=code, content=payload)
         return JSONResponse(content={"ok": True})
     except Exception as e:
-        return JSONResponse(status_code=500, content={"error": str(e)})
+        safe_log("api_save_compression_summary_failed", e)
+        return stable_error(e)
 
 
 @app.get("/admin/compression-summaries")
@@ -4453,7 +4485,8 @@ async def api_get_compression_summaries(conversation_id: str):
             for r in rows
         ])
     except Exception as e:
-        return JSONResponse(status_code=500, content={"error": str(e)})
+        safe_log("api_get_compression_summaries_failed", e)
+        return stable_error(e)
 
 
 @app.get("/calendar/{date}")
@@ -4472,7 +4505,8 @@ async def api_get_calendar_day(date: str, type: str = "day"):
             page["updated_at"] = page["updated_at"].isoformat()
         return {"status": "ok", "page": page}
     except Exception as e:
-        return {"error": str(e)}
+        safe_log("api_get_calendar_day_failed", e)
+        return stable_error(e)
 
 
 @app.get("/calendar")
@@ -4499,7 +4533,8 @@ async def api_get_calendar_range(start: str = None, end: str = None, type: str =
                 p["updated_at"] = p["updated_at"].isoformat()
         return {"status": "ok", "pages": pages, "count": len(pages)}
     except Exception as e:
-        return {"error": str(e)}
+        safe_log("api_get_calendar_range_failed", e)
+        return stable_error(e)
 
 
 @app.get("/admin/calendar-period-audit")
@@ -4510,7 +4545,8 @@ async def api_calendar_period_audit():
         pages = await get_invalid_calendar_period_pages()
         return {"status": "ok", "pages": pages, "count": len(pages)}
     except Exception as e:
-        return JSONResponse(status_code=500, content={"error": str(e)})
+        safe_log("api_calendar_period_audit_failed", e)
+        return stable_error(e)
 
 
 @app.put("/admin/calendar/{date}")
@@ -4519,7 +4555,10 @@ async def api_save_calendar_page(date: str, req: Request):
     try:
         from calendar_periods import validate_calendar_period_identity
         from database import update_calendar_page_user_edit
-        body = await req.json()
+        try:
+            body = await req.json()
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            return stable_error("invalid_request")
         content = body.get("content", "")
         title = body.get("title", "")
         page_type = body.get("type", "day")
@@ -4534,9 +4573,11 @@ async def api_save_calendar_page(date: str, req: Request):
         )
         return {"status": "ok", "id": page_id}
     except ValueError as e:
-        return JSONResponse(status_code=400, content={"error": str(e)})
+        safe_log("api_save_calendar_page_invalid", "invalid_request")
+        return stable_error("invalid_request")
     except Exception as e:
-        return {"error": str(e)}
+        safe_log("api_save_calendar_page_failed", e)
+        return stable_error(e)
 
 
 @app.delete("/admin/calendar/{date}")
@@ -4547,7 +4588,8 @@ async def api_delete_calendar_page(date: str, type: str = "day"):
         ok = await delete_calendar_page(date, type)
         return {"status": "ok" if ok else "not_found"}
     except Exception as e:
-        return {"error": str(e)}
+        safe_log("api_delete_calendar_page_failed", e)
+        return stable_error(e)
 
 
 # ============================================================
@@ -4559,7 +4601,10 @@ async def api_create_comment(req: Request):
     """创建评论"""
     try:
         from database import create_comment
-        body = await req.json()
+        try:
+            body = await req.json()
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            return stable_error("invalid_request")
         comment = await create_comment(
             target_type=body["target_type"],
             target_id=body["target_id"],
@@ -4571,7 +4616,8 @@ async def api_create_comment(req: Request):
             comment["created_at"] = comment["created_at"].isoformat()
         return {"status": "ok", "comment": comment}
     except Exception as e:
-        return {"error": str(e)}
+        safe_log("api_create_comment_failed", e)
+        return stable_error(e)
 
 
 @app.get("/comments")
@@ -4585,7 +4631,8 @@ async def api_get_comments(target_type: str, target_id: int):
                 c["created_at"] = c["created_at"].isoformat()
         return {"status": "ok", "comments": comments}
     except Exception as e:
-        return {"error": str(e)}
+        safe_log("api_get_comments_failed", e)
+        return stable_error(e)
 
 
 @app.delete("/comments/{comment_id}")
@@ -4596,7 +4643,8 @@ async def api_delete_comment(comment_id: int):
         ok = await delete_comment(comment_id)
         return {"status": "ok" if ok else "not_found"}
     except Exception as e:
-        return {"error": str(e)}
+        safe_log("api_delete_comment_failed", e)
+        return stable_error(e)
 
 
 # ============================================================
@@ -4614,7 +4662,12 @@ async def api_dream_start(req: Request):
 
     body = {}
     try:
-        body = await req.json()
+        raw = await req.body()
+        body = json.loads(raw) if raw.strip() else {}
+        if not isinstance(body, dict):
+            body = {}
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        return stable_error("invalid_request")
     except Exception:
         pass
 
@@ -4640,7 +4693,12 @@ async def api_dream_start_detached(req: Request):
     """
     body = {}
     try:
-        body = await req.json()
+        raw = await req.body()
+        body = json.loads(raw) if raw.strip() else {}
+        if not isinstance(body, dict):
+            body = {}
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        return stable_error("invalid_request")
     except Exception:
         pass
     trigger = body.get("trigger_type", "manual")
@@ -4732,7 +4790,8 @@ async def api_get_scenes():
                     s[field] = s[field].isoformat()
         return {"status": "ok", "scenes": scenes, "count": len(scenes)}
     except Exception as e:
-        return {"error": str(e)}
+        safe_log("api_get_scenes_failed", e)
+        return stable_error(e)
 
 
 @app.delete("/admin/dream/{dream_id}")
@@ -4765,7 +4824,8 @@ async def api_delete_dream(dream_id: int):
                 )
         return {"status": "ok", "deleted": dream_id}
     except Exception as e:
-        return {"error": str(e)}
+        safe_log("api_delete_dream_failed", e)
+        return stable_error(e)
 
 
 @app.put("/admin/scene/{scene_id}")
@@ -4773,7 +4833,10 @@ async def api_update_scene(scene_id: int, req: Request):
     """用户手动编辑记忆场景（标题、叙事、远见）"""
     try:
         from database import update_mem_scene
-        body = await req.json()
+        try:
+            body = await req.json()
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            return stable_error("invalid_request")
         kwargs = {}
         if "title" in body:
             kwargs["title"] = body["title"]
@@ -4809,7 +4872,10 @@ async def api_get_config():
 @app.put("/admin/config/{key}")
 async def api_set_config(key: str, request: Request):
     try:
-        data = await request.json()
+        try:
+            data = await request.json()
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            return stable_error("invalid_request")
         if not isinstance(data, dict) or key not in CONFIG_SCHEMA:
             return stable_error("invalid_request")
         if CONFIG_SCHEMA[key][3] == "secret":
@@ -4957,7 +5023,8 @@ async def api_get_default_prompts():
         factory = _get_factory_prompts()
         return {"status": "ok", "prompts": factory}
     except Exception as e:
-        return {"error": str(e)}
+        safe_log("api_get_default_prompts_failed", e)
+        return stable_error(e)
 
 
 @app.post("/admin/restore-prompt/{key}")
@@ -4975,7 +5042,8 @@ async def api_restore_prompt(key: str):
         else:
             return {"error": f"写入失败: {key}"}
     except Exception as e:
-        return {"error": str(e)}
+        safe_log("api_restore_prompt_failed", e)
+        return stable_error(e)
 
 
 # ============================================================
@@ -4995,7 +5063,10 @@ async def api_get_providers():
 async def api_create_provider(request: Request):
     """创建供应商"""
     try:
-        data = await request.json()
+        try:
+            data = await request.json()
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            return stable_error("invalid_request")
         name = data.get("name", "").strip()
         api_base_url = validate_upstream_url(data.get("api_base_url", "").strip())
         api_key = data.get("api_key", "")
@@ -5005,7 +5076,7 @@ async def api_create_provider(request: Request):
         enabled = data.get("enabled", True)
 
         if not name:
-            return {"error": "供应商名称不能为空"}
+            return stable_error("invalid_request")
         if not api_base_url:
             return {"error": "API Base URL 不能为空"}
 
@@ -5021,7 +5092,10 @@ async def api_create_provider(request: Request):
 async def api_update_provider(provider_id: int, request: Request):
     """更新供应商"""
     try:
-        data = await request.json()
+        try:
+            data = await request.json()
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            return stable_error("invalid_request")
         # 编辑时留空的 api_key 视为「不修改」，避免把已存的 key 清空（前端会发空串）
         if not (data.get("api_key") or "").strip():
             data.pop("api_key", None)
@@ -5270,7 +5344,10 @@ async def api_get_saved_models(provider_id: int):
 async def api_add_saved_model(provider_id: int, request: Request):
     """添加模型到供应商"""
     try:
-        data = await request.json()
+        try:
+            data = await request.json()
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            return stable_error("invalid_request")
         model_id = data.get("model_id", "").strip()
         if not model_id:
             return {"error": "model_id 不能为空"}
@@ -5297,7 +5374,10 @@ async def api_add_saved_model(provider_id: int, request: Request):
 async def api_update_saved_model(model_pk_id: int, request: Request):
     """更新已保存模型的配置"""
     try:
-        data = await request.json()
+        try:
+            data = await request.json()
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            return stable_error("invalid_request")
         model = await update_provider_model(model_pk_id, **data)
         if model:
             _schedule_embedding_drawer_refresh()
@@ -5331,14 +5411,18 @@ async def api_get_categories():
         categories = await get_all_categories()
         return {"status": "ok", "categories": categories}
     except Exception as e:
-        return {"error": str(e)}
+        safe_log("api_get_categories_failed", e)
+        return stable_error(e)
 
 
 @app.post("/admin/categories")
 async def api_create_category(request: Request):
     """创建分类"""
     try:
-        data = await request.json()
+        try:
+            data = await request.json()
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            return stable_error("invalid_request")
         name = data.get("name", "").strip()
         if not name:
             return {"error": "分类名称不能为空"}
@@ -5352,20 +5436,25 @@ async def api_create_category(request: Request):
     except Exception as e:
         if "unique" in str(e).lower():
             return {"error": "分类名称已存在"}
-        return {"error": str(e)}
+        safe_log("api_create_category_failed", e)
+        return stable_error(e)
 
 
 @app.put("/admin/categories/{category_id}")
 async def api_update_category(category_id: int, request: Request):
     """更新分类"""
     try:
-        data = await request.json()
+        try:
+            data = await request.json()
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            return stable_error("invalid_request")
         category = await update_category(category_id, **data)
         if category:
             return {"status": "updated", "category": category}
         return {"error": "分类不存在"}
     except Exception as e:
-        return {"error": str(e)}
+        safe_log("api_update_category_failed", e)
+        return stable_error(e)
 
 
 @app.delete("/admin/categories/{category_id}")
@@ -5377,7 +5466,8 @@ async def api_delete_category(category_id: int):
             return {"status": "deleted"}
         return {"error": "分类不存在"}
     except Exception as e:
-        return {"error": str(e)}
+        safe_log("api_delete_category_failed", e)
+        return stable_error(e)
 
 
 # ============================================================
@@ -5404,7 +5494,10 @@ async def api_get_search_config():
 @app.put("/admin/search-config")
 async def api_set_search_config(request: Request):
     try:
-        data = await request.json()
+        try:
+            data = await request.json()
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            return stable_error("invalid_request")
         if not isinstance(data, dict) or "clear" in data:
             return stable_error("invalid_request")
         action, value = secret_action(data, "api_key")
@@ -5427,14 +5520,17 @@ async def api_set_search_config(request: Request):
 async def api_search_test(request: Request):
     """测试搜索（调试用）"""
     try:
-        data = await request.json()
+        try:
+            data = await request.json()
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            return stable_error("invalid_request")
         query = data.get("query", "")
         engine = data.get("engine") or await get_config("search_engine") or ""
         api_key = data.get("api_key") or await get_config("search_api_key") or ""
         max_results = data.get("max_results", 5)
         
         if not query:
-            return JSONResponse(status_code=400, content={"error": "query 不能为空"})
+            return stable_error("invalid_request")
         if not engine:
             return JSONResponse(status_code=400, content={"error": "未配置搜索引擎"})
         
@@ -5457,7 +5553,10 @@ async def api_search_test(request: Request):
 async def api_mcp_list_tools(request: Request):
     """获取指定 MCP 服务器的工具列表"""
     try:
-        data = await request.json()
+        try:
+            data = await request.json()
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            return stable_error("invalid_request")
         servers = data.get("servers", [])
         if not servers:
             return {"tools": [], "tool_map": {}}
@@ -5469,14 +5568,18 @@ async def api_mcp_list_tools(request: Request):
             "tool_map": {k: v["server_name"] for k, v in tool_map.items()},
         }
     except Exception as e:
-        return JSONResponse(status_code=500, content={"error": str(e)})
+        safe_log("api_mcp_list_tools_failed", e)
+        return stable_error(e)
 
 
 @app.post("/admin/mcp/clear-cache")
 async def api_mcp_clear_cache(request: Request):
     """清除 MCP 工具缓存"""
     try:
-        data = await request.json()
+        try:
+            data = await request.json()
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            return stable_error("invalid_request")
         url = data.get("url")
         clear_tool_cache(url)
         try:
@@ -5650,19 +5753,24 @@ async def api_get_system_prompt():
         source = "database" if db_prompt is not None else "file"
         return {"status": "ok", "content": prompt, "source": source, "length": len(prompt)}
     except Exception as e:
-        return {"error": str(e)}
+        safe_log("api_get_system_prompt_failed", e)
+        return stable_error(e)
 
 
 @app.put("/admin/system-prompt")
 async def api_set_system_prompt(request: Request):
     """保存 system prompt 到数据库"""
     try:
-        data = await request.json()
+        try:
+            data = await request.json()
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            return stable_error("invalid_request")
         content = data.get("content", "")
         await set_system_prompt_in_db(content)
         return {"status": "updated", "length": len(content)}
     except Exception as e:
-        return {"error": str(e)}
+        safe_log("api_set_system_prompt_failed", e)
+        return stable_error(e)
 
 
 # ============================================================
@@ -5699,7 +5807,8 @@ async def api_search_messages(q: str = "", project_id: str = None, limit: int = 
         results = await search_chat_messages(q, project_id=project_id, limit=limit)
         return results
     except Exception as e:
-        return JSONResponse(status_code=500, content={"error": str(e)})
+        safe_log("api_search_messages_failed", e)
+        return stable_error(e)
 
 
 # ============================================================
@@ -5735,9 +5844,9 @@ async def _read_json_object(request: Request):
     try:
         data = await request.json()
     except Exception:
-        return None, JSONResponse(status_code=400, content={"error": "请求体必须是合法 JSON"})
+        return None, stable_error("invalid_request")
     if not isinstance(data, dict):
-        return None, JSONResponse(status_code=400, content={"error": "请求体必须是 JSON 对象"})
+        return None, stable_error("invalid_request")
     return data, None
 
 
@@ -5767,7 +5876,8 @@ async def api_sync_get_conversations():
         convs = await sync_get_conversations()
         return {"conversations": [_serialize_datetimes(c) for c in convs]}
     except Exception as e:
-        return JSONResponse(status_code=500, content={"error": str(e)})
+        safe_log("api_sync_get_conversations_failed", e)
+        return stable_error(e)
 
 
 @app.get("/sync/conversations/{conv_id}")
@@ -5780,7 +5890,8 @@ async def api_sync_get_conversation(conv_id: str):
         # datetime 对象需要序列化为 ISO 字符串，否则 JSONResponse 会崩溃
         return _serialize_datetimes(conv)
     except Exception as e:
-        return JSONResponse(status_code=500, content={"error": str(e)})
+        safe_log("api_sync_get_conversation_failed", e)
+        return stable_error(e)
 
 
 @app.post("/sync/conversations")
@@ -5805,7 +5916,8 @@ async def api_sync_create_conversation(request: Request):
             result["warning"] = warning
         return result
     except Exception as e:
-        return JSONResponse(status_code=500, content={"error": str(e)})
+        safe_log("api_sync_create_conversation_failed", e)
+        return stable_error(e)
 
 
 @app.put("/sync/conversations/{conv_id}")
@@ -5815,7 +5927,10 @@ async def api_sync_upsert_conversation(conv_id: str, request: Request):
         gate = await _legacy_write_gate("conversation_put")
         if gate:
             return gate
-        data = await request.json()
+        try:
+            data = await request.json()
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            return stable_error("invalid_request")
         data["id"] = conv_id
         messages = data.pop("messages", None)
         try:
@@ -5835,7 +5950,8 @@ async def api_sync_upsert_conversation(conv_id: str, request: Request):
             result["skipped_stale_summaries"] = stale
         return result
     except Exception as e:
-        return JSONResponse(status_code=500, content={"error": str(e)})
+        safe_log("api_sync_upsert_conversation_failed", e)
+        return stable_error(e)
 
 
 @app.patch("/sync/conversations/{conv_id}")
@@ -5853,7 +5969,8 @@ async def api_sync_patch_conversation(conv_id: str, request: Request):
             return JSONResponse(status_code=404, content={"error": "对话不存在"})
         return {"status": "ok"}
     except Exception as e:
-        return JSONResponse(status_code=500, content={"error": str(e)})
+        safe_log("api_sync_patch_conversation_failed", e)
+        return stable_error(e)
 
 
 @app.delete("/sync/conversations/{conv_id}")
@@ -5887,7 +6004,8 @@ async def api_sync_upsert_message(conv_id: str, msg_id: str, request: Request):
             return JSONResponse(status_code=code, content=body)
         return {"status": "ok"}
     except Exception as e:
-        return JSONResponse(status_code=500, content={"error": str(e)})
+        safe_log("api_sync_upsert_message_failed", e)
+        return stable_error(e)
 
 
 @app.delete("/sync/conversations/{conv_id}/messages/{msg_id}")
@@ -5919,7 +6037,8 @@ async def api_sync_get_projects():
         projs = await sync_get_projects()
         return {"projects": [_serialize_datetimes(p) for p in projs]}
     except Exception as e:
-        return JSONResponse(status_code=500, content={"error": str(e)})
+        safe_log("api_sync_get_projects_failed", e)
+        return stable_error(e)
 
 
 @app.post("/sync/projects")
@@ -5935,7 +6054,8 @@ async def api_sync_create_project(request: Request):
             return JSONResponse(status_code=409, content={"error": "项目已存在"})
         return {"status": "ok"}
     except Exception as e:
-        return JSONResponse(status_code=500, content={"error": str(e)})
+        safe_log("api_sync_create_project_failed", e)
+        return stable_error(e)
 
 
 @app.put("/sync/projects/{proj_id}")
@@ -5945,12 +6065,16 @@ async def api_sync_upsert_project(proj_id: str, request: Request):
         gate = await _legacy_write_gate("project_put")
         if gate:
             return gate
-        data = await request.json()
+        try:
+            data = await request.json()
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            return stable_error("invalid_request")
         data["id"] = proj_id
         await sync_upsert_project(data)
         return {"status": "ok"}
     except Exception as e:
-        return JSONResponse(status_code=500, content={"error": str(e)})
+        safe_log("api_sync_upsert_project_failed", e)
+        return stable_error(e)
 
 
 @app.patch("/sync/projects/{proj_id}")
@@ -5967,7 +6091,8 @@ async def api_sync_patch_project(proj_id: str, request: Request):
             return JSONResponse(status_code=404, content={"error": "项目不存在"})
         return {"status": "ok"}
     except Exception as e:
-        return JSONResponse(status_code=500, content={"error": str(e)})
+        safe_log("api_sync_patch_project_failed", e)
+        return stable_error(e)
 
 
 @app.delete("/sync/projects/{proj_id}")
@@ -5983,7 +6108,8 @@ async def api_sync_delete_project(proj_id: str):
             pass
         return {"deleted": deleted}
     except Exception as e:
-        return JSONResponse(status_code=500, content={"error": str(e)})
+        safe_log("api_sync_delete_project_failed", e)
+        return stable_error(e)
 
 
 # ──── v5.8：项目文件分块处理 ────
@@ -5996,7 +6122,10 @@ async def api_process_file_chunks(proj_id: str, file_id: str, request: Request):
     body: { "file_name": "xxx.txt", "text_content": "..." }
     """
     try:
-        data = await request.json()
+        try:
+            data = await request.json()
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            return stable_error("invalid_request")
         file_name = data.get("file_name", "")
         text_content = data.get("text_content", "")
         
@@ -6021,7 +6150,8 @@ async def api_delete_file_chunks(proj_id: str, file_id: str):
         count = await delete_file_chunks(proj_id, file_id)
         return {"deleted": count}
     except Exception as e:
-        return JSONResponse(status_code=500, content={"error": str(e)})
+        safe_log("api_delete_file_chunks_failed", e)
+        return stable_error(e)
 
 
 # ──── 批量导入（localStorage → 数据库） ────
@@ -6076,7 +6206,10 @@ async def api_sync_get_settings():
 async def api_sync_put_settings(request: Request):
     """批量更新同步配置"""
     try:
-        data = await request.json()
+        try:
+            data = await request.json()
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            return stable_error("invalid_request")
         updated, rejected = [], []
         for key, value in data.items():
             if key not in SYNC_SETTING_KEYS:
@@ -6091,7 +6224,8 @@ async def api_sync_put_settings(request: Request):
             print(f"⚠️  /sync/settings 拒收配置项（未落库）: {rejected}")
         return {"status": "ok", "updated": updated, "rejected": rejected}
     except Exception as e:
-        return JSONResponse(status_code=500, content={"error": str(e)})
+        safe_log("api_sync_put_settings_failed", e)
+        return stable_error(e)
 
 
 # ──── 数据导出（备份 zip） ────
@@ -6184,7 +6318,7 @@ async def api_sync_import_backup(file: UploadFile = File(...)):
         buf = io.BytesIO(content)
 
         if not zipfile.is_zipfile(buf):
-            return JSONResponse(status_code=400, content={"error": "不是有效的 zip 文件"})
+            return stable_error("invalid_request")
 
         buf.seek(0)
         result = {"conversations": 0, "messages": 0, "projects": 0, "memories": 0,
@@ -6202,7 +6336,10 @@ async def api_sync_import_backup(file: UploadFile = File(...)):
 
             # 导入项目
             if "projects.json" in names:
-                projs = json.loads(zf.read("projects.json"))
+                try:
+                    projs = json.loads(zf.read("projects.json"))
+                except (json.JSONDecodeError, UnicodeDecodeError):
+                    return stable_error("invalid_request")
                 for p in projs:
                     await sync_upsert_project(p)
                     result["projects"] += 1
@@ -6211,7 +6348,10 @@ async def api_sync_import_backup(file: UploadFile = File(...)):
             # 备份恢复是用户明确的"把它带回来"，因此是全仓唯一能撤销删除章的通道；
             # 一段对话一个事务，撤章与重建同生共死，失败的那段保持原样（章还在、数据没变）。
             if "conversations.json" in names:
-                convs = json.loads(zf.read("conversations.json"))
+                try:
+                    convs = json.loads(zf.read("conversations.json"))
+                except (json.JSONDecodeError, UnicodeDecodeError):
+                    return stable_error("invalid_request")
                 for conv in convs:
                     # 缺键取 None（只恢复元数据），不能取 []——那是「权威空快照」的意思。
                     messages = conv.pop("messages", None)
@@ -6228,7 +6368,10 @@ async def api_sync_import_backup(file: UploadFile = File(...)):
 
             # 导入记忆
             if "memories.json" in names:
-                mems = json.loads(zf.read("memories.json"))
+                try:
+                    mems = json.loads(zf.read("memories.json"))
+                except (json.JSONDecodeError, UnicodeDecodeError):
+                    return stable_error("invalid_request")
                 for mem in mems:
                     try:
                         await save_memory(
@@ -6244,7 +6387,10 @@ async def api_sync_import_backup(file: UploadFile = File(...)):
 
             # 导入同步设置
             if "settings.json" in names:
-                settings = json.loads(zf.read("settings.json"))
+                try:
+                    settings = json.loads(zf.read("settings.json"))
+                except (json.JSONDecodeError, UnicodeDecodeError):
+                    return stable_error("invalid_request")
                 for key, val in settings.items():
                     if val:
                         await set_config(key, str(val))
@@ -6252,7 +6398,10 @@ async def api_sync_import_backup(file: UploadFile = File(...)):
 
             # 导入 gateway 配置
             if "config.json" in names:
-                config = json.loads(zf.read("config.json"))
+                try:
+                    config = json.loads(zf.read("config.json"))
+                except (json.JSONDecodeError, UnicodeDecodeError):
+                    return stable_error("invalid_request")
                 for key, val in config.items():
                     if val:
                         ok = await set_config(key, str(val))
@@ -6274,7 +6423,10 @@ async def api_sync_import_backup(file: UploadFile = File(...)):
 async def api_sync_reset(request: Request):
     """重置全部聊天数据（对话+项目+同步设置），记忆和 gateway 配置保留"""
     try:
-        data = await request.json()
+        try:
+            data = await request.json()
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            return stable_error("invalid_request")
         confirm = data.get("confirm")
         if confirm != "RESET_ALL_DATA":
             return JSONResponse(status_code=400, content={"error": "需要确认码 confirm='RESET_ALL_DATA'"})
@@ -6298,17 +6450,22 @@ async def api_get_reminders(all: bool = False):
         reminders = await get_reminders(include_completed=all)
         return JSONResponse(content=reminders)
     except Exception as e:
-        return JSONResponse(status_code=500, content={"error": str(e)})
+        safe_log("api_get_reminders_failed", e)
+        return stable_error(e)
 
 @app.post("/reminders")
 async def api_create_reminder(request: Request):
     """手动创建提醒"""
     try:
-        body = await request.json()
+        try:
+            body = await request.json()
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            return stable_error("invalid_request")
         result = await create_reminder(body)
         return JSONResponse(content=result)
     except Exception as e:
-        return JSONResponse(status_code=500, content={"error": str(e)})
+        safe_log("api_create_reminder_failed", e)
+        return stable_error(e)
 
 # 注意：/reminders/due 和 /reminders/{rid}/fire 必须在 /reminders/{rid} 之前定义，
 # 否则 "due" 和 "xxx/fire" 会被 {rid} 路径参数捕获
@@ -6320,7 +6477,8 @@ async def api_get_due_reminders():
         due = await get_due_reminders()
         return JSONResponse(content=due)
     except Exception as e:
-        return JSONResponse(status_code=500, content={"error": str(e)})
+        safe_log("api_get_due_reminders_failed", e)
+        return stable_error(e)
 
 @app.post("/reminders/{rid}/fire")
 async def api_fire_reminder(rid: str):
@@ -6333,19 +6491,24 @@ async def api_fire_reminder(rid: str):
         ok = await fire_reminder(rid, reminder.get("repeat_type", "once"), reminder.get("repeat_config"))
         return JSONResponse(content={"ok": ok, "repeat_type": reminder.get("repeat_type")})
     except Exception as e:
-        return JSONResponse(status_code=500, content={"error": str(e)})
+        safe_log("api_fire_reminder_failed", e)
+        return stable_error(e)
 
 @app.put("/reminders/{rid}")
 async def api_update_reminder(rid: str, request: Request):
     """更新提醒"""
     try:
-        body = await request.json()
+        try:
+            body = await request.json()
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            return stable_error("invalid_request")
         ok = await update_reminder(rid, body)
         if ok:
             return JSONResponse(content={"ok": True})
         return JSONResponse(status_code=404, content={"error": "提醒不存在"})
     except Exception as e:
-        return JSONResponse(status_code=500, content={"error": str(e)})
+        safe_log("api_update_reminder_failed", e)
+        return stable_error(e)
 
 @app.delete("/reminders/{rid}")
 async def api_delete_reminder(rid: str):
@@ -6356,7 +6519,8 @@ async def api_delete_reminder(rid: str):
             return JSONResponse(content={"ok": True})
         return JSONResponse(status_code=404, content={"error": "提醒不存在"})
     except Exception as e:
-        return JSONResponse(status_code=500, content={"error": str(e)})
+        safe_log("api_delete_reminder_failed", e)
+        return stable_error(e)
 
 
 # MCP /memory/mcp and /calendar/mcp are registered before business routes above.

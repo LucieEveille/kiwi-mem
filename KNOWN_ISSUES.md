@@ -63,15 +63,15 @@
 ## KIWI-SEC-01a scope and remaining security work
 
 - No built-in authentication, env fallback and default upstream addresses are intentional public behavior. Credentials remain plaintext in DB/env; an actor with admin access can retarget a provider using its stored key. Protect the whole service.
-- This patch sanitizes the specified credential/model failure paths, not every exception in the repository. KIWI-ERR-01 retains the other 49 main.py error=str(e) exits, six daily_digest.py internal error dictionaries and unlisted MCP/tool failure channels. User-authored text and raw database dumps are not secret-filtered.
+- This patch sanitizes the specified credential/model failure paths, not every exception in the repository. KIWI-ERR-01 handles the enumerated ordinary HTTP exits and six raw internal error dictionaries; unlisted MCP/tool failure channels remain outside this scope. User-authored text and raw database dumps are not secret-filtered.
 - MCP Host/Origin setup and exact route mounting remain BUILD-01/SEC-01b work. Embedding versioning/rebuild remains EMB-01 work.
 - Compatibility changes and deployment guidance: [security model](docs/security-model.md).
 
-SEC-01a 补丁批复核记录：供应商新建空名称仍返回原有固定错误串；日历周期校验目前统一为 invalid_request，具体原因的机器码与面板提示留给 KIWI-ERR-01。
+SEC-01a 补丁批复核记录：供应商新建空名称由 ERR-01 改为400 invalid_request；日历周期校验统一invalid_request，细分原因机器码与面板提示归2.0.x #11～#18。
 
-SEC-01a P2 复核后留给 ERR-01：客户端坏 JSON 或备份成员坏 JSON 仍可能映射为 502 parse_failed；stable_error 未知码的正文与状态分类不完全一致；no_route 白名单项未使用；非 ZIP、空搜索 query 等固定错误字符串待统一。观察项暂保留：路径 U+200B 编码、Anthropic 稳定错误二次映射、256B 分块断流丢尾；依赖版本边界由 BUILD-01 处理。
+SEC-01a P2：ERR-01 已处理客户端/备份成员解码错误、未知码状态不一致、非ZIP及空query固定串；no_route白名单项保留未使用。观察项暂保留：路径 U+200B 编码、Anthropic 稳定错误二次映射、256B 分块断流丢尾；依赖版本边界由 BUILD-01 处理。
 
-SEC-01a P3 复核登记（本批未改，后续 ERR-01 / 观察）：OpenAI 的 `data:[DONE]` 无空格变体可能与兜底形成两个 DONE；首行合法、次行垃圾的畸形块可能透传；`data: <html>` 等 SSE 包装的非 JSON 载荷仍可能透传，这两类不在三种裸非 SSE 体拒绝保证内。两分支上游 200 空体仍静默结束；通用账单根路径不剥 `/v1/messages` 后缀（同源但可能路径不兼容）。合法 `id:` / `retry:` / 注释块在 OpenAI 直连流中可原样透传，属协议观察，不当作泄漏修复。
+SEC-01a P3 复核登记（本票不改，归2.0.x #5）：OpenAI 的 `data:[DONE]` 无空格变体可能与兜底形成两个 DONE；首行合法、次行垃圾的畸形块可能透传；`data: <html>` 等 SSE 包装的非 JSON 载荷仍可能透传，这两类不在三种裸非 SSE 体拒绝保证内。两分支上游 200 空体仍静默结束；通用账单根路径不剥 `/v1/messages` 后缀（同源但可能路径不兼容）。合法 `id:` / `retry:` / 注释块在 OpenAI 直连流中可原样透传，属协议观察，不当作泄漏修复。
 
 ## KIWI-PREP-01
 
@@ -86,7 +86,7 @@ SEC-01a P3 复核登记（本批未改，后续 ERR-01 / 观察）：OpenAI 的 
 - 不内置共享托管后缀（含 zeabur.app / trycloudflare.com），需登记完整域名；Quick Tunnel 不支持 SSE。
 - IP 零配置仅适用于没有 Origin 的客户端；Host 校验不等于认证，/v1、/admin、/sync 不因此增加 Host/Origin 拒绝。
 - SDK 请求体上限 4 MiB。/calendar/mcp 精确路由已修（SEC-01b，560ec2b，PR #84；集成分支，未发布），本票仅验证 calendar SDK 实例。
-- SEC-01a P3 观察项：只有空白或 : keepalive 的零事件体可能被判 parse_failed；message_start 后混入非 SSE 垃圾会被吞成 role delta + [DONE]。登记后续处理，本票不改。
+- SEC-01a P3 观察项（归2.0.x #5）：只有空白或 : keepalive 的零事件体可能被判 parse_failed；message_start 后混入非 SSE 垃圾会被吞成 role delta + [DONE]。登记后续处理，本票不改。
 
 ## KIWI-SEC-01b
 
@@ -107,3 +107,11 @@ SEC-01a P3 复核登记（本批未改，后续 ERR-01 / 观察）：OpenAI 的 
 向量状态口扫描三表，复杂度 O(N)。格式守门能排除原生 Anthropic，无法判断 OpenAI 格式中转站背后的模型能力。探针诊断不持久化；脱敏只识别凭据原文及 URL 编码，任意编码不保证。worker 内部异常保留 running，等待两分钟租约过期后继续。换模型有每批前/后及结果身份检查，反馈仍可能延后到下一批或重新检查。重新对齐依据当前待处理行，不保证只重试上一轮失败项；新增/变更内容可能改变数量。部署回退前停止新 worker；不要让旧版继续写入同一库并期待其维护新身份。
 
 Status scans are O(N). Native Anthropic format is excluded, but relay capability requires probing. Diagnostics are not persisted and redaction covers literal/URL-encoded credentials only. Unexpected worker failures resume after the two-minute lease expires. Model-change feedback can lag until the next batch/check. Retry re-enumerates current data. Stop new workers before rollback; old application versions do not maintain identity columns.
+
+## KIWI-ERR-01
+
+- 本分支枚举的错误出口已改稳定形，随2.0发布；范围和保留合同见UPGRADING。X1保留嵌套形状、去掉字符串值回显。
+- 四个可选体入口空/空白body照旧，非空坏body改400；不再把3953/4166坏体当空体。有效非对象JSON除裁决指定入口外保留现状，归2.0.x。
+- W2五处固定响应、记忆系统未启用200、周/月/周期model returned invalid format、embedding-probe200均保留。
+- 日历错误子码/面板提示归2.0.x #11～#18；P3 SSE/路径/空体/账单观察归2.0.x #5；路径U+200B与二次映射/分块尾部观察继续登记，不纳入本票证明。
+- HTTP/1.1 trace过滤只承诺已验格式中的reason字段；不承诺headers脱敏或全部httpcore版本。

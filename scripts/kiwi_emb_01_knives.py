@@ -91,8 +91,8 @@ def mutate(k,s):
     # Normalization alone is redundant with unquote: remove both comparison
     # copies to test the encoded-key boundary, rather than claiming a false RED.
     if k=='30': return once(s,'candidates = (value, normalized, unquote(value))','candidates = (value,)')
-    if k=='31a': return once(s,"for name in ('httpx', 'httpcore'):", 'for name in ():')
-    if k=='31b': return once(s,"for name in ('httpx', 'httpcore'):", "for name in ('httpx',):")
+    if k=='31a': return once(s,"for name in ('httpx', 'httpcore', 'httpcore.http11', 'httpcore.http2'):", 'for name in ():')
+    if k=='31b': return once(s,"for name in ('httpx', 'httpcore', 'httpcore.http11', 'httpcore.http2'):", "for name in ('httpx',):")
     if k=='32': return function(s,'_assert_owner',lambda p:once(p,'clock_timestamp()','NOW()'))
     if k=='32e': return function(s,'_renew_embedding_lease',lambda p:once(p,'lease_until > clock_timestamp()','lease_until > NOW()'))
     raise ValueError(k)

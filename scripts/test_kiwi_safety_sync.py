@@ -827,7 +827,7 @@ async def test_s6(client: httpx.AsyncClient) -> None:
     )
     try:
         response = await client.delete(f"/admin/dream/{rollback_dream}")
-        require(response.status_code == 200 and "error" in response.json(), "injected failure was hidden as success")
+        require(response.status_code == 500 and response.json() == {"error": "internal_error", "error_code": "internal_error"}, "injected failure did not use the ERR-01 stable internal error")
         require(await _pool_fetchval("SELECT deleted FROM dream_logs WHERE id=$1", rollback_dream) is False, "dream update did not roll back")
         require(await _pool_fetchval("SELECT status FROM mem_scenes WHERE id=$1", rollback_scene) == "active", "scene update did not roll back")
     finally:

@@ -49,3 +49,17 @@ MCP 的 Host/Origin 配置与精确挂载由后续 BUILD-01/SEC-01b 交付，本
 只有 `/admin/embedding-probe` 返回受控上游摘要。它返回固定体检字段，HTTP 200 不代表测试通过，须读 `ok`。`provider_name/model_id/endpoint_host/upstream_message/upstream_request_id` 全部经过凭据与危险模式检查；完整原文先脱敏，再压空白和截断至 2000 字。无短钥匙豁免，命中字段为 null 并设置 hidden。HTTP 错误、日志和其它端点继续使用 SEC-01a 稳定错误合同，不透传上游整包。原文及 URL 编码之外的编码（如 base64）不在脱敏识别保证内。诊断不持久化，不扩展认证能力，仍需既有网络边界。
 
 Only the embedding probe returns bounded redacted upstream diagnostics. Check `ok`, not HTTP 200. All five controlled string fields pass full-length credential/pattern checks before truncation; short keys are included. Exact and URL-encoded forms are covered, arbitrary encodings are not. Other endpoints retain stable error contracts. This exception adds neither persistence nor authentication. See [embedding identity](embedding-versioning.md).
+
+### ERR-01：错误出口与日志边界
+
+普通HTTP、SSE和内部结果是三类合同。ERR-01收齐枚举的50个普通HTTP异常出口及输入解码错误；SSE继续沿既有stable payload合同。内部失败结果在枚举路径加入error_code，成功结果保持；三个周/月/周期无效模型格式结果保持旧字典。
+
+HTTP按来源返回400/404/500/502，两键值为同一白名单码；safe_log只记录代码内定义的event和规范码。后台结果日志经public_model_summary同时检查键和值：status枚举、YYYY-MM-DD字符串、排除bool的整数计数、规范error_code，其余丢弃。禁止按白名单键放任原文值进入日志。
+
+AST守卫检测@app路由except内的str(exception)与直接插值f-string；仅豁免chat_completions/ValueError/当前return包含字面量param=reasoning_effort三元组。动态X1测试继续约束嵌套形状、档位提示和零客户端值回显。检测器本身有六个合成样本，K-11仅变异检测器即可击杀。
+
+空体与坏体分开：四个可选体入口保留空/空白body，其余无法解码输入返回400；reset保留原确认错误及通用失败出口。W2五处、记忆未启用200、探针200等保留合同见UPGRADING。
+
+httpx INFO摘要过滤保持；httpcore.http11的receive_response_headers.complete DEBUG记录仅替换HTTP/1.x响应元组中的原因短语，保留协议、状态和headers。过滤器分别挂httpx/httpcore/httpcore.http11/httpcore.http2；HTTP/2记录不改写。证据限已验httpcore 1.0.9形状和本机HTTP/1.1 TCP，不能外推全部1.x版本、所有日志字段或HTTP/2真实链路。Headers并未因本票获得脱敏承诺。
+
+SEC-01a守卫在每次asyncSetUp开始即捕获root INFO日志，safe()连同响应文本检查，tearDown finally恢复。此扩展与ERR-01动态四面哨兵共同验证，不替代认证或生产验真。
