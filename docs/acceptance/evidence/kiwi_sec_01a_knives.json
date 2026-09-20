@@ -1,14 +1,14 @@
 {
   "ticket": "KIWI-SEC-01a",
-  "head": "9c054a3217ff71c6dfa8988187d72beff5f7bc97",
+  "head": "ff11f3a5c46c36d183d7dbdc7fa9a812259d4f9d",
   "source_blobs": {
     "anthropic_adapter.py": "bcf29d0ddacfdcdf46322323d406a300624642d5",
     "config.py": "529b494a1c402a9ba8efb02d8ac8df8245f6bdbb",
     "dream.py": "d6e6535d799988d581159d4cdcb21e1be984142d",
-    "main.py": "dd30e2d3e7aade4107df64490d653be598a591dd",
+    "main.py": "bca93c8ed380032a7929515db749e2175d0bb934",
     "scripts/kiwi_sec_01a_knives.py": "e1a9f46606fca7de31b5f6e380a63a9a574a2ff0",
-    "scripts/test_kiwi_sec_01a.py": "2f7c13612ee455934ab0610e753f4239b9409043",
-    "security.py": "bb53938a0e351c3304df643a0bf4a8396df92eed"
+    "scripts/test_kiwi_sec_01a.py": "cb889b988cd6b2ed09060b73265b8e042eb2c3c5",
+    "security.py": "b398ee6bd03e7c3d00ddd893dd3aaac2ed763dd8"
   },
   "kind": "ASGI/functions; fake DB and HTTP; no external calls",
   "preflight": 0,
@@ -96,13 +96,13 @@
       "knife": "K-SEC-14",
       "test": "test_provider_errors_are_stable",
       "result": "RED",
-      "reason": "AssertionError: {'error': 'Kiwi_Sentinel_6qV2wR9xJ3pL8zB4', 'error_c[34 chars]zB4'} != {'error': 'internal_error', 'error_code': 'internal_error'}"
+      "reason": "AssertionError: 502 != 500"
     },
     {
       "knife": "K-SEC-15",
       "test": "test_legacy_dream_errors_are_safe_on_read",
       "result": "RED",
-      "reason": "AssertionError: 'Kiwi_' unexpectedly found in '{\"status\": \"ok\", \"history\": [{\"id\": 1, \"status\": \"error\", \"dream_narrative\": \"Kiwi_Sentinel_6qV2wR9xJ3pL8zB4\", \"started_at\": null, \"finished_at\": null}]}'"
+      "reason": "AssertionError: 'Kiwi_' unexpectedly found in '{\"status\": \"ok\", \"history\": [{\"id\": 1, \"status\": \"error\", \"dream_narrative\": \"Kiwi_Sentinel_6qV2wR9xJ3pL8zB4\", \"started_at\": null, \"finished_at\": null}]}HTTP Request: GET http://localhost:8000/dream/history \"HTTP/1.1 200 <reason-redacted>\"\\n'"
     },
     {
       "knife": "K-SEC-16",
@@ -204,7 +204,7 @@
       "knife": "K-SEC-32",
       "test": "test_direct_stream_inband_error_preserves_prior_content",
       "result": "RED",
-      "reason": "AssertionError: 'Kiwi_' unexpectedly found in 'data: {\"choices\": [{\"delta\": {\"content\": \"part-one\"}}], \"error\": null}\\n\\ndata: {\"error\": {\"message\": \"Kiwi_Sentinel_6qV2wR9xJ3pL8zB4\"}}\\n\\ndata: [DONE]\\n\\n'"
+      "reason": "AssertionError: 'Kiwi_' unexpectedly found in 'data: {\"choices\": [{\"delta\": {\"content\": \"part-one\"}}], \"error\": null}\\n\\ndata: {\"error\": {\"message\": \"Kiwi_Sentinel_6qV2wR9xJ3pL8zB4\"}}\\n\\ndata: [DONE]\\n\\nHTTP Request: POST https://relay.example/v1/chat/completions \"HTTP/1.1 200 <reason-redacted>\"\\nHTTP Request: POST http://localhost:8000/v1/chat/completions \"HTTP/1.1 200 <reason-redacted>\"\\nHTTP Request: POST https://relay.example/v1/chat/completions \"HTTP/1.1 200 <reason-redacted>\"\\nHTTP Request: POST http://localhost:8000/v1/chat/completions \"HTTP/1.1 200 <reason-redacted>\"\\n'"
     },
     {
       "knife": "K-SEC-33",
