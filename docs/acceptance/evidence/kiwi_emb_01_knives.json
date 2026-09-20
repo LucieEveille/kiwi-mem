@@ -1,21 +1,21 @@
 {
   "ticket": "KIWI-EMB-01",
-  "head": "9c054a3217ff71c6dfa8988187d72beff5f7bc97",
+  "head": "ff11f3a5c46c36d183d7dbdc7fa9a812259d4f9d",
   "source_blobs": {
     "admin-panel/js/config.js": "ec274e9b9ac5afe53b7569faddf5136a74310a73",
     "admin-panel/js/embedding-panel.mjs": "a6a747ac6c91d2d6b604864a0fc5f26ad23daca4",
     "admin-panel/js/pages/providers.js": "03b84fec7310d081e89ed3d28e60f442e823d9bc",
-    "daily_digest.py": "be94587798c69f32906d90ba76b046355bd1cd1c",
+    "daily_digest.py": "70e97db9106d677c50a6cbe3c310ee4b2ba16dbd",
     "database.py": "bd6f78f45e37275901f6fad00a7f54ee8231637a",
     "dream.py": "d6e6535d799988d581159d4cdcb21e1be984142d",
     "embedding_jobs.py": "44309e254387b33b0a2db5018d99a946879bba35",
     "embedding_probe.py": "02b2d98c0de06a435d72aa18bc7567cc6ebd6d89",
     "embedding_versioning.py": "57e9b048fc368921ceb102abeaf557351f53880f",
-    "main.py": "dd30e2d3e7aade4107df64490d653be598a591dd",
-    "scripts/kiwi_emb_01_knives.py": "224b08ebbd9a187296831fbc1b151005f0c53eb6",
+    "main.py": "bca93c8ed380032a7929515db749e2175d0bb934",
+    "scripts/kiwi_emb_01_knives.py": "8fa6eaaa30e84d21bbe06bdb497fe404b50d4422",
     "scripts/test_kiwi_emb_01.py": "c155b9eba5b22a2a2b2bbd539241341f55b5314b",
     "scripts/test_kiwi_emb_01_panel.mjs": "294d5d9df86552422cafc3c719099cb6a2d00a5b",
-    "security.py": "bb53938a0e351c3304df643a0bf4a8396df92eed",
+    "security.py": "b398ee6bd03e7c3d00ddd893dd3aaac2ed763dd8",
     "tool_drawer.py": "0957983da5bf6cd494ac7b9baaa20d417217c10f"
   },
   "preflight": 0,
@@ -292,7 +292,7 @@
       "test": "T-EMB-16",
       "result": "RED",
       "reason": [
-        "'EMBP_HTTP_reason_sentinel_92835' unexpectedly found in 'HTTP Request: POST http://127.0.0.1:36543/embeddings \"HTTP/1.1 502 EMBP_HTTP_reason_sentinel_92835\"\\nHTTP Request: POST http://localhost/admin/embedding-probe \"HTTP/1.1 200 OK\"\\n'",
+        "'EMBP_HTTP_reason_sentinel_92835' unexpectedly found in 'HTTP Request: POST http://127.0.0.1:41819/embeddings \"HTTP/1.1 502 EMBP_HTTP_reason_sentinel_92835\"\\nHTTP Request: POST http://localhost/admin/embedding-probe \"HTTP/1.1 200 OK\"\\n'",
         "'EMBP_HTTP_reason_sentinel_92835' unexpectedly found in 'HTTP Request: GET https://fixture.invalid/x \"HTTP/1.1 502 EMBP_HTTP_reason_sentinel_92835\"\\nunrelated event preserved\\n'",
         "'EMBP_HTTP_reason_sentinel_92835' unexpectedly found in 'HTTP Request: GET https://fixture.invalid/x \"HTTP/1.1 502 EMBP_HTTP_reason_sentinel_92835\"\\nunrelated event preserved\\n'"
       ]

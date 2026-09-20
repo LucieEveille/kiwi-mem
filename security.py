@@ -21,11 +21,18 @@ class _HTTPReasonFilter(logging.Filter):
         if (record.msg == 'HTTP Request: %s %s "%s %d %s"'
                 and isinstance(record.args, tuple) and len(record.args) == 5):
             record.args = (*record.args[:4], '<reason-redacted>')
+        if (record.name == 'httpcore.http11' and not record.args
+                and isinstance(record.msg, str)
+                and record.msg.startswith('receive_response_headers.complete return_value=')):
+            record.msg = re.sub(
+                r"^(receive_response_headers\.complete return_value=\(b['\"]HTTP/1\.[01]['\"], \d+, )b(?:'[^'\\]*(?:\\.[^'\\]*)*'|\"[^\"\\]*(?:\\.[^\"\\]*)*\")(?=, )",
+                lambda match: match[1] + "b'<reason-redacted>'", record.msg, count=1,
+            )
         return True
 
 
 def _install_http_reason_filters():
-    for name in ('httpx', 'httpcore'):
+    for name in ('httpx', 'httpcore', 'httpcore.http11', 'httpcore.http2'):
         logger = logging.getLogger(name)
         if not any(getattr(f, '_kiwi_http_reason_filter', False) for f in logger.filters):
             logger.addFilter(_HTTPReasonFilter())
@@ -158,6 +165,7 @@ def stable_payload(code):
 def stable_error(error, status_code=None, headers=None):
     code = exception_code(error) if isinstance(error, Exception) else error
     body = stable_payload(code)
+    code = body['error_code']
     if status_code is None:
         status_code = 410 if code == 'deprecated' else 409 if code == 'no_embedding_route' else 400 if code == 'invalid_request' else 404 if code == 'not_found' else 500 if code == 'internal_error' else 502
     return JSONResponse(status_code=status_code, content=body, headers=headers)
@@ -194,8 +202,29 @@ def require_success_event(event):
 def public_model_result(result):
     """Legacy generators may return error dicts instead of raising."""
     if isinstance(result, dict) and (result.get('error') or result.get('status') == 'error'):
-        return stable_error('upstream_error')
+        code = result.get('error_code')
+        if not isinstance(code, str) or not re.fullmatch(
+                r'(?:invalid_request|internal_error|upstream_error|parse_failed|timeout|http_[1-5][0-9]{2}|network:RequestError)', code):
+            code = 'upstream_error'
+        return stable_error(code)
     return result
+
+
+def public_model_summary(result):
+    """Bound background-result logs by both field name and value shape."""
+    if not isinstance(result, dict):
+        return {}
+    summary = {}
+    for key, value in result.items():
+        if key == 'status' and isinstance(value, str) and value in ('ok', 'error', 'skipped'):
+            summary[key] = value
+        elif key == 'date' and isinstance(value, str) and re.fullmatch(r'[0-9]{4}-[0-9]{2}-[0-9]{2}', value):
+            summary[key] = value
+        elif key in ('fragments', 'digests', 'backfilled', 'skipped', 'retired', 'softened') and type(value) is int:
+            summary[key] = value
+        elif key == 'error_code':
+            summary[key] = stable_payload(value if isinstance(value, str) else 'internal_error')['error_code']
+    return summary
 
 
 def public_dream_record(record):

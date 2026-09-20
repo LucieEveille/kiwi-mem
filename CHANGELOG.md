@@ -35,3 +35,8 @@ MCP transport access controls are enabled on the integration branch, with stable
 - Add durable, lease-owned vector alignment with explicit cost confirmation, failure counts and interruption recovery; retire GET migration (410).
 - Add a bounded, redacted embedding probe and a model-adjacent panel with automatic post-save testing, manual diagnostics and stale-response protection.
 - Preserve the existing embedding statistics fields and keyword fallback. Upgrade requires explicit alignment of old unknown vectors; provider charges may apply.
+
+### Unreleased — ERR-01
+
+- Normalize enumerated HTTP/input and background failure results to stable error codes; preserve optional empty bodies and existing W2/calendar/probe contracts.
+- Remove reasoning_effort input echoes, bound background logs and HTTP/1.1 DEBUG reason phrases; add AST, behavioral and mutation guards. See docs/UPGRADING.md for script compatibility changes.
