@@ -1156,6 +1156,71 @@ async def handle_meta_tool(
 # 12. Drawer Tool Execution
 # ============================================================
 
+_SCOPED_MEMORY_TOOLS = {"search_memory", "save_memory", "get_recent", "lock_memory", "unlock_memory"}
+
+
+async def _execute_scoped_memory_tool(tool_name, arguments, scope) -> str:
+    """Use the trusted conversation scope without changing the public MCP schema."""
+    import database
+    from security import safe_log
+
+    try:
+        mode = _scope_mode(scope)
+        pid = (scope or {}).get("context_project_id") if mode == "live_project" else None
+        visible = (mode, pid)
+        database._validate_memory_visible_scope(visible)
+        if tool_name in {"search_memory", "get_recent"}:
+            limit = max(1, min(arguments.get("limit", 10 if tool_name == "search_memory" else 20), 50))
+            if tool_name == "search_memory":
+                query = arguments["query"]
+                results = await database.search_memories(query, limit, track_recall=True, project_id=pid)
+            else:
+                results = await database.get_recent_memories(limit, visible_scope=visible)
+            total = await database.get_memories_count(visible_scope=visible)
+            if not results:
+                return f"没有找到与「{query}」相关的记忆。" if tool_name == "search_memory" else "记忆库为空。"
+            prefix = "找到" if tool_name == "search_memory" else "最近"
+            kind = "相关记忆" if tool_name == "search_memory" else "记忆"
+            lines = [f"{prefix} {len(results)} 条{kind}（共 {total} 条）：\n"]
+            for i, mem in enumerate(results, 1):
+                title = mem.get("title", "")
+                title_tag = f"【{title}】" if title else ""
+                date = str(mem.get("created_at", ""))[:10]
+                content = mem.get("content", "")
+                if tool_name == "search_memory":
+                    lines.append(f"{i}. [{date}] {title_tag}{content}\n"
+                                 f"   重要度: {mem.get('importance', '?')} | 类型: {mem.get('memory_type', 'fragment')}")
+                else:
+                    lines.append(f"{i}. [{date}] {title_tag}{content[:80]}")
+            return "\n".join(lines)
+        if tool_name == "save_memory":
+            content = arguments["content"]
+            title = arguments.get("title", "")
+            if not content.strip():
+                return "内容不能为空。"
+            importance = max(1, min(arguments.get("importance", 5), 10))
+            await database.save_memory(content.strip(), importance, "manual", title.strip(),
+                                       None, "user_explicit", 0, project_id=pid)
+            total = await database.get_memories_count(visible_scope=visible)
+            title_tag = f"【{title}】" if title else ""
+            return f"✅ 记忆已保存：{title_tag}{content[:60]}...\n重要度: {importance} | 记忆总数: {total}"
+        if tool_name in {"lock_memory", "unlock_memory"}:
+            memory_id = arguments["memory_id"]
+            rejected = f"记忆 #{memory_id} 不在当前范围内"
+            if not isinstance(memory_id, int) or isinstance(memory_id, bool):
+                return rejected
+            permanent = tool_name == "lock_memory"
+            result = await database.set_memory_permanent_scoped([memory_id], permanent, mode, pid)
+            if memory_id not in result["updated"]:
+                return rejected
+            return (f"🔒 记忆 #{memory_id} 已锁定（永不遗忘）" if permanent
+                    else f"🔓 记忆 #{memory_id} 已解锁（恢复正常遗忘曲线）")
+        raise ValueError("unknown scoped memory tool")
+    except Exception as e:
+        safe_log("drawer_memory_tool_failed", e)
+        return f"[tool_error] {tool_name}: execution failed"
+
+
 async def execute_drawer_tool(tool_name, arguments, scope=None):
     extra = {}
     category = _tool_to_category.get(tool_name) or GATEWAY_CATEGORY_MAP.get(tool_name)
@@ -1163,6 +1228,8 @@ async def execute_drawer_tool(tool_name, arguments, scope=None):
             and (category in {"memory", "conversation"}
                  or tool_name in _QUARANTINED_TOOL_NAMES)):
         return '[tool_error] {"code":"scope_quarantined"}', extra
+    if tool_name in _SCOPED_MEMORY_TOOLS:
+        return await _execute_scoped_memory_tool(tool_name, arguments, scope), extra
     try:
         import mcp_server
         func = getattr(mcp_server, tool_name, None)

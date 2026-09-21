@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased — 2.0.0 integration / W2-05b (#90)
+
+- 聊天抽屉五个记忆工具接入私有 scope 执行器：全局只看全局，项目看全局＋本项目，保存落当前层，锁定/解锁及总数均遵循可见集合；用户锁原子写入 `lock_source='user'`。
+- Chat-drawer memory tools now use the conversation scope directly, without debug HTTP loopback. Public MCP schemas/endpoints, debug handlers and quarantine remain unchanged. See [scope behavior](docs/event-ledger-scope-and-reconciliation.md#chat-drawer-memory-scope-w2-05b) and [upgrading](docs/UPGRADING.md). Pending acceptance and release.
+
 ## 1.7.0 — Unreleased (2026-09)
 
 - 修补 FastAPI / Starlette 依赖，保留 MCP、httpx、uvicorn 基线。
