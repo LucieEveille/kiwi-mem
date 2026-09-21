@@ -30,6 +30,19 @@
   近重复（>0.85）而漏判。`tests/test_logic.py` 有 INFO 标注当前行为。
   → 根治需语义/数值感知，非字符重叠能解决，留待后续。
 
+<a id="kiwi-lock-01"></a>
+
+### KIWI-LOCK-01：Dream promote 可覆盖用户锁来源，导致后续静默解锁
+
+继承链条四步：
+
+1. 用户主动锁定记忆，写入 `is_permanent=TRUE`、`lock_source='user'`。
+2. `dream._execute_dream_action` 执行 `promote`，调用 `database.promote_memory`。
+3. `promote_memory` 无条件将锁来源覆盖为 `lock_source='dream'`，保留 `is_permanent=TRUE`。
+4. 退休任务启用且 `last_accessed` 非空、超过 `lock_retire_days` 时，`daily_digest.retire_stale_locks` 选中该行，将 `is_permanent` 改为 `FALSE`、`lock_source` 清为 `NULL`。
+
+影响面：用户锁会静默失效；上述退休操作不删除记忆。该链条在基线 `f70c476` 已存在，W2-05b 未改 `promote_memory`、`dream.py` 或 `daily_digest.py`；修复归 **KIWI-LOCK-01**，本次仅补正文边界与挂账。
+
 ---
 
 ## 三、低危技术债（登记备查）
