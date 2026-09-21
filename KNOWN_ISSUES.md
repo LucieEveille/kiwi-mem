@@ -30,6 +30,19 @@
   近重复（>0.85）而漏判。`tests/test_logic.py` 有 INFO 标注当前行为。
   → 根治需语义/数值感知，非字符重叠能解决，留待后续。
 
+<a id="kiwi-lock-01"></a>
+
+### KIWI-LOCK-01：Dream promote 可覆盖用户锁来源，导致后续静默解锁
+
+继承链条四步：
+
+1. 用户主动锁定记忆，写入 `is_permanent=TRUE`、`lock_source='user'`。
+2. `dream._execute_dream_action` 执行 `promote`，调用 `database.promote_memory`。
+3. `promote_memory` 无条件将锁来源覆盖为 `lock_source='dream'`，保留 `is_permanent=TRUE`。
+4. 退休任务启用且 `last_accessed` 非空、超过 `lock_retire_days` 时，`daily_digest.retire_stale_locks` 选中该行，将 `is_permanent` 改为 `FALSE`、`lock_source` 清为 `NULL`。
+
+影响面：用户锁会静默失效；上述退休操作不删除记忆。该链条在基线 `f70c476` 已存在，W2-05b 未改 `promote_memory`、`dream.py` 或 `daily_digest.py`；修复归 **KIWI-LOCK-01**，本次仅补正文边界与挂账。
+
 ---
 
 ## 三、低危技术债（登记备查）
@@ -42,7 +55,7 @@
 > - 本地搜索解析到 0 条但页面非空时打告警日志（区分「解析失败」与「真无结果」）
 
 ### 工具 / MCP / 搜索
-- **W2-05b：聊天抽屉的五个记忆工具尚未接项目 scope。** 当前 W2-05 已保证已删或未验证项目进入隔离态，`memory` / `conversation` 两类工具不会暴露；但 global / live project 内部的搜索、保存、最近记忆与锁定/解锁仍沿用旧 MCP 执行器。项目内保存可能落成全局、全局 recent 可能列出项目项。W2-05b 必须在 W2-06a 前关闭这笔债。
+- **W2-05b：五个聊天抽屉记忆工具的项目 scope 债已修复（集成分支待验收、未发布）。** 私有执行器的可见集合为 global 只全局、live project 为全局＋当前项目；项目保存落当前项目，全局记忆对项目可见可锁，锁定/解锁只更新可见集合，数量按同一可见集合计数并排除已消化、已删除与已过期项。隔离态拒绝及公共 MCP / debug 合同保持。证据：`T-W2-05b-01…07`、`docs/acceptance/evidence/kiwi_w2_05b_knives.json`；机制见 [抽屉 scope](docs/event-ledger-scope-and-reconciliation.md#chat-drawer-memory-scope-w2-05b)。
 - **W2-05 历史与读取合同。** 历史账本行不回填；未知归属行不进新读路径；未带项目默认全局。全局记忆、日历与 Dream 是共享底座，项目私有层单向封闭。scope 每轮只生成一份快照：metadata 与 payload 不一致时按 metadata 读取并记 `scope_mismatch`；已删或未验证项目进入隔离态，只给共享底座。新项目尚未同步完成的首轮会记 `scope_unverified`。
 - 外部 MCP **不支持鉴权**：`_normalize_external_servers` 丢弃 `auth`/`headers`，client 也不透传；
   需要 Bearer 的外部 MCP 会 401、且失败被吞成「该 server 无工具」。

@@ -106,6 +106,10 @@ Anthropic 格式不用于嵌入。中转站使用 `openai` 格式仍可能选到
 
 Existing vectors become `unknown` and are excluded from new-profile semantic comparisons. Explicitly rebuild beside the default embedding model; **rebuilding incurs embedding-provider charges**. Routine generation/backfill can also cost money. Old profiles are never rebuilt automatically. Interrupted jobs resume after lease expiry (two minutes). The previous GET migration endpoint returns 410. Native Anthropic format is unsuitable for this request; an OpenAI-format relay can still select an unsupported model, so use the actual probe. Default-model saves trigger a short, potentially billable test. A failed test does not undo a successful settings save. See [mechanism and limits](embedding-versioning.md).
 
+### 2.0 聊天抽屉项目范围 / Chat-drawer scope (W2-05b)
+
+自建前端的项目聊天：抽屉保存落本项目，全局最近记忆只列全局，锁定/解锁与数量遵循可见集合（全局；或全局＋本项目），用户锁不被自动退休；第三方客户端无项目概念时公共 MCP 接口保持原行为。Project-aware chat drawers now save into the project, restrict global recent results to global memories, and scope locks and counts to the visible collection; public MCP clients without project context retain their existing behavior. 集成分支待验收、未发布。
+
 ### 2.0 错误出口稳定形 / Stable error boundaries (ERR-01)
 
 错误是客户端可依赖的协议。枚举的50个普通HTTP异常出口、客户端解码错误和三处输入错误统一返回 `{"error":"<code>","error_code":"<code>"}`；日志仅记受控事件与白名单码。脚本应按HTTP状态和 `error_code` 判断，停止解析异常原文。24个原HTTP 200错误端点现在按来源返回400（输入）、404（不存在）、500（内部）、502（上游）；原500出口的超时/上游错误现在为502：

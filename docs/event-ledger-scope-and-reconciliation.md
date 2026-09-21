@@ -42,6 +42,14 @@ Exit codes are:
 
 Three survivor buckets have priority over every benign explanation: rows that remain after a matching session, turn, or message tombstone. Other explained buckets require exact database evidence or are explicitly marked weak. A non-zero unexplained bucket blocks a consumer cutover; it does not modify the database.
 
-## Known follow-up
+## Chat-drawer memory scope (W2-05b)
 
-W2-05b will add a private scope-aware executor for the five chat-drawer memory tools. Until that follow-up lands, quarantine fails closed, while global and live-project drawer memory operations retain their legacy MCP behavior. W2-05b is required before W2-06a.
+The W2-05b implementation closes the drawer scope follow-up on the integration branch, pending acceptance and release. The shared global collection remains a foundation visible inside every live project; a project's private layer is visible only inside that project. This one-way boundary lets projects recall shared facts without exposing another project's memories.
+
+The five drawer tools (`search_memory`, `save_memory`, `get_recent`, `lock_memory`, `unlock_memory`) use a private database executor after the existing quarantine check. Global scope (including `scope=None`) reads only global memories; a live project reads global plus its own memories. Search/recent totals and the post-save total use that same collection, exclude digested, deleted and expired memories, and do not shrink with the result limit. Saves write to the current project, or to global when there is no project.
+
+Lock/unlock uses one scope-filtered `UPDATE … RETURNING`: live projects may change their own and global memories. A user lock atomically writes `lock_source='user'`; the retirement task itself does not select rows while that source remains `user`. Until [KIWI-LOCK-01](../KNOWN_ISSUES.md#kiwi-lock-01) is fixed, however, Dream's promote action overwrites the source with `dream`, after which stale-lock retirement removes the lock when its retirement conditions are met (the memory is not deleted). Explicit unlock clears the source. Missing and out-of-scope IDs share one refusal message without a reason lookup. Boolean and string IDs are refused. Content/title are stripped for storage, importance is clamped to 1–10, and result limits to 1–50. Tool failures emit one redacted `drawer_memory_tool_failed` event and a fixed result.
+
+These drawer calls no longer loop back through `GATEWAY_BASE` or `/debug/*`; the existing embedding provider calls within search/save remain. The public MCP still exposes six tools (including `trigger_digest`); the drawer still discovers the same five memory schemas in the same order. Public MCP functions, the three debug handlers, old database calls without `visible_scope`, and W2-05 quarantine/routing behavior retain their existing contracts.
+
+Database callers opt in using keyword-only `visible_scope=("global", None)` or `("live_project", project_id)`; combining this with `project_id`, or passing an invalid/quarantined scope, raises `ValueError`. Evidence: frozen `T-W2-05b-01…07` real-PG16 guards and `docs/acceptance/evidence/kiwi_w2_05b_knives.json` (13 mutations). This closes the implementation debt required before W2-06a; it does not authorize consumer cutover or deployment.

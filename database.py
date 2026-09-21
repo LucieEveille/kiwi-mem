@@ -3266,13 +3266,38 @@ async def _keyword_search(query: str, limit: int = 10, heat_params: dict = None,
 # 常用查询
 # ============================================================
 
-async def get_recent_memories(limit: int = 20, category_id: int = None, project_id: str = None):
+def _validate_memory_visible_scope(visible_scope, project_id=None):
+    if visible_scope is None:
+        return
+    if project_id is not None:
+        raise ValueError("visible_scope and project_id are mutually exclusive")
+    if not isinstance(visible_scope, tuple) or len(visible_scope) != 2:
+        raise ValueError("invalid memory visible_scope")
+    mode, pid = visible_scope
+    if mode == "global" and pid is None:
+        return
+    if mode == "live_project" and isinstance(pid, str) and pid:
+        return
+    raise ValueError("invalid memory visible_scope")
+
+
+def _memory_visible_predicate(visible_scope, params, column="project_id"):
+    # Callers validate first; only internal, fixed column names reach this helper.
+    mode, pid = visible_scope
+    if mode == "global":
+        return f"{column} IS NULL"
+    params.append(pid)
+    return f"({column} IS NULL OR {column} = ${len(params)})"
+
+
+async def get_recent_memories(limit: int = 20, category_id: int = None, project_id: str = None, *, visible_scope=None):
     """
     最近记忆。
     project_id 语义（保持与本函数原有调用方一致）：
       - 传值 → 只看该项目的记忆（m.project_id = project_id）
       - 不传 / 空 → 不过滤项目（全部）
     """
+    _validate_memory_visible_scope(visible_scope, project_id)
     pool = await get_pool()
     base_select = """SELECT m.id, m.content, m.importance, m.created_at,
                   COALESCE(m.title, '') as title, COALESCE(m.memory_type, 'fragment') as memory_type,
@@ -3289,7 +3314,9 @@ async def get_recent_memories(limit: int = 20, category_id: int = None, project_
     if category_id is not None:
         params.append(category_id)
         where_extra += f" AND m.category_id = ${len(params)}"
-    if project_id:
+    if visible_scope is not None:
+        where_extra += " AND " + _memory_visible_predicate(visible_scope, params, "m.project_id")
+    elif project_id:
         # 必须参数化, 否则 project_id 来自客户端 body, 直接 f-string 拼会被 SQL 注入
         params.append(project_id)
         where_extra += f" AND m.project_id = ${len(params)}"
@@ -3306,10 +3333,11 @@ async def get_all_memories_count():
         return row["cnt"]
 
 
-async def get_memories_count(category_id: int = None, project_id: str = None):
+async def get_memories_count(category_id: int = None, project_id: str = None, *, visible_scope=None):
     """当前筛选下的记忆总数。WHERE 与 get_recent_memories 一致：
     排除 digested/dream_deleted、valid_until 过滤、可选分类/项目过滤。
     用于 /debug/memories 分页的分母（裸 COUNT(*) 不随筛选变化，会让页数虚高）。"""
+    _validate_memory_visible_scope(visible_scope, project_id)
     pool = await get_pool()
     conditions = [
         "COALESCE(memory_type, 'fragment') NOT IN ('digested', 'dream_deleted')",
@@ -3319,13 +3347,35 @@ async def get_memories_count(category_id: int = None, project_id: str = None):
     if category_id is not None:
         params.append(category_id)
         conditions.append(f"category_id = ${len(params)}")
-    if project_id:
+    if visible_scope is not None:
+        conditions.append(_memory_visible_predicate(visible_scope, params))
+    elif project_id:
         params.append(project_id)
         conditions.append(f"project_id = ${len(params)}")
     where = " AND ".join(conditions)
     async with pool.acquire() as conn:
         row = await conn.fetchrow(f"SELECT COUNT(*) as cnt FROM memories WHERE {where}", *params)
         return row["cnt"]
+
+
+async def set_memory_permanent_scoped(memory_ids: list[int], is_permanent: bool,
+                                      context_mode: str, context_project_id: str | None) -> dict:
+    """Atomically change user locks only within the caller's visible collection."""
+    visible_scope = (context_mode, context_project_id)
+    _validate_memory_visible_scope(visible_scope)
+    if any(not isinstance(memory_id, int) or isinstance(memory_id, bool) for memory_id in memory_ids):
+        raise ValueError("memory IDs must be integers")
+    params = [is_permanent, memory_ids]
+    predicate = _memory_visible_predicate(visible_scope, params)
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            "UPDATE memories SET is_permanent = $1, "
+            "lock_source = CASE WHEN $1 THEN 'user' ELSE NULL END "
+            f"WHERE id = ANY($2) AND {predicate} RETURNING id", *params)
+    updated = [row["id"] for row in rows]
+    updated_ids = set(updated)
+    return {"updated": updated, "rejected": [mid for mid in memory_ids if mid not in updated_ids]}
 
 
 # ============================================================
