@@ -8228,6 +8228,402 @@ async def test_prep_observation_schema() -> None:
     passed(name)
 
 
+# W2-05b: new fixtures only. The inherited guards/fixtures above stay unchanged.
+_W5B_TOOLS = ("search_memory", "save_memory", "get_recent", "lock_memory", "unlock_memory")
+_W5B_RESULTS: list[dict[str, Any]] = []
+
+
+def _w5b_scope(mode: str = "global", pid: str | None = None):
+    return _w205_scope(known=mode != "quarantined_project", mode=mode,
+                       ledger_project_id=pid, context_project_id=pid)
+
+
+async def _w5b_seed():
+    # Every arm owns fresh rows in the already validated disposable database.
+    require((await _pool_fetchval("SELECT current_database()")).startswith(DATABASE_PREFIX),
+            "W2-05b refuses non-disposable database")
+    await _truncate("memories", "chat_projects", "gateway_config")
+    await _upsert_config("memory_enabled", "true")
+    await _upsert_config("lock_retire_enabled", "true")
+    await _upsert_config("lock_retire_days", "90")
+    for pid in ("w5b-a", "w5b-b"):
+        await _pool_execute("INSERT INTO chat_projects (id,name) VALUES ($1,$2)", pid, pid)
+    ids = {}
+    for label, pid, source in (
+        ("G1", None, None), ("G2", None, None), ("G3", None, "user"),
+        ("G4", None, "auto"), ("A1", "w5b-a", None),
+        ("A2", "w5b-a", "user"), ("B1", "w5b-b", None),
+    ):
+        ids[label] = await _seed_memory("W5BPROBE marker_" + label,
+            title=label, project_id=pid, locked=source is not None)
+        await _pool_execute("UPDATE memories SET lock_source=$1, "
+            "last_accessed=NOW()-INTERVAL '200 days' WHERE id=$2", source, ids[label])
+    # Invisible lifecycle rows exercise the same WHERE for lists and counts.
+    for label, kind in (("DIGESTED", "digested"), ("DELETED", "dream_deleted")):
+        await _seed_memory("W5BPROBE marker_" + label, memory_type=kind)
+    await _seed_memory("W5BPROBE marker_EXPIRED",
+        valid_until=StdDateTime.now(database.TZ_CST) - timedelta(days=1))
+    return ids
+
+
+def _w5b_seam(module: Any, name: str, keyword: str | None = None):
+    fn = getattr(module, name, None)
+    require(callable(fn), f"missing seam {name}; later assertions not reached")
+    if keyword:
+        require(keyword in inspect.signature(fn).parameters,
+                f"missing seam {name}.{keyword}; later assertions not reached")
+    return fn
+
+
+async def _w5b_drawer(name: str, args: dict, scope: Any, *, private: bool = False):
+    import tool_drawer as drawer
+    if private:
+        _w5b_seam(drawer, "_execute_scoped_memory_tool")
+    result, extra = await drawer.execute_drawer_tool(name, args, scope=scope)
+    require(isinstance(result, str) and isinstance(extra, dict), "drawer result shape drifted")
+    return result
+
+
+def _w5b_members(result: str, present: tuple, absent: tuple):
+    for label in present:
+        require("marker_" + label in result, f"missing visible sentinel {label}")
+    for label in absent + ("DIGESTED", "DELETED", "EXPIRED"):
+        require("marker_" + label not in result, f"leaked invisible sentinel {label}")
+
+
+def _w5b_total(result: str, expected: int):
+    match = re.search(r"(?:共\s*|记忆总数:\s*)(\d+)", result)
+    require(match is not None and int(match[1]) == expected,
+            f"visible total must be {expected}, got {match[1] if match else 'missing'}")
+
+
+async def _w5b_read(tool: str, mode: str, *, total_only: bool = False):
+    args = {"limit": 1 if total_only else 50}
+    if tool == "search_memory":
+        args["query"] = "W5BPROBE"
+    scope = _w5b_scope(mode, "w5b-a" if mode == "live_project" else None)
+    # Global search already filtered NULL before this ticket. Its *new* seam is red.
+    result = await _w5b_drawer(tool, args, scope,
+        private=tool == "search_memory" and mode == "global" and not total_only)
+    if not total_only:
+        _w5b_members(result, ("G1", "G2", "G3", "G4") +
+            (("A1", "A2") if mode == "live_project" else ()),
+            ("B1",) if mode == "live_project" else ("A1", "A2", "B1"))
+    _w5b_total(result, 6 if mode == "live_project" else 4)
+
+
+async def _w5b_save(mode: str, *, continuation: bool = False):
+    args = {"content": "  W5B_SAVED  ", "title": "  SAVED_TITLE  ", "importance": 5}
+    result = await _w5b_drawer("save_memory", args,
+        _w5b_scope(mode, "w5b-a" if mode == "live_project" else None))
+    row = await _pool_fetchrow("SELECT * FROM memories WHERE content='W5B_SAVED'")
+    require(row is not None, "save did not persist stripped content")
+    require(row["project_id"] == ("w5b-a" if mode == "live_project" else None),
+            "save persisted in the wrong layer")
+    require(row["title"] == "SAVED_TITLE" and row["source"] == "user_explicit"
+            and row["source_session"] == "manual", "manual save fields drifted")
+    if continuation:
+        return
+    _w5b_total(result, 7 if mode == "live_project" else 5)
+    if mode == "live_project":
+        recent = await _w5b_drawer("get_recent", {}, _w5b_scope())
+        require("W5B_SAVED" not in recent, "global recent revealed project save")
+
+
+async def _w5b_lock(case: str, ids: dict):
+    import daily_digest
+    if case.startswith("denied/"):
+        _, label, tool = case.split("/")
+        scope = _w5b_scope("live_project", "w5b-b") if label == "A2" else _w5b_scope()
+        target = ids[label] if label != "missing" else 999999999
+        before = await _pool_fetchrow("SELECT is_permanent,lock_source FROM memories WHERE id=$1", target)
+        result = await _w5b_drawer(tool, {"memory_id": target}, scope)
+        after = await _pool_fetchrow("SELECT is_permanent,lock_source FROM memories WHERE id=$1", target)
+        # Check both facts before raising so a wrong reply does not hide a real write.
+        row_unchanged = before == after
+        reply_ok = result == f"记忆 #{target} 不在当前范围内"
+        require(reply_ok and row_unchanged,
+                f"invisible-ID contract: fixed_reply={reply_ok}, row_unchanged={row_unchanged}")
+        return
+    import tool_drawer as drawer
+    _w5b_seam(drawer, "_execute_scoped_memory_tool")
+    if case == "own":
+        for permanent, tool in ((True, "lock_memory"), (False, "unlock_memory")):
+            result = await _w5b_drawer(tool, {"memory_id": ids["B1"]},
+                                     _w5b_scope("live_project", "w5b-b"))
+            require(("已锁定" if permanent else "已解锁") in result, "own update not successful")
+            row = await _pool_fetchrow("SELECT is_permanent,lock_source FROM memories WHERE id=$1", ids["B1"])
+            require(row["is_permanent"] is permanent and row["lock_source"] ==
+                    ("user" if permanent else None), "own lock source drifted")
+    elif case == "global":
+        for scope in (_w5b_scope("live_project", "w5b-b"), _w5b_scope()):
+            await _pool_execute("UPDATE memories SET is_permanent=TRUE,lock_source='user' WHERE id=$1", ids["G3"])
+            result = await _w5b_drawer("unlock_memory", {"memory_id": ids["G3"]}, scope)
+            row = await _pool_fetchrow("SELECT is_permanent,lock_source FROM memories WHERE id=$1", ids["G3"])
+            require("已解锁" in result and row["is_permanent"] is False and row["lock_source"] is None,
+                    "global layer must be unlockable by global and live B")
+    elif case == "retire":
+        await _w5b_drawer("lock_memory", {"memory_id": ids["G4"]}, _w5b_scope())
+        require(await _pool_fetchval("SELECT lock_source FROM memories WHERE id=$1", ids["G4"]) == "user",
+                "explicit lock did not replace auto lock_source")
+        outcome = await daily_digest.retire_stale_locks()
+        require(outcome.get("status") == "success", "retirement did not actually execute")
+        require(await _pool_fetchval("SELECT is_permanent FROM memories WHERE id=$1", ids["G4"]) is True,
+                "retirement removed explicit user lock")
+    elif case == "invalid":
+        before = [dict(r) for r in await _pool_fetch("SELECT id,is_permanent,lock_source FROM memories ORDER BY id")]
+        for value in (True, False, str(ids["G1"])):
+            for tool in ("lock_memory", "unlock_memory"):
+                result = await _w5b_drawer(tool, {"memory_id": value}, _w5b_scope())
+                require(result == f"记忆 #{value} 不在当前范围内", "invalid ID did not use fixed reply")
+        require(before == [dict(r) for r in await _pool_fetch(
+            "SELECT id,is_permanent,lock_source FROM memories ORDER BY id")], "invalid IDs wrote rows")
+
+
+async def _w5b_public(client: httpx.AsyncClient, ids: dict):
+    fixture = json.loads((ROOT / "scripts/fixtures/kiwi_w2_05b_baseline.json").read_text(encoding="utf-8"))
+    source_bytes = (ROOT / "mcp_server.py").read_bytes().replace(b"\r\n", b"\n")
+    blob = hashlib.sha1(f"blob {len(source_bytes)}\0".encode() + source_bytes).hexdigest()
+    require(blob == fixture["mcp_blob"], "public MCP blob changed")
+    import tool_drawer as drawer
+    drawer._auto_discover_mcp_tools()
+    require([drawer.TOOL_SCHEMAS[n] for n in _W5B_TOOLS] == fixture["schemas"], "drawer schema differs from frozen baseline")
+    tree = ast.parse(source_bytes)
+    public_names = [n.name for n in tree.body if isinstance(n, ast.AsyncFunctionDef)
+        and any(isinstance(d, ast.Call) and isinstance(d.func, ast.Attribute)
+                and isinstance(d.func.value, ast.Name) and d.func.value.id == "mcp_memory"
+                and d.func.attr == "tool" for d in n.decorator_list)]
+    require(set(public_names) == set(_W5B_TOOLS) | {"trigger_digest"} and len(public_names) == 6,
+            "public MCP six-tool contract changed")
+    for name, expected in fixture["handler_sha256"].items():
+        source = inspect.getsource(getattr(app_module, name)).replace("\r\n", "\n")
+        require(hashlib.sha256(source.encode()).hexdigest() == expected, f"handler hash changed: {name}")
+    for query, expected in (({}, set(ids.values())), ({"q": "W5BPROBE"}, {ids[k] for k in ("G1","G2","G3","G4")})):
+        response = await client.get("/debug/memories", params={"limit":50, **query})
+        require(response.status_code == 200, "public GET failed")
+        body = response.json()
+        require({m["id"] for m in body["memories"]} == expected and body["total_memories"] == 7,
+                "public GET baseline result/count drifted")
+    for pid, expected in ((None, set(ids.values())), ("w5b-a", {ids["A1"],ids["A2"]})):
+        rows = await database.get_recent_memories(limit=50, project_id=pid)
+        require({r["id"] for r in rows} == expected, "legacy recent semantics changed")
+        require(await database.get_memories_count(project_id=pid) == len(expected), "legacy count semantics changed")
+    response = await client.post("/debug/memories", json={"content":"PUBLIC_SAVE","title":"public","importance":7})
+    body = response.json()
+    require(response.status_code == 200 and body["status"] == "added" and body["total"] == 11,
+            "public POST baseline response drifted")
+    row = await _pool_fetchrow("SELECT project_id,source,source_session,content,importance FROM memories WHERE id=$1",body["id"])
+    require(dict(row) == {"project_id":None,"source":"user_explicit","source_session":"manual","content":"PUBLIC_SAVE","importance":7},
+            "public POST database fields drifted")
+    for value in (True, False):
+        response = await client.post("/debug/memories/batch-update",json={"ids":[ids["B1"]],"is_permanent":value})
+        require(response.status_code == 200 and response.json() == {"status":"updated","count":1},
+                "public batch response drifted")
+        row = await _pool_fetchrow("SELECT is_permanent,lock_source FROM memories WHERE id=$1",ids["B1"])
+        require(dict(row) == {"is_permanent":value,"lock_source":"user" if value else None}, "public batch row drifted")
+
+
+async def _w5b_parameter(kind: str, value: Any):
+    import tool_drawer as drawer
+    if kind in ("recent_scope", "count_scope"):
+        fn = _w5b_seam(database, "get_recent_memories" if kind == "recent_scope" else "get_memories_count", "visible_scope")
+        kwargs = {"visible_scope":value}
+        if value == ("global", None):
+            kwargs["project_id"] = "w5b-a"
+        try:
+            await fn(**kwargs)
+        except ValueError:
+            return
+        require(False, "invalid/conflicting visible_scope did not raise ValueError")
+    elif kind == "setter":
+        fn = _w5b_seam(database, "set_memory_permanent_scoped")
+        try:
+            await fn([True] if value == "bool" else [1], True,
+                     "global" if value == "bool" else "quarantined_project", None)
+        except ValueError:
+            return
+        require(False, "invalid setter argument did not raise ValueError")
+    elif kind == "importance":
+        await _w5b_drawer("save_memory", {"content":"W5B_CLAMP", "importance":value}, _w5b_scope())
+        require(await _pool_fetchval("SELECT importance FROM memories WHERE content='W5B_CLAMP'") == (1 if value == 0 else 10),
+                "importance clamp drifted")
+    elif kind == "blank":
+        before = await _pool_fetchval("SELECT count(*) FROM memories")
+        result = await _w5b_drawer("save_memory", {"content":" \t "}, _w5b_scope())
+        require(result == "内容不能为空。" and await _pool_fetchval("SELECT count(*) FROM memories") == before,
+                "blank save wrote a row or reply drifted")
+    elif kind == "limit":
+        _w5b_seam(drawer, "_execute_scoped_memory_tool")
+        # Real SQL sees >50 eligible rows; assertions distinguish clamp from a small fixture.
+        for i in range(55):
+            await _seed_memory(f"W5BPROBE marker_EXTRA_{i}")
+        for tool in ("search_memory", "get_recent"):
+            args = {"limit":value, **({"query":"W5BPROBE"} if tool == "search_memory" else {})}
+            result = await _w5b_drawer(tool,args,_w5b_scope())
+            require(len(re.findall(r"^\d+\. ",result,re.M)) == (50 if value == 200 else 1),
+                    f"{tool} did not clamp limit {value}")
+    elif kind == "error":
+        import logging
+        from contextlib import ExitStack
+        _w5b_seam(drawer, "_execute_scoped_memory_tool")
+        sentinel = "W5B_EXCEPTION_PRIVATE_SENTINEL"
+        async def explode(*args, **kwargs):
+            raise RuntimeError(sentinel)
+        target = {"search_memory":"search_memories", "save_memory":"save_memory",
+                  "get_recent":"get_recent_memories", "lock_memory":"set_memory_permanent_scoped",
+                  "unlock_memory":"set_memory_permanent_scoped"}[value]
+        _w5b_seam(database, target)
+        old = getattr(database, target)
+        output, errors, log = io.StringIO(), io.StringIO(), io.StringIO()
+        handler = logging.StreamHandler(log)
+        logger = logging.getLogger()
+        logger.addHandler(handler)
+        try:
+            with ExitStack() as stack:
+                stack.enter_context(patch.object(database,target,explode))
+                # Support either local imports or a module-level import of the same DB function.
+                if getattr(drawer,target,None) is old:
+                    stack.enter_context(patch.object(drawer,target,explode))
+                stack.enter_context(redirect_stdout(output))
+                stack.enter_context(redirect_stderr(errors))
+                result = await _w5b_drawer(value,_w5b_args(value),_w5b_scope())
+            require(result == f"[tool_error] {value}: execution failed", "unsafe exception result")
+            captured = output.getvalue()+errors.getvalue()+log.getvalue()
+            require(sentinel not in captured and sentinel not in result, "raw exception sentinel leaked")
+            events = [json.loads(line) for line in output.getvalue().splitlines() if line.startswith('{')]
+            require(sum(e.get("event") == "drawer_memory_tool_failed" for e in events) == 1,
+                    "expected exactly one safe_log event")
+        finally:
+            logger.removeHandler(handler)
+
+
+def _w5b_args(tool: str):
+    return {"search_memory":{"query":"W5BPROBE","limit":50},
+            "save_memory":{"content":"W5B_HTTP_SAVED"},"get_recent":{"limit":50},
+            "lock_memory":{"memory_id":1},"unlock_memory":{"memory_id":3}}[tool]
+
+
+async def test_w2_05b() -> bool:
+    """Run every arm, recording first failure and unreached assertions separately.
+
+    The report is evidence, never an expected-failure/xfail exemption. Any FAIL or
+    ERROR makes the normal CI command exit 1. No production lifespan is started.
+    """
+    import tool_drawer as drawer
+    # Build the real in-process ASGI client before counting HTTP constructions.
+    real_client = httpx.AsyncClient
+    transport = httpx.ASGITransport(app=app_module.app, raise_app_exceptions=True)
+    async with real_client(transport=transport,base_url="http://kiwi.test") as client:
+        calls: list[str] = []
+        class LoopbackClient:
+            def __init__(self,*args,**kwargs):
+                calls.append("constructed")
+            async def __aenter__(self):
+                return self
+            async def __aexit__(self,*args):
+                return False
+            async def get(self,url,**kwargs):
+                from urllib.parse import urlsplit
+                path = urlsplit(url).path
+                require(path == "/debug/memories", "unexpected outbound GET in W2-05b")
+                return await client.get(path,**kwargs)
+            async def post(self,url,**kwargs):
+                from urllib.parse import urlsplit
+                path = urlsplit(url).path
+                require(path in ("/debug/memories","/debug/memories/batch-update"),
+                        "unexpected outbound POST in W2-05b")
+                return await client.post(path,**kwargs)
+
+        async def arm(group, label, category, fn):
+            row = {"guard":group,"arm":label,"category":category}
+            try:
+                ids = await _w5b_seed()
+                calls.clear()
+                await fn(ids)
+            except AssertionError as exc:
+                reason = str(exc)
+                row.update(status="FAIL",reason=reason,
+                    failure_kind="missing_seam" if reason.startswith("missing seam") else "behavior",
+                    remaining_assertions="not reached after first failed assertion")
+            except Exception as exc:
+                row.update(status="ERROR",reason=type(exc).__name__,
+                           remaining_assertions="not reached after unexpected exception")
+            else:
+                row.update(status="PASS",reason="all arm assertions reached",remaining_assertions="none")
+            _W5B_RESULTS.append(row)
+            print("W2-05b ARM " + json.dumps(row,ensure_ascii=True,sort_keys=True))
+
+        async def no_loop(ids, tool, scope):
+            await _w5b_drawer(tool,_w5b_args(tool),scope)
+            require(not calls,f"HTTP loopback constructed for {tool}")
+
+        async def quarantine(ids, tool):
+            result = await _w5b_drawer(tool,_w5b_args(tool),_w5b_scope("quarantined_project"))
+            require("scope_quarantined" in result and not calls,"quarantine reached memory execution")
+
+        async def none_scope(ids, tool):
+            _w5b_seam(drawer,"_execute_scoped_memory_tool")
+            first = await _w5b_drawer(tool,_w5b_args(tool),None)
+            rows_first = [dict(r) for r in await _pool_fetch("SELECT id,content,project_id,is_permanent,lock_source FROM memories ORDER BY id")]
+            await _w5b_seed()
+            second = await _w5b_drawer(tool,_w5b_args(tool),_w5b_scope())
+            rows_second = [dict(r) for r in await _pool_fetch("SELECT id,content,project_id,is_permanent,lock_source FROM memories ORDER BY id")]
+            require(first == second and rows_first == rows_second and not calls,"None differs from global/private execution")
+
+        with patch.object(database,"get_embedding",_none_embedding), patch.object(httpx,"AsyncClient",LoopbackClient):
+            for number in range(1,8):
+                group = f"T-W2-05b-{number:02d}"
+                begin(group)
+                start = len(_W5B_RESULTS)
+                if number in (1,2):
+                    mode = "global" if number == 1 else "live_project"
+                    for tool in ("search_memory","get_recent"):
+                        for total_only in (False,True):
+                            await arm(group,f"{tool}/{'total' if total_only else 'members'}","new_contract",
+                                lambda ids,t=tool,m=mode,c=total_only:_w5b_read(t,m,total_only=c))
+                elif number == 3:
+                    await arm(group,"global/legacy-fields","continuation",lambda ids:_w5b_save("global",continuation=True))
+                    for mode in ("global","live_project"):
+                        await arm(group,mode+"/save-and-total","new_contract",lambda ids,m=mode:_w5b_save(m))
+                elif number == 4:
+                    cases = ["own", "global", "retire", "invalid"] + [
+                        f"denied/{label}/{tool}" for label in ("A2", "A1", "missing")
+                        for tool in ("lock_memory", "unlock_memory")]
+                    for case in cases:
+                        await arm(group,case,"new_contract",lambda ids,c=case:_w5b_lock(c,ids))
+                elif number == 5:
+                    for tool in _W5B_TOOLS:
+                        for mode in ("global","live_project"):
+                            scope = _w5b_scope(mode,"w5b-a" if mode == "live_project" else None)
+                            await arm(group,f"{tool}/{mode}/no-loop","new_contract",lambda ids,t=tool,s=scope:no_loop(ids,t,s))
+                        await arm(group,tool+"/quarantine","continuation",lambda ids,t=tool:quarantine(ids,t))
+                        await arm(group,tool+"/None","new_contract",lambda ids,t=tool:none_scope(ids,t))
+                elif number == 6:
+                    await arm(group,"public-and-legacy-contracts","continuation",lambda ids:_w5b_public(client,ids))
+                else:
+                    for kind in ("recent_scope","count_scope"):
+                        for value in (("invalid",None),("quarantined_project",None),("global",None)):
+                            await arm(group,f"{kind}/{value}","new_contract",lambda ids,k=kind,v=value:_w5b_parameter(k,v))
+                    for value in ("bool","quarantine"):
+                        await arm(group,"setter/"+value,"new_contract",lambda ids,v=value:_w5b_parameter("setter",v))
+                    for value in (0,11):
+                        await arm(group,f"importance/{value}","continuation",lambda ids,v=value:_w5b_parameter("importance",v))
+                    await arm(group,"blank","continuation",lambda ids:_w5b_parameter("blank",None))
+                    for value in (0,-1,200):
+                        await arm(group,f"limit/{value}","new_contract",lambda ids,v=value:_w5b_parameter("limit",v))
+                    for tool in _W5B_TOOLS:
+                        await arm(group,"error/"+tool,"new_contract",lambda ids,t=tool:_w5b_parameter("error",t))
+                if all(r["status"] == "PASS" for r in _W5B_RESULTS[start:]):
+                    passed(group)
+    counts = {s:sum(r["status"] == s for r in _W5B_RESULTS) for s in ("PASS","FAIL","ERROR")}
+    print("W2-05b SUMMARY " + json.dumps(counts,sort_keys=True))
+    report_path = os.environ.get("KIWI_W2_05B_REPORT")
+    if report_path:
+        Path(report_path).write_text(json.dumps({"counts":counts,"arms":_W5B_RESULTS},
+            ensure_ascii=False,indent=2)+"\n",encoding="utf-8")
+    return not counts["FAIL"] and not counts["ERROR"]
+
+
 async def async_main() -> int:
     admin_dsn = _validated_admin_dsn()
     database_name = ""
@@ -8237,6 +8633,8 @@ async def async_main() -> int:
         await run_suite(test_dsn)
         print(f"PREP baseline complete: {len(PASSED)} existing guards passed")
         await test_prep_observation_schema()
+        print(f"W2-05b inherited baseline: {len(PASSED)} existing guards passed")
+        w5b_ok = await test_w2_05b()
         legacy_passed = [name for name in PASSED if name.startswith("T-S")]
         w1_01_passed = [name for name in PASSED if name.startswith("T-W1-01-")]
         w1_06_passed = [name for name in PASSED if name.startswith("T-W1-06-")]
@@ -8265,11 +8663,13 @@ async def async_main() -> int:
             print(f"MUTED: {len(_MUTES_USED)} assertion(s) let through via KIWI_KNIFE_MUTE: "
                   f"{sorted(set(_MUTES_USED))}")
             print("NOT A CLEAN RUN — mutes are for mutation-knife evidence only")
-        else:
+        elif w5b_ok:
             print(f"PASS: {len(PASSED)} total permanent behavior guards")
+        else:
+            print(f"FAIL: {len(PASSED)} passed permanent behavior guards; W2-05b arms reported separately")
         print("Real database path: disposable PostgreSQL verified")
         print("Real model/API path: not called; embedding/model/HTTP boundaries were mocked")
-        return 0
+        return 0 if w5b_ok else 1
     finally:
         if database is not None:
             await database.close_pool()

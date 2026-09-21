@@ -1,0 +1,115 @@
+{
+  "base_commit": "f70c476e1e57bad21d81380906b26c5e160c67d5",
+  "handler_sha256": {
+    "add_memory_manual": "fde1c17ca4514051d1e11d17a6cc6179a995a13818ecffff613f5e72791c5a1a",
+    "batch_update_memories": "172218db55b60b9ef1a1c7e040d52949614bbe45f745ca481c34715ad04119ea",
+    "debug_memories": "457f7d404f9a1a6f51fb6f6b1741c305467eed5aaaee4782d63c535332dc43a7"
+  },
+  "mcp_blob": "8ee2860cea185fcc54af64ce2da2e96a508cdea4",
+  "schemas": [
+    {
+      "function": {
+        "description": "搜索记忆 — 用自然语言描述你想找的内容，向量语义搜索会返回最相关的记忆。",
+        "name": "search_memory",
+        "parameters": {
+          "properties": {
+            "limit": {
+              "description": "返回条数上限（默认10，最大50）",
+              "type": "integer"
+            },
+            "query": {
+              "description": "搜索关键词或自然语言描述，比如\"用户的健康记录\"、\"上周聊了什么\"",
+              "type": "string"
+            }
+          },
+          "required": [
+            "query"
+          ],
+          "type": "object"
+        }
+      },
+      "type": "function"
+    },
+    {
+      "function": {
+        "description": "保存一条新记忆到记忆库。",
+        "name": "save_memory",
+        "parameters": {
+          "properties": {
+            "content": {
+              "description": "记忆内容（必填），比如\"用户今天搬到了新城市\"",
+              "type": "string"
+            },
+            "importance": {
+              "description": "重要度 1-10（默认5），日常琐事1-4，重要事件5-6，关键转折7-8，核心记忆9-10",
+              "type": "integer"
+            },
+            "title": {
+              "description": "标题（可选，4-10字概括），比如\"台湾搬家\"",
+              "type": "string"
+            }
+          },
+          "required": [
+            "content"
+          ],
+          "type": "object"
+        }
+      },
+      "type": "function"
+    },
+    {
+      "function": {
+        "description": "获取最近的记忆，按时间倒序排列。",
+        "name": "get_recent",
+        "parameters": {
+          "properties": {
+            "limit": {
+              "description": "返回条数（默认20，最大50）",
+              "type": "integer"
+            }
+          },
+          "type": "object"
+        }
+      },
+      "type": "function"
+    },
+    {
+      "function": {
+        "description": "锁定一条记忆 — 锁定后热度永远为 1.0，不会衰减遗忘，每次聊天都会注入。",
+        "name": "lock_memory",
+        "parameters": {
+          "properties": {
+            "memory_id": {
+              "description": "记忆 ID（从搜索结果中获取）",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "memory_id"
+          ],
+          "type": "object"
+        }
+      },
+      "type": "function"
+    },
+    {
+      "function": {
+        "description": "解锁一条记忆 — 解锁后恢复正常热度衰减。",
+        "name": "unlock_memory",
+        "parameters": {
+          "properties": {
+            "memory_id": {
+              "description": "记忆 ID",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "memory_id"
+          ],
+          "type": "object"
+        }
+      },
+      "type": "function"
+    }
+  ]
+}
