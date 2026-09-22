@@ -127,6 +127,9 @@ jobs:
       - name: 运行 THINK-01 守卫
         run: python scripts/test_kiwi_think_01.py
 
+      - name: 运行 THINK-02 守卫（阶段 A）
+        run: python scripts/test_kiwi_think_02.py
+
       - name: THINK-01 变异证据
         run: |
           python scripts/kiwi_think_01_knives.py --output /tmp/kiwi_think_01_knives.json
