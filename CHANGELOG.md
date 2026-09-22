@@ -3,7 +3,7 @@
 ## Unreleased — 2.0.0 integration / KIWI-LOCK-01
 
 - Dream 不再改写用户手动锁定的记忆；promote 只允许全局非用户锁行。退休 UPDATE 重核永久状态与锁来源，按实际更新行统计，不回溯修改历史行。
-- Dream promotion preserves user locks and only promotes eligible global rows. Retirement atomically rechecks lock state/source and reports actual updates. Historical rows are not migrated. Pending acceptance and release.
+- Dream promotion preserves user locks and only promotes eligible global rows. Retirement atomically rechecks lock state/source and reports actual updates. Historical rows are not migrated.
 
 ## Unreleased — 2.0.0 integration / W2-05b (#90)
 

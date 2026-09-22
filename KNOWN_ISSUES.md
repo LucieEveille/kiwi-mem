@@ -32,7 +32,7 @@
 
 <a id="kiwi-lock-01"></a>
 
-### KIWI-LOCK-01：Dream promote 与退休用户锁保护（已修复，集成分支待验收）
+### KIWI-LOCK-01：Dream promote 与退休用户锁保护（已修复，PR #91，爹爹 2026-09-22 验收放行）
 
 修复前的继承链条四步：
 
