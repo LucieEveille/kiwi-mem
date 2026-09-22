@@ -1,0 +1,972 @@
+{
+  "ticket": "THINK-02",
+  "head": "5105ca4ba4ea9cfcc0ff9b3e8100026b4b8e3f1e",
+  "source_blobs": {
+    "main.py": "cfc55bbb03cc845c99283dbb5b5868164b0d4d38",
+    "config.py": "529b494a1c402a9ba8efb02d8ac8df8245f6bdbb",
+    "anthropic_adapter.py": "bcf29d0ddacfdcdf46322323d406a300624642d5",
+    "scripts/test_kiwi_think_01.py": "e80f0b49f63116d29ee538bf3d0569fcc47a9ac8",
+    "scripts/test_kiwi_err_01.py": "d005977ba18cf4f324c1ec58e4782f9898517592",
+    "scripts/test_kiwi_think_02.py": "88b942a35ea8ab1926d2c56e9e88e5d89bf78cbd",
+    "scripts/kiwi_think_02_knives.py": "39ec084c517a3979c14e7a09f2adc647eeb96844"
+  },
+  "kind": "real ASGI and adapter functions; fake storage/model/HTTP; no production I/O",
+  "preflight": 0,
+  "preflight_guards": 10,
+  "restored_suite": 0,
+  "restored_guards": 10,
+  "preflight_arms": {
+    "PASS": 259,
+    "FAIL": 0,
+    "ERROR": 0
+  },
+  "restored_arms": {
+    "PASS": 259,
+    "FAIL": 0,
+    "ERROR": 0
+  },
+  "results": [
+    {
+      "knife": "K-THINK2-0",
+      "mutation": "remove input aliases",
+      "status": "RED",
+      "target_guard": "T-THINK-02-00",
+      "target_arm": "",
+      "failures": [
+        {
+          "guard": "test_T_THINK_02_00_aliases",
+          "arm": {
+            "arm": "aliases",
+            "provider": "router",
+            "tools": false,
+            "alias": "none"
+          },
+          "status": "FAIL",
+          "reason": "400 != 200 : {\"error\":{\"message\":\"reasoning_effort 必须是 off/auto/low/medium/high/xhigh/max 之一\",\"type\":\"invalid_request_error\",\"param\":\"reasoning_effort\",\"code\":\"invalid_value\"}}",
+          "failure_kind": "AssertionError"
+        },
+        {
+          "guard": "test_T_THINK_02_00_aliases",
+          "arm": {
+            "arm": "aliases",
+            "provider": "router",
+            "tools": false,
+            "alias": "minimal"
+          },
+          "status": "FAIL",
+          "reason": "400 != 200 : {\"error\":{\"message\":\"reasoning_effort 必须是 off/auto/low/medium/high/xhigh/max 之一\",\"type\":\"invalid_request_error\",\"param\":\"reasoning_effort\",\"code\":\"invalid_value\"}}",
+          "failure_kind": "AssertionError"
+        },
+        {
+          "guard": "test_T_THINK_02_00_aliases",
+          "arm": {
+            "arm": "aliases",
+            "provider": "router",
+            "tools": false,
+            "alias": " NONE "
+          },
+          "status": "FAIL",
+          "reason": "400 != 200 : {\"error\":{\"message\":\"reasoning_effort 必须是 off/auto/low/medium/high/xhigh/max 之一\",\"type\":\"invalid_request_error\",\"param\":\"reasoning_effort\",\"code\":\"invalid_value\"}}",
+          "failure_kind": "AssertionError"
+        },
+        {
+          "guard": "test_T_THINK_02_00_aliases",
+          "arm": {
+            "arm": "aliases",
+            "provider": "router",
+            "tools": false,
+            "alias": " MiNiMaL "
+          },
+          "status": "FAIL",
+          "reason": "400 != 200 : {\"error\":{\"message\":\"reasoning_effort 必须是 off/auto/low/medium/high/xhigh/max 之一\",\"type\":\"invalid_request_error\",\"param\":\"reasoning_effort\",\"code\":\"invalid_value\"}}",
+          "failure_kind": "AssertionError"
+        },
+        {
+          "guard": "test_T_THINK_02_00_aliases",
+          "arm": {
+            "arm": "aliases",
+            "provider": "router",
+            "tools": true,
+            "alias": "none"
+          },
+          "status": "FAIL",
+          "reason": "400 != 200 : {\"error\":{\"message\":\"reasoning_effort 必须是 off/auto/low/medium/high/xhigh/max 之一\",\"type\":\"invalid_request_error\",\"param\":\"reasoning_effort\",\"code\":\"invalid_value\"}}",
+          "failure_kind": "AssertionError"
+        },
+        {
+          "guard": "test_T_THINK_02_00_aliases",
+          "arm": {
+            "arm": "aliases",
+            "provider": "router",
+            "tools": true,
+            "alias": "minimal"
+          },
+          "status": "FAIL",
+          "reason": "400 != 200 : {\"error\":{\"message\":\"reasoning_effort 必须是 off/auto/low/medium/high/xhigh/max 之一\",\"type\":\"invalid_request_error\",\"param\":\"reasoning_effort\",\"code\":\"invalid_value\"}}",
+          "failure_kind": "AssertionError"
+        },
+        {
+          "guard": "test_T_THINK_02_00_aliases",
+          "arm": {
+            "arm": "aliases",
+            "provider": "router",
+            "tools": true,
+            "alias": " NONE "
+          },
+          "status": "FAIL",
+          "reason": "400 != 200 : {\"error\":{\"message\":\"reasoning_effort 必须是 off/auto/low/medium/high/xhigh/max 之一\",\"type\":\"invalid_request_error\",\"param\":\"reasoning_effort\",\"code\":\"invalid_value\"}}",
+          "failure_kind": "AssertionError"
+        },
+        {
+          "guard": "test_T_THINK_02_00_aliases",
+          "arm": {
+            "arm": "aliases",
+            "provider": "router",
+            "tools": true,
+            "alias": " MiNiMaL "
+          },
+          "status": "FAIL",
+          "reason": "400 != 200 : {\"error\":{\"message\":\"reasoning_effort 必须是 off/auto/low/medium/high/xhigh/max 之一\",\"type\":\"invalid_request_error\",\"param\":\"reasoning_effort\",\"code\":\"invalid_value\"}}",
+          "failure_kind": "AssertionError"
+        },
+        {
+          "guard": "test_T_THINK_02_00_aliases",
+          "arm": {
+            "arm": "aliases",
+            "provider": "anthropic",
+            "tools": false,
+            "alias": "none"
+          },
+          "status": "FAIL",
+          "reason": "400 != 200 : {\"error\":{\"message\":\"reasoning_effort 必须是 off/auto/low/medium/high/xhigh/max 之一\",\"type\":\"invalid_request_error\",\"param\":\"reasoning_effort\",\"code\":\"invalid_value\"}}",
+          "failure_kind": "AssertionError"
+        },
+        {
+          "guard": "test_T_THINK_02_00_aliases",
+          "arm": {
+            "arm": "aliases",
+            "provider": "anthropic",
+            "tools": false,
+            "alias": "minimal"
+          },
+          "status": "FAIL",
+          "reason": "400 != 200 : {\"error\":{\"message\":\"reasoning_effort 必须是 off/auto/low/medium/high/xhigh/max 之一\",\"type\":\"invalid_request_error\",\"param\":\"reasoning_effort\",\"code\":\"invalid_value\"}}",
+          "failure_kind": "AssertionError"
+        },
+        {
+          "guard": "test_T_THINK_02_00_aliases",
+          "arm": {
+            "arm": "aliases",
+            "provider": "anthropic",
+            "tools": false,
+            "alias": " NONE "
+          },
+          "status": "FAIL",
+          "reason": "400 != 200 : {\"error\":{\"message\":\"reasoning_effort 必须是 off/auto/low/medium/high/xhigh/max 之一\",\"type\":\"invalid_request_error\",\"param\":\"reasoning_effort\",\"code\":\"invalid_value\"}}",
+          "failure_kind": "AssertionError"
+        },
+        {
+          "guard": "test_T_THINK_02_00_aliases",
+          "arm": {
+            "arm": "aliases",
+            "provider": "anthropic",
+            "tools": false,
+            "alias": " MiNiMaL "
+          },
+          "status": "FAIL",
+          "reason": "400 != 200 : {\"error\":{\"message\":\"reasoning_effort 必须是 off/auto/low/medium/high/xhigh/max 之一\",\"type\":\"invalid_request_error\",\"param\":\"reasoning_effort\",\"code\":\"invalid_value\"}}",
+          "failure_kind": "AssertionError"
+        },
+        {
+          "guard": "test_T_THINK_02_00_aliases",
+          "arm": {
+            "arm": "aliases",
+            "provider": "anthropic",
+            "tools": true,
+            "alias": "none"
+          },
+          "status": "FAIL",
+          "reason": "400 != 200 : {\"error\":{\"message\":\"reasoning_effort 必须是 off/auto/low/medium/high/xhigh/max 之一\",\"type\":\"invalid_request_error\",\"param\":\"reasoning_effort\",\"code\":\"invalid_value\"}}",
+          "failure_kind": "AssertionError"
+        },
+        {
+          "guard": "test_T_THINK_02_00_aliases",
+          "arm": {
+            "arm": "aliases",
+            "provider": "anthropic",
+            "tools": true,
+            "alias": "minimal"
+          },
+          "status": "FAIL",
+          "reason": "400 != 200 : {\"error\":{\"message\":\"reasoning_effort 必须是 off/auto/low/medium/high/xhigh/max 之一\",\"type\":\"invalid_request_error\",\"param\":\"reasoning_effort\",\"code\":\"invalid_value\"}}",
+          "failure_kind": "AssertionError"
+        },
+        {
+          "guard": "test_T_THINK_02_00_aliases",
+          "arm": {
+            "arm": "aliases",
+            "provider": "anthropic",
+            "tools": true,
+            "alias": " NONE "
+          },
+          "status": "FAIL",
+          "reason": "400 != 200 : {\"error\":{\"message\":\"reasoning_effort 必须是 off/auto/low/medium/high/xhigh/max 之一\",\"type\":\"invalid_request_error\",\"param\":\"reasoning_effort\",\"code\":\"invalid_value\"}}",
+          "failure_kind": "AssertionError"
+        },
+        {
+          "guard": "test_T_THINK_02_00_aliases",
+          "arm": {
+            "arm": "aliases",
+            "provider": "anthropic",
+            "tools": true,
+            "alias": " MiNiMaL "
+          },
+          "status": "FAIL",
+          "reason": "400 != 200 : {\"error\":{\"message\":\"reasoning_effort 必须是 off/auto/low/medium/high/xhigh/max 之一\",\"type\":\"invalid_request_error\",\"param\":\"reasoning_effort\",\"code\":\"invalid_value\"}}",
+          "failure_kind": "AssertionError"
+        },
+        {
+          "guard": "test_T_THINK_02_00_aliases",
+          "arm": {
+            "arm": "aliases",
+            "provider": "openai",
+            "tools": false,
+            "alias": "none"
+          },
+          "status": "FAIL",
+          "reason": "400 != 200 : {\"error\":{\"message\":\"reasoning_effort 必须是 off/auto/low/medium/high/xhigh/max 之一\",\"type\":\"invalid_request_error\",\"param\":\"reasoning_effort\",\"code\":\"invalid_value\"}}",
+          "failure_kind": "AssertionError"
+        },
+        {
+          "guard": "test_T_THINK_02_00_aliases",
+          "arm": {
+            "arm": "aliases",
+            "provider": "openai",
+            "tools": false,
+            "alias": "minimal"
+          },
+          "status": "FAIL",
+          "reason": "400 != 200 : {\"error\":{\"message\":\"reasoning_effort 必须是 off/auto/low/medium/high/xhigh/max 之一\",\"type\":\"invalid_request_error\",\"param\":\"reasoning_effort\",\"code\":\"invalid_value\"}}",
+          "failure_kind": "AssertionError"
+        },
+        {
+          "guard": "test_T_THINK_02_00_aliases",
+          "arm": {
+            "arm": "aliases",
+            "provider": "openai",
+            "tools": false,
+            "alias": " NONE "
+          },
+          "status": "FAIL",
+          "reason": "400 != 200 : {\"error\":{\"message\":\"reasoning_effort 必须是 off/auto/low/medium/high/xhigh/max 之一\",\"type\":\"invalid_request_error\",\"param\":\"reasoning_effort\",\"code\":\"invalid_value\"}}",
+          "failure_kind": "AssertionError"
+        },
+        {
+          "guard": "test_T_THINK_02_00_aliases",
+          "arm": {
+            "arm": "aliases",
+            "provider": "openai",
+            "tools": false,
+            "alias": " MiNiMaL "
+          },
+          "status": "FAIL",
+          "reason": "400 != 200 : {\"error\":{\"message\":\"reasoning_effort 必须是 off/auto/low/medium/high/xhigh/max 之一\",\"type\":\"invalid_request_error\",\"param\":\"reasoning_effort\",\"code\":\"invalid_value\"}}",
+          "failure_kind": "AssertionError"
+        },
+        {
+          "guard": "test_T_THINK_02_00_aliases",
+          "arm": {
+            "arm": "aliases",
+            "provider": "openai",
+            "tools": true,
+            "alias": "none"
+          },
+          "status": "FAIL",
+          "reason": "400 != 200 : {\"error\":{\"message\":\"reasoning_effort 必须是 off/auto/low/medium/high/xhigh/max 之一\",\"type\":\"invalid_request_error\",\"param\":\"reasoning_effort\",\"code\":\"invalid_value\"}}",
+          "failure_kind": "AssertionError"
+        },
+        {
+          "guard": "test_T_THINK_02_00_aliases",
+          "arm": {
+            "arm": "aliases",
+            "provider": "openai",
+            "tools": true,
+            "alias": "minimal"
+          },
+          "status": "FAIL",
+          "reason": "400 != 200 : {\"error\":{\"message\":\"reasoning_effort 必须是 off/auto/low/medium/high/xhigh/max 之一\",\"type\":\"invalid_request_error\",\"param\":\"reasoning_effort\",\"code\":\"invalid_value\"}}",
+          "failure_kind": "AssertionError"
+        },
+        {
+          "guard": "test_T_THINK_02_00_aliases",
+          "arm": {
+            "arm": "aliases",
+            "provider": "openai",
+            "tools": true,
+            "alias": " NONE "
+          },
+          "status": "FAIL",
+          "reason": "400 != 200 : {\"error\":{\"message\":\"reasoning_effort 必须是 off/auto/low/medium/high/xhigh/max 之一\",\"type\":\"invalid_request_error\",\"param\":\"reasoning_effort\",\"code\":\"invalid_value\"}}",
+          "failure_kind": "AssertionError"
+        },
+        {
+          "guard": "test_T_THINK_02_00_aliases",
+          "arm": {
+            "arm": "aliases",
+            "provider": "openai",
+            "tools": true,
+            "alias": " MiNiMaL "
+          },
+          "status": "FAIL",
+          "reason": "400 != 200 : {\"error\":{\"message\":\"reasoning_effort 必须是 off/auto/low/medium/high/xhigh/max 之一\",\"type\":\"invalid_request_error\",\"param\":\"reasoning_effort\",\"code\":\"invalid_value\"}}",
+          "failure_kind": "AssertionError"
+        },
+        {
+          "guard": "test_T_THINK_02_00_aliases",
+          "arm": {
+            "arm": "aliases",
+            "provider": "relay",
+            "tools": false,
+            "alias": "none"
+          },
+          "status": "FAIL",
+          "reason": "400 != 200 : {\"error\":{\"message\":\"reasoning_effort 必须是 off/auto/low/medium/high/xhigh/max 之一\",\"type\":\"invalid_request_error\",\"param\":\"reasoning_effort\",\"code\":\"invalid_value\"}}",
+          "failure_kind": "AssertionError"
+        },
+        {
+          "guard": "test_T_THINK_02_00_aliases",
+          "arm": {
+            "arm": "aliases",
+            "provider": "relay",
+            "tools": false,
+            "alias": "minimal"
+          },
+          "status": "FAIL",
+          "reason": "400 != 200 : {\"error\":{\"message\":\"reasoning_effort 必须是 off/auto/low/medium/high/xhigh/max 之一\",\"type\":\"invalid_request_error\",\"param\":\"reasoning_effort\",\"code\":\"invalid_value\"}}",
+          "failure_kind": "AssertionError"
+        },
+        {
+          "guard": "test_T_THINK_02_00_aliases",
+          "arm": {
+            "arm": "aliases",
+            "provider": "relay",
+            "tools": false,
+            "alias": " NONE "
+          },
+          "status": "FAIL",
+          "reason": "400 != 200 : {\"error\":{\"message\":\"reasoning_effort 必须是 off/auto/low/medium/high/xhigh/max 之一\",\"type\":\"invalid_request_error\",\"param\":\"reasoning_effort\",\"code\":\"invalid_value\"}}",
+          "failure_kind": "AssertionError"
+        },
+        {
+          "guard": "test_T_THINK_02_00_aliases",
+          "arm": {
+            "arm": "aliases",
+            "provider": "relay",
+            "tools": false,
+            "alias": " MiNiMaL "
+          },
+          "status": "FAIL",
+          "reason": "400 != 200 : {\"error\":{\"message\":\"reasoning_effort 必须是 off/auto/low/medium/high/xhigh/max 之一\",\"type\":\"invalid_request_error\",\"param\":\"reasoning_effort\",\"code\":\"invalid_value\"}}",
+          "failure_kind": "AssertionError"
+        },
+        {
+          "guard": "test_T_THINK_02_00_aliases",
+          "arm": {
+            "arm": "aliases",
+            "provider": "relay",
+            "tools": true,
+            "alias": "none"
+          },
+          "status": "FAIL",
+          "reason": "400 != 200 : {\"error\":{\"message\":\"reasoning_effort 必须是 off/auto/low/medium/high/xhigh/max 之一\",\"type\":\"invalid_request_error\",\"param\":\"reasoning_effort\",\"code\":\"invalid_value\"}}",
+          "failure_kind": "AssertionError"
+        },
+        {
+          "guard": "test_T_THINK_02_00_aliases",
+          "arm": {
+            "arm": "aliases",
+            "provider": "relay",
+            "tools": true,
+            "alias": "minimal"
+          },
+          "status": "FAIL",
+          "reason": "400 != 200 : {\"error\":{\"message\":\"reasoning_effort 必须是 off/auto/low/medium/high/xhigh/max 之一\",\"type\":\"invalid_request_error\",\"param\":\"reasoning_effort\",\"code\":\"invalid_value\"}}",
+          "failure_kind": "AssertionError"
+        },
+        {
+          "guard": "test_T_THINK_02_00_aliases",
+          "arm": {
+            "arm": "aliases",
+            "provider": "relay",
+            "tools": true,
+            "alias": " NONE "
+          },
+          "status": "FAIL",
+          "reason": "400 != 200 : {\"error\":{\"message\":\"reasoning_effort 必须是 off/auto/low/medium/high/xhigh/max 之一\",\"type\":\"invalid_request_error\",\"param\":\"reasoning_effort\",\"code\":\"invalid_value\"}}",
+          "failure_kind": "AssertionError"
+        },
+        {
+          "guard": "test_T_THINK_02_00_aliases",
+          "arm": {
+            "arm": "aliases",
+            "provider": "relay",
+            "tools": true,
+            "alias": " MiNiMaL "
+          },
+          "status": "FAIL",
+          "reason": "400 != 200 : {\"error\":{\"message\":\"reasoning_effort 必须是 off/auto/low/medium/high/xhigh/max 之一\",\"type\":\"invalid_request_error\",\"param\":\"reasoning_effort\",\"code\":\"invalid_value\"}}",
+          "failure_kind": "AssertionError"
+        }
+      ],
+      "counts": {
+        "PASS": 207,
+        "FAIL": 52,
+        "ERROR": 0
+      },
+      "exit_code": 1,
+      "log_sha256": "c72bf6f4c23479135d6a2ce9ed9bb458ed56a24e18114fcaebd2decf144cd8f1",
+      "restored_sha256": "27ab24c40bdc6e74628ee472abb06871e0fd8d2ea9dbf9b193e86c928f99bdbb"
+    },
+    {
+      "knife": "K-THINK2-1",
+      "mutation": "skip reasoning object input",
+      "status": "RED",
+      "target_guard": "T-THINK-02-01",
+      "target_arm": "",
+      "failures": [
+        {
+          "guard": "test_T_THINK_02_01_object_entry",
+          "arm": {
+            "arm": "entry",
+            "effort": "off"
+          },
+          "status": "FAIL",
+          "reason": "Lists differ: ['event=reasoning_effort_resolved source=panel effort=high'] != ['event=reasoning_effort_resolved source=explicit_object effort=off']\n\nFirst differing element 0:\n'event=reasoning_effort_resolved source=panel effort=high'\n'event=reasoning_effort_resolved source=explicit_object effort=off'\n\n- ['event=reasoning_effort_resolved source=panel effort=high']\n?                                           ^^ ^        ^^^^\n\n+ ['event=reasoning_effort_resolved source=explicit_object effort=off']\n?                                          ++ ^^^^^^^^^ ^^        ^^^\n",
+          "failure_kind": "AssertionError"
+        },
+        {
+          "guard": "test_T_THINK_02_01_object_entry",
+          "arm": {
+            "arm": "entry",
+            "effort": "auto"
+          },
+          "status": "FAIL",
+          "reason": "Lists differ: ['event=reasoning_effort_resolved source=panel effort=high'] != ['event=reasoning_effort_resolved source=explicit_object effort=auto']\n\nFirst differing element 0:\n'event=reasoning_effort_resolved source=panel effort=high'\n'event=reasoning_effort_resolved source=explicit_object effort=auto'\n\n- ['event=reasoning_effort_resolved source=panel effort=high']\n?                                           ^^ ^        ^^^^\n\n+ ['event=reasoning_effort_resolved source=explicit_object effort=auto']\n?                                          ++ ^^^^^^^^^ ^^        ^^^^\n",
+          "failure_kind": "AssertionError"
+        },
+        {
+          "guard": "test_T_THINK_02_01_object_entry",
+          "arm": {
+            "arm": "entry",
+            "effort": "low"
+          },
+          "status": "FAIL",
+          "reason": "Lists differ: ['event=reasoning_effort_resolved source=panel effort=high'] != ['event=reasoning_effort_resolved source=explicit_object effort=low']\n\nFirst differing element 0:\n'event=reasoning_effort_resolved source=panel effort=high'\n'event=reasoning_effort_resolved source=explicit_object effort=low'\n\n- ['event=reasoning_effort_resolved source=panel effort=high']\n?                                           ^^ ^        ^^^^\n\n+ ['event=reasoning_effort_resolved source=explicit_object effort=low']\n?                                          ++ ^^^^^^^^^ ^^        ^^^\n",
+          "failure_kind": "AssertionError"
+        },
+        {
+          "guard": "test_T_THINK_02_01_object_entry",
+          "arm": {
+            "arm": "entry",
+            "effort": "medium"
+          },
+          "status": "FAIL",
+          "reason": "Lists differ: ['event=reasoning_effort_resolved source=panel effort=high'] != ['event=reasoning_effort_resolved source=explicit_object effort=medium']\n\nFirst differing element 0:\n'event=reasoning_effort_resolved source=panel effort=high'\n'event=reasoning_effort_resolved source=explicit_object effort=medium'\n\n- ['event=reasoning_effort_resolved source=panel effort=high']\n?                                           ^^ ^        ^ ^^\n\n+ ['event=reasoning_effort_resolved source=explicit_object effort=medium']\n?                                          ++ ^^^^^^^^^ ^^        ^^^ ^^\n",
+          "failure_kind": "AssertionError"
+        },
+        {
+          "guard": "test_T_THINK_02_01_object_entry",
+          "arm": {
+            "arm": "entry",
+            "effort": "high"
+          },
+          "status": "FAIL",
+          "reason": "Lists differ: ['event=reasoning_effort_resolved source=panel effort=high'] != ['event=reasoning_effort_resolved source=explicit_object effort=high']\n\nFirst differing element 0:\n'event=reasoning_effort_resolved source=panel effort=high'\n'event=reasoning_effort_resolved source=explicit_object effort=high'\n\n- ['event=reasoning_effort_resolved source=panel effort=high']\n?                                           ^^ ^\n\n+ ['event=reasoning_effort_resolved source=explicit_object effort=high']\n?                                          ++ ^^^^^^^^^ ^^\n",
+          "failure_kind": "AssertionError"
+        },
+        {
+          "guard": "test_T_THINK_02_01_object_entry",
+          "arm": {
+            "arm": "entry",
+            "effort": "xhigh"
+          },
+          "status": "FAIL",
+          "reason": "Lists differ: ['event=reasoning_effort_resolved source=panel effort=high'] != ['event=reasoning_effort_resolved source=explicit_object effort=xhigh']\n\nFirst differing element 0:\n'event=reasoning_effort_resolved source=panel effort=high'\n'event=reasoning_effort_resolved source=explicit_object effort=xhigh'\n\n- ['event=reasoning_effort_resolved source=panel effort=high']\n?                                           ^^ ^\n\n+ ['event=reasoning_effort_resolved source=explicit_object effort=xhigh']\n?                                          ++ ^^^^^^^^^ ^^        +\n",
+          "failure_kind": "AssertionError"
+        },
+        {
+          "guard": "test_T_THINK_02_01_object_entry",
+          "arm": {
+            "arm": "entry",
+            "effort": "max"
+          },
+          "status": "FAIL",
+          "reason": "Lists differ: ['event=reasoning_effort_resolved source=panel effort=high'] != ['event=reasoning_effort_resolved source=explicit_object effort=max']\n\nFirst differing element 0:\n'event=reasoning_effort_resolved source=panel effort=high'\n'event=reasoning_effort_resolved source=explicit_object effort=max'\n\n- ['event=reasoning_effort_resolved source=panel effort=high']\n?                                           ^^ ^        ^^^^\n\n+ ['event=reasoning_effort_resolved source=explicit_object effort=max']\n?                                          ++ ^^^^^^^^^ ^^        ^^^\n",
+          "failure_kind": "AssertionError"
+        },
+        {
+          "guard": "test_T_THINK_02_01_object_entry",
+          "arm": {
+            "arm": "entry",
+            "effort": "none"
+          },
+          "status": "FAIL",
+          "reason": "Lists differ: ['event=reasoning_effort_resolved source=panel effort=high'] != ['event=reasoning_effort_resolved source=explicit_object effort=off']\n\nFirst differing element 0:\n'event=reasoning_effort_resolved source=panel effort=high'\n'event=reasoning_effort_resolved source=explicit_object effort=off'\n\n- ['event=reasoning_effort_resolved source=panel effort=high']\n?                                           ^^ ^        ^^^^\n\n+ ['event=reasoning_effort_resolved source=explicit_object effort=off']\n?                                          ++ ^^^^^^^^^ ^^        ^^^\n",
+          "failure_kind": "AssertionError"
+        },
+        {
+          "guard": "test_T_THINK_02_01_object_entry",
+          "arm": {
+            "arm": "entry",
+            "effort": "minimal"
+          },
+          "status": "FAIL",
+          "reason": "Lists differ: ['event=reasoning_effort_resolved source=panel effort=high'] != ['event=reasoning_effort_resolved source=explicit_object effort=low']\n\nFirst differing element 0:\n'event=reasoning_effort_resolved source=panel effort=high'\n'event=reasoning_effort_resolved source=explicit_object effort=low'\n\n- ['event=reasoning_effort_resolved source=panel effort=high']\n?                                           ^^ ^        ^^^^\n\n+ ['event=reasoning_effort_resolved source=explicit_object effort=low']\n?                                          ++ ^^^^^^^^^ ^^        ^^^\n",
+          "failure_kind": "AssertionError"
+        },
+        {
+          "guard": "test_T_THINK_02_01_object_entry",
+          "arm": {
+            "arm": "entry",
+            "effort": " NoNe "
+          },
+          "status": "FAIL",
+          "reason": "Lists differ: ['event=reasoning_effort_resolved source=panel effort=high'] != ['event=reasoning_effort_resolved source=explicit_object effort=off']\n\nFirst differing element 0:\n'event=reasoning_effort_resolved source=panel effort=high'\n'event=reasoning_effort_resolved source=explicit_object effort=off'\n\n- ['event=reasoning_effort_resolved source=panel effort=high']\n?                                           ^^ ^        ^^^^\n\n+ ['event=reasoning_effort_resolved source=explicit_object effort=off']\n?                                          ++ ^^^^^^^^^ ^^        ^^^\n",
+          "failure_kind": "AssertionError"
+        },
+        {
+          "guard": "test_T_THINK_02_01_object_entry",
+          "arm": {
+            "arm": "entry",
+            "effort": " MINIMAL "
+          },
+          "status": "FAIL",
+          "reason": "Lists differ: ['event=reasoning_effort_resolved source=panel effort=high'] != ['event=reasoning_effort_resolved source=explicit_object effort=low']\n\nFirst differing element 0:\n'event=reasoning_effort_resolved source=panel effort=high'\n'event=reasoning_effort_resolved source=explicit_object effort=low'\n\n- ['event=reasoning_effort_resolved source=panel effort=high']\n?                                           ^^ ^        ^^^^\n\n+ ['event=reasoning_effort_resolved source=explicit_object effort=low']\n?                                          ++ ^^^^^^^^^ ^^        ^^^\n",
+          "failure_kind": "AssertionError"
+        }
+      ],
+      "counts": {
+        "PASS": 145,
+        "FAIL": 114,
+        "ERROR": 0
+      },
+      "exit_code": 1,
+      "log_sha256": "b6c420ac5936333f6c613ff769b8aaca6bdd796048eba24d0b1864c2d41f66d3",
+      "restored_sha256": "27ab24c40bdc6e74628ee472abb06871e0fd8d2ea9dbf9b193e86c928f99bdbb"
+    },
+    {
+      "knife": "K-THINK2-2",
+      "mutation": "enabled false becomes auto",
+      "status": "RED",
+      "target_guard": "T-THINK-02-03",
+      "target_arm": "",
+      "failures": [
+        {
+          "guard": "test_T_THINK_02_03_panel_conflict",
+          "arm": {
+            "provider": "router",
+            "tools": false
+          },
+          "status": "FAIL",
+          "reason": "{'reasoning': {'enabled': True}} != {}\n- {'reasoning': {'enabled': True}}\n+ {}",
+          "failure_kind": "AssertionError"
+        },
+        {
+          "guard": "test_T_THINK_02_03_panel_conflict",
+          "arm": {
+            "provider": "router",
+            "tools": true
+          },
+          "status": "FAIL",
+          "reason": "{'reasoning': {'enabled': True}} != {}\n- {'reasoning': {'enabled': True}}\n+ {}",
+          "failure_kind": "AssertionError"
+        },
+        {
+          "guard": "test_T_THINK_02_03_panel_conflict",
+          "arm": {
+            "provider": "anthropic",
+            "tools": false
+          },
+          "status": "FAIL",
+          "reason": "{'thinking': {'type': 'enabled', 'budget_tokens': 10000}} != {}\n- {'thinking': {'budget_tokens': 10000, 'type': 'enabled'}}\n+ {}",
+          "failure_kind": "AssertionError"
+        },
+        {
+          "guard": "test_T_THINK_02_03_panel_conflict",
+          "arm": {
+            "provider": "anthropic",
+            "tools": true
+          },
+          "status": "FAIL",
+          "reason": "{'thinking': {'type': 'enabled', 'budget_tokens': 10000}} != {}\n- {'thinking': {'budget_tokens': 10000, 'type': 'enabled'}}\n+ {}",
+          "failure_kind": "AssertionError"
+        },
+        {
+          "guard": "test_T_THINK_02_03_panel_conflict",
+          "arm": {
+            "provider": "openai",
+            "tools": false
+          },
+          "status": "FAIL",
+          "reason": "Lists differ: ['event=reasoning_effort_resolved source=explicit_object effort=auto'] != ['event=reasoning_effort_resolved source=explicit_object effort=off']\n\nFirst differing element 0:\n'event=reasoning_effort_resolved source=explicit_object effort=auto'\n'event=reasoning_effort_resolved source=explicit_object effort=off'\n\n- ['event=reasoning_effort_resolved source=explicit_object effort=auto']\n?                                                                 ---\n\n+ ['event=reasoning_effort_resolved source=explicit_object effort=off']\n?                                                                  ++\n",
+          "failure_kind": "AssertionError"
+        },
+        {
+          "guard": "test_T_THINK_02_03_panel_conflict",
+          "arm": {
+            "provider": "openai",
+            "tools": true
+          },
+          "status": "FAIL",
+          "reason": "Lists differ: ['event=reasoning_effort_resolved source=explicit_object effort=auto'] != ['event=reasoning_effort_resolved source=explicit_object effort=off']\n\nFirst differing element 0:\n'event=reasoning_effort_resolved source=explicit_object effort=auto'\n'event=reasoning_effort_resolved source=explicit_object effort=off'\n\n- ['event=reasoning_effort_resolved source=explicit_object effort=auto']\n?                                                                 ---\n\n+ ['event=reasoning_effort_resolved source=explicit_object effort=off']\n?                                                                  ++\n",
+          "failure_kind": "AssertionError"
+        },
+        {
+          "guard": "test_T_THINK_02_03_panel_conflict",
+          "arm": {
+            "provider": "relay",
+            "tools": false
+          },
+          "status": "FAIL",
+          "reason": "Lists differ: ['event=reasoning_effort_resolved source=explicit_object effort=auto'] != ['event=reasoning_effort_resolved source=explicit_object effort=off']\n\nFirst differing element 0:\n'event=reasoning_effort_resolved source=explicit_object effort=auto'\n'event=reasoning_effort_resolved source=explicit_object effort=off'\n\n- ['event=reasoning_effort_resolved source=explicit_object effort=auto']\n?                                                                 ---\n\n+ ['event=reasoning_effort_resolved source=explicit_object effort=off']\n?                                                                  ++\n",
+          "failure_kind": "AssertionError"
+        },
+        {
+          "guard": "test_T_THINK_02_03_panel_conflict",
+          "arm": {
+            "provider": "relay",
+            "tools": true
+          },
+          "status": "FAIL",
+          "reason": "Lists differ: ['event=reasoning_effort_resolved source=explicit_object effort=auto'] != ['event=reasoning_effort_resolved source=explicit_object effort=off']\n\nFirst differing element 0:\n'event=reasoning_effort_resolved source=explicit_object effort=auto'\n'event=reasoning_effort_resolved source=explicit_object effort=off'\n\n- ['event=reasoning_effort_resolved source=explicit_object effort=auto']\n?                                                                 ---\n\n+ ['event=reasoning_effort_resolved source=explicit_object effort=off']\n?                                                                  ++\n",
+          "failure_kind": "AssertionError"
+        }
+      ],
+      "counts": {
+        "PASS": 249,
+        "FAIL": 10,
+        "ERROR": 0
+      },
+      "exit_code": 1,
+      "log_sha256": "c4c9a661e78272c4fae273811b0fdedcdb9babfbf93887f28ea665b362504fd0",
+      "restored_sha256": "27ab24c40bdc6e74628ee472abb06871e0fd8d2ea9dbf9b193e86c928f99bdbb"
+    },
+    {
+      "knife": "K-THINK2-3",
+      "mutation": "budget equality drops one level",
+      "status": "RED",
+      "target_guard": "T-THINK-02-04",
+      "target_arm": "",
+      "failures": [
+        {
+          "guard": "test_T_THINK_02_04_budget",
+          "arm": {
+            "arm": "04a-entry",
+            "budget": 10000
+          },
+          "status": "FAIL",
+          "reason": "Lists differ: ['event=reasoning_effort_resolved source=explicit_object effort=low'] != ['event=reasoning_effort_resolved source=explicit_object effort=medium']\n\nFirst differing element 0:\n'event=reasoning_effort_resolved source=explicit_object effort=low'\n'event=reasoning_effort_resolved source=explicit_object effort=medium'\n\n- ['event=reasoning_effort_resolved source=explicit_object effort=low']\n?                                                                 ^^^\n\n+ ['event=reasoning_effort_resolved source=explicit_object effort=medium']\n?                                                                 ^^^^^^\n",
+          "failure_kind": "AssertionError"
+        },
+        {
+          "guard": "test_T_THINK_02_04_budget",
+          "arm": {
+            "arm": "04a-entry",
+            "budget": 20000
+          },
+          "status": "FAIL",
+          "reason": "Lists differ: ['event=reasoning_effort_resolved source=explicit_object effort=medium'] != ['event=reasoning_effort_resolved source=explicit_object effort=high']\n\nFirst differing element 0:\n'event=reasoning_effort_resolved source=explicit_object effort=medium'\n'event=reasoning_effort_resolved source=explicit_object effort=high'\n\n- ['event=reasoning_effort_resolved source=explicit_object effort=medium']\n?                                                                 ^^^ ^^\n\n+ ['event=reasoning_effort_resolved source=explicit_object effort=high']\n?                                                                 ^ ^^\n",
+          "failure_kind": "AssertionError"
+        },
+        {
+          "guard": "test_T_THINK_02_04_budget",
+          "arm": {
+            "arm": "04a-entry",
+            "budget": 32000
+          },
+          "status": "FAIL",
+          "reason": "Lists differ: ['event=reasoning_effort_resolved source=explicit_object effort=high'] != ['event=reasoning_effort_resolved source=explicit_object effort=xhigh']\n\nFirst differing element 0:\n'event=reasoning_effort_resolved source=explicit_object effort=high'\n'event=reasoning_effort_resolved source=explicit_object effort=xhigh'\n\n- ['event=reasoning_effort_resolved source=explicit_object effort=high']\n+ ['event=reasoning_effort_resolved source=explicit_object effort=xhigh']\n?                                                                 +\n",
+          "failure_kind": "AssertionError"
+        },
+        {
+          "guard": "test_T_THINK_02_04_budget",
+          "arm": {
+            "arm": "04a-entry",
+            "budget": 64000
+          },
+          "status": "FAIL",
+          "reason": "Lists differ: ['event=reasoning_effort_resolved source=explicit_object effort=xhigh'] != ['event=reasoning_effort_resolved source=explicit_object effort=max']\n\nFirst differing element 0:\n'event=reasoning_effort_resolved source=explicit_object effort=xhigh'\n'event=reasoning_effort_resolved source=explicit_object effort=max'\n\n- ['event=reasoning_effort_resolved source=explicit_object effort=xhigh']\n?                                                                  ----\n\n+ ['event=reasoning_effort_resolved source=explicit_object effort=max']\n?                                                                 ++\n",
+          "failure_kind": "AssertionError"
+        }
+      ],
+      "counts": {
+        "PASS": 255,
+        "FAIL": 4,
+        "ERROR": 0
+      },
+      "exit_code": 1,
+      "log_sha256": "731dcb7331ca3e9abcf0d22f36ea3efec8d465a61d355ad3ffed105bfaca0630",
+      "restored_sha256": "27ab24c40bdc6e74628ee472abb06871e0fd8d2ea9dbf9b193e86c928f99bdbb"
+    },
+    {
+      "knife": "K-THINK2-4",
+      "mutation": "object overrides explicit string",
+      "status": "RED",
+      "target_guard": "T-THINK-02-06",
+      "target_arm": "",
+      "failures": [
+        {
+          "guard": "test_T_THINK_02_06_precedence",
+          "arm": {
+            "arm": "string-wins-continuation",
+            "other_type": "dict",
+            "other": "{'effort': 'low'}"
+          },
+          "status": "FAIL",
+          "reason": "{'reasoning': {'enabled': True, 'effort': 'low'}} != {'reasoning': {'enabled': True, 'effort': 'high'}}\n- {'reasoning': {'effort': 'low', 'enabled': True}}\n?                           ^^^\n\n+ {'reasoning': {'effort': 'high', 'enabled': True}}\n?                           ^^^^\n",
+          "failure_kind": "AssertionError"
+        },
+        {
+          "guard": "test_T_THINK_02_06_precedence",
+          "arm": {
+            "arm": "string-wins-continuation",
+            "other_type": "dict",
+            "other": "{'enabled': False}"
+          },
+          "status": "FAIL",
+          "reason": "{} != {'reasoning': {'enabled': True, 'effort': 'high'}}\n- {}\n+ {'reasoning': {'effort': 'high', 'enabled': True}}",
+          "failure_kind": "AssertionError"
+        },
+        {
+          "guard": "test_T_THINK_02_06_precedence",
+          "arm": {
+            "arm": "string-wins-continuation",
+            "other_type": "str",
+            "other": "ZZ-SENTINEL-think02-private"
+          },
+          "status": "FAIL",
+          "reason": "400 != 200 : {\"error\":{\"message\":\"reasoning 必须是对象，可含 effort（off/auto/low/medium/high/xhigh/max）、max_tokens（正整数）或 enabled（布尔）\",\"type\":\"invalid_request_error\",\"param\":\"reasoning\",\"code\":\"invalid_value\"}}",
+          "failure_kind": "AssertionError"
+        },
+        {
+          "guard": "test_T_THINK_02_06_precedence",
+          "arm": {
+            "arm": "string-wins-continuation",
+            "other_type": "list",
+            "other": "[]"
+          },
+          "status": "FAIL",
+          "reason": "400 != 200 : {\"error\":{\"message\":\"reasoning 必须是对象，可含 effort（off/auto/low/medium/high/xhigh/max）、max_tokens（正整数）或 enabled（布尔）\",\"type\":\"invalid_request_error\",\"param\":\"reasoning\",\"code\":\"invalid_value\"}}",
+          "failure_kind": "AssertionError"
+        },
+        {
+          "guard": "test_T_THINK_02_06_precedence",
+          "arm": {
+            "arm": "string-wins-continuation",
+            "other_type": "int",
+            "other": "42"
+          },
+          "status": "FAIL",
+          "reason": "400 != 200 : {\"error\":{\"message\":\"reasoning 必须是对象，可含 effort（off/auto/low/medium/high/xhigh/max）、max_tokens（正整数）或 enabled（布尔）\",\"type\":\"invalid_request_error\",\"param\":\"reasoning\",\"code\":\"invalid_value\"}}",
+          "failure_kind": "AssertionError"
+        }
+      ],
+      "counts": {
+        "PASS": 254,
+        "FAIL": 5,
+        "ERROR": 0
+      },
+      "exit_code": 1,
+      "log_sha256": "c4e7c6ce347e859333571a7a534ead0762107aed1ee13f3683837bcb3736b0d8",
+      "restored_sha256": "27ab24c40bdc6e74628ee472abb06871e0fd8d2ea9dbf9b193e86c928f99bdbb"
+    },
+    {
+      "knife": "K-THINK2-5",
+      "mutation": "non-object silently becomes auto",
+      "status": "RED",
+      "target_guard": "T-THINK-02-07",
+      "target_arm": "",
+      "failures": [
+        {
+          "guard": "test_T_THINK_02_07_rejection",
+          "arm": {
+            "arm": "non-object",
+            "kind": "str"
+          },
+          "status": "FAIL",
+          "reason": "200 != 400 : {\"id\":\"test\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"ok\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":1,\"completion_tokens\":1}}",
+          "failure_kind": "AssertionError"
+        },
+        {
+          "guard": "test_T_THINK_02_07_rejection",
+          "arm": {
+            "arm": "non-object",
+            "kind": "list"
+          },
+          "status": "FAIL",
+          "reason": "200 != 400 : {\"id\":\"test\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"ok\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":1,\"completion_tokens\":1}}",
+          "failure_kind": "AssertionError"
+        },
+        {
+          "guard": "test_T_THINK_02_07_rejection",
+          "arm": {
+            "arm": "non-object",
+            "kind": "int"
+          },
+          "status": "FAIL",
+          "reason": "200 != 400 : {\"id\":\"test\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"ok\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":1,\"completion_tokens\":1}}",
+          "failure_kind": "AssertionError"
+        },
+        {
+          "guard": "test_T_THINK_02_07_rejection",
+          "arm": {
+            "arm": "non-object",
+            "kind": "bool"
+          },
+          "status": "FAIL",
+          "reason": "200 != 400 : {\"id\":\"test\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"ok\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":1,\"completion_tokens\":1}}",
+          "failure_kind": "AssertionError"
+        }
+      ],
+      "counts": {
+        "PASS": 255,
+        "FAIL": 4,
+        "ERROR": 0
+      },
+      "exit_code": 1,
+      "log_sha256": "b5d34dd1e1b61ce73f4099411694e774c2417dcc5dddc7439cc1dfc3aa5dbc5c",
+      "restored_sha256": "27ab24c40bdc6e74628ee472abb06871e0fd8d2ea9dbf9b193e86c928f99bdbb"
+    },
+    {
+      "knife": "K-THINK2-6",
+      "mutation": "input budget floor drifts from adapter",
+      "status": "RED",
+      "target_guard": "T-THINK-02-04",
+      "target_arm": "04b-budget-table",
+      "failures": [
+        {
+          "guard": "test_T_THINK_02_04_budget",
+          "arm": {
+            "arm": "04b-budget-table"
+          },
+          "status": "FAIL",
+          "reason": "{'max': 64000, 'xhigh': 32000, 'high': 20000, 'medium': 10000, 'low': 4000} != {'low': 5000, 'medium': 10000, 'high': 20000, 'xhigh': 32000, 'max': 64000}\n- {'high': 20000, 'low': 4000, 'max': 64000, 'medium': 10000, 'xhigh': 32000}\n?                        ^\n\n+ {'high': 20000, 'low': 5000, 'max': 64000, 'medium': 10000, 'xhigh': 32000}\n?                        ^\n",
+          "failure_kind": "AssertionError"
+        }
+      ],
+      "counts": {
+        "PASS": 258,
+        "FAIL": 1,
+        "ERROR": 0
+      },
+      "exit_code": 1,
+      "log_sha256": "a5f06e9efe06ea481fcdf1fd49d9d61b860356cbef60882fe17d5d47c3b702d8",
+      "restored_sha256": "27ab24c40bdc6e74628ee472abb06871e0fd8d2ea9dbf9b193e86c928f99bdbb"
+    },
+    {
+      "knife": "K-THINK2-7",
+      "mutation": "echo raw reasoning object",
+      "status": "RED",
+      "target_guard": "T-THINK-02-08",
+      "target_arm": "",
+      "failures": [
+        {
+          "guard": "test_T_THINK_02_08_logs",
+          "arm": {
+            "arm": "no-echo",
+            "provider": "router",
+            "tools": false
+          },
+          "status": "FAIL",
+          "reason": "'ZZ-SENTINEL-think02-private' unexpectedly found in '{\\'effort\\': \\'high\\', \\'private\\': \\'ZZ-SENTINEL-think02-private\\'}\\nevent=reasoning_effort_resolved source=explicit_object effort=high\\n🔀 路由到供应商 [fixture]: https://openrouter.ai/api/v1\\n💾 Prompt 缓存跳过：prompt_cache_enabled=false\\n🔍 [思考链参数] reasoning={\\'enabled\\': True, \\'effort\\': \\'high\\'}, reasoning_effort=None, include_reasoning=None\\n🧩 运行时上下文已注入最后一条 user 消息（1 段）\\nHTTP Request: POST https://openrouter.ai/api/v1/chat/completions \"HTTP/1.1 200 <reason-redacted>\"\\nHTTP Request: POST http://localhost/v1/chat/completions \"HTTP/1.1 200 <reason-redacted>\"\\n'",
+          "failure_kind": "AssertionError"
+        },
+        {
+          "guard": "test_T_THINK_02_08_logs",
+          "arm": {
+            "arm": "no-echo",
+            "provider": "router",
+            "tools": true
+          },
+          "status": "FAIL",
+          "reason": "'ZZ-SENTINEL-think02-private' unexpectedly found in '{\\'effort\\': \\'high\\', \\'private\\': \\'ZZ-SENTINEL-think02-private\\'}\\nevent=reasoning_effort_resolved source=explicit_object effort=high\\n🔀 路由到供应商 [fixture]: https://openrouter.ai/api/v1\\n💾 Prompt 缓存跳过：prompt_cache_enabled=false\\n🔍 [思考链参数] reasoning={\\'enabled\\': True, \\'effort\\': \\'high\\'}, reasoning_effort=None, include_reasoning=None\\n⏰ 提醒工具已注册（常驻）\\n🧩 运行时上下文已注入最后一条 user 消息（1 段）\\n🔧 工具模式: 共 4 个工具可用\\n🔄 Tool loop round 1: 4 tools, 2 msgs (format=openai)\\n🔄 Round 1: tool_calls=0, has_content=True\\n⚡ 第一轮无工具调用，直接复用结果输出（省去二次请求）\\nHTTP Request: POST https://openrouter.ai/api/v1/chat/completions \"HTTP/1.1 200 <reason-redacted>\"\\nHTTP Request: POST http://localhost/v1/chat/completions \"HTTP/1.1 200 <reason-redacted>\"\\n'",
+          "failure_kind": "AssertionError"
+        },
+        {
+          "guard": "test_T_THINK_02_08_logs",
+          "arm": {
+            "arm": "no-echo",
+            "provider": "anthropic",
+            "tools": false
+          },
+          "status": "FAIL",
+          "reason": "'ZZ-SENTINEL-think02-private' unexpectedly found in '{\\'effort\\': \\'high\\', \\'private\\': \\'ZZ-SENTINEL-think02-private\\'}\\nevent=reasoning_effort_resolved source=explicit_object effort=high\\n🔀 路由到供应商 [fixture] (Anthropic 格式): https://anthropic.example/v1/messages\\n💾 Prompt 缓存跳过：prompt_cache_enabled=false\\n🔍 [思考链参数] reasoning={\\'enabled\\': True, \\'effort\\': \\'high\\'}, reasoning_effort=None, include_reasoning=None\\n🧩 运行时上下文已注入最后一条 user 消息（1 段）\\nHTTP Request: POST https://anthropic.example/v1/messages \"HTTP/1.1 200 <reason-redacted>\"\\nHTTP Request: POST http://localhost/v1/chat/completions \"HTTP/1.1 200 <reason-redacted>\"\\n'",
+          "failure_kind": "AssertionError"
+        },
+        {
+          "guard": "test_T_THINK_02_08_logs",
+          "arm": {
+            "arm": "no-echo",
+            "provider": "anthropic",
+            "tools": true
+          },
+          "status": "FAIL",
+          "reason": "'ZZ-SENTINEL-think02-private' unexpectedly found in '{\\'effort\\': \\'high\\', \\'private\\': \\'ZZ-SENTINEL-think02-private\\'}\\nevent=reasoning_effort_resolved source=explicit_object effort=high\\n🔀 路由到供应商 [fixture] (Anthropic 格式): https://anthropic.example/v1/messages\\n💾 Prompt 缓存跳过：prompt_cache_enabled=false\\n🔍 [思考链参数] reasoning={\\'enabled\\': True, \\'effort\\': \\'high\\'}, reasoning_effort=None, include_reasoning=None\\n⏰ 提醒工具已注册（常驻）\\n🧩 运行时上下文已注入最后一条 user 消息（1 段）\\n🔧 工具模式: 共 4 个工具可用\\n🔄 Tool loop round 1: 4 tools, 2 msgs (format=anthropic)\\n🔄 Round 1: tool_calls=0, has_content=True\\n⚡ 第一轮无工具调用，直接复用结果输出（省去二次请求）\\nHTTP Request: POST https://anthropic.example/v1/messages \"HTTP/1.1 200 <reason-redacted>\"\\nHTTP Request: POST http://localhost/v1/chat/completions \"HTTP/1.1 200 <reason-redacted>\"\\n'",
+          "failure_kind": "AssertionError"
+        },
+        {
+          "guard": "test_T_THINK_02_08_logs",
+          "arm": {
+            "arm": "no-echo",
+            "provider": "openai",
+            "tools": false
+          },
+          "status": "FAIL",
+          "reason": "'ZZ-SENTINEL-think02-private' unexpectedly found in '{\\'effort\\': \\'high\\', \\'private\\': \\'ZZ-SENTINEL-think02-private\\'}\\nevent=reasoning_effort_resolved source=explicit_object effort=high\\n🔀 路由到供应商 [fixture]: https://api.openai.com/v1\\n💾 Prompt 缓存跳过：prompt_cache_enabled=false\\n🔍 [思考链参数] reasoning=None, reasoning_effort=high, include_reasoning=None\\n🧩 运行时上下文已注入最后一条 user 消息（1 段）\\nHTTP Request: POST https://api.openai.com/v1/chat/completions \"HTTP/1.1 200 <reason-redacted>\"\\nHTTP Request: POST http://localhost/v1/chat/completions \"HTTP/1.1 200 <reason-redacted>\"\\n'",
+          "failure_kind": "AssertionError"
+        },
+        {
+          "guard": "test_T_THINK_02_08_logs",
+          "arm": {
+            "arm": "no-echo",
+            "provider": "openai",
+            "tools": true
+          },
+          "status": "FAIL",
+          "reason": "'ZZ-SENTINEL-think02-private' unexpectedly found in '{\\'effort\\': \\'high\\', \\'private\\': \\'ZZ-SENTINEL-think02-private\\'}\\nevent=reasoning_effort_resolved source=explicit_object effort=high\\n🔀 路由到供应商 [fixture]: https://api.openai.com/v1\\n💾 Prompt 缓存跳过：prompt_cache_enabled=false\\n🔍 [思考链参数] reasoning=None, reasoning_effort=high, include_reasoning=None\\n⏰ 提醒工具已注册（常驻）\\n🧩 运行时上下文已注入最后一条 user 消息（1 段）\\n🔧 工具模式: 共 4 个工具可用\\n🔄 Tool loop round 1: 4 tools, 2 msgs (format=openai)\\n🔄 Round 1: tool_calls=0, has_content=True\\n⚡ 第一轮无工具调用，直接复用结果输出（省去二次请求）\\nHTTP Request: POST https://api.openai.com/v1/chat/completions \"HTTP/1.1 200 <reason-redacted>\"\\nHTTP Request: POST http://localhost/v1/chat/completions \"HTTP/1.1 200 <reason-redacted>\"\\n'",
+          "failure_kind": "AssertionError"
+        },
+        {
+          "guard": "test_T_THINK_02_08_logs",
+          "arm": {
+            "arm": "no-echo",
+            "provider": "relay",
+            "tools": false
+          },
+          "status": "FAIL",
+          "reason": "'ZZ-SENTINEL-think02-private' unexpectedly found in '{\\'effort\\': \\'high\\', \\'private\\': \\'ZZ-SENTINEL-think02-private\\'}\\nevent=reasoning_effort_resolved source=explicit_object effort=high\\n🔀 路由到供应商 [fixture]: https://relay.example/v1\\n💾 Prompt 缓存跳过：prompt_cache_enabled=false\\n🔍 [思考链参数] reasoning=None, reasoning_effort=high, include_reasoning=None\\n🧩 运行时上下文已注入最后一条 user 消息（1 段）\\nHTTP Request: POST https://relay.example/v1/chat/completions \"HTTP/1.1 200 <reason-redacted>\"\\nHTTP Request: POST http://localhost/v1/chat/completions \"HTTP/1.1 200 <reason-redacted>\"\\n'",
+          "failure_kind": "AssertionError"
+        },
+        {
+          "guard": "test_T_THINK_02_08_logs",
+          "arm": {
+            "arm": "no-echo",
+            "provider": "relay",
+            "tools": true
+          },
+          "status": "FAIL",
+          "reason": "'ZZ-SENTINEL-think02-private' unexpectedly found in '{\\'effort\\': \\'high\\', \\'private\\': \\'ZZ-SENTINEL-think02-private\\'}\\nevent=reasoning_effort_resolved source=explicit_object effort=high\\n🔀 路由到供应商 [fixture]: https://relay.example/v1\\n💾 Prompt 缓存跳过：prompt_cache_enabled=false\\n🔍 [思考链参数] reasoning=None, reasoning_effort=high, include_reasoning=None\\n⏰ 提醒工具已注册（常驻）\\n🧩 运行时上下文已注入最后一条 user 消息（1 段）\\n🔧 工具模式: 共 4 个工具可用\\n🔄 Tool loop round 1: 4 tools, 2 msgs (format=openai)\\n🔄 Round 1: tool_calls=0, has_content=True\\n⚡ 第一轮无工具调用，直接复用结果输出（省去二次请求）\\nHTTP Request: POST https://relay.example/v1/chat/completions \"HTTP/1.1 200 <reason-redacted>\"\\nHTTP Request: POST http://localhost/v1/chat/completions \"HTTP/1.1 200 <reason-redacted>\"\\n'",
+          "failure_kind": "AssertionError"
+        }
+      ],
+      "counts": {
+        "PASS": 248,
+        "FAIL": 11,
+        "ERROR": 0
+      },
+      "exit_code": 1,
+      "log_sha256": "384377cfff490b53aee4008e91c8e01c54dbe024798c5bcd0a9ffebaae68da30",
+      "restored_sha256": "27ab24c40bdc6e74628ee472abb06871e0fd8d2ea9dbf9b193e86c928f99bdbb"
+    }
+  ]
+}

@@ -1,0 +1,2678 @@
+{
+  "ticket": "THINK-02",
+  "stage": "B",
+  "stage_a_counts": {
+    "PASS": 112,
+    "FAIL": 147,
+    "ERROR": 0
+  },
+  "stage_b_counts": {
+    "PASS": 259,
+    "FAIL": 0,
+    "ERROR": 0
+  },
+  "same_arm_set": true,
+  "arms": [
+    {
+      "guard": "test_T_THINK_02_00_aliases",
+      "arm": {
+        "arm": "aliases",
+        "provider": "router",
+        "tools": false,
+        "alias": "none"
+      },
+      "stage_a": "FAIL",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_00_aliases",
+      "arm": {
+        "arm": "aliases",
+        "provider": "router",
+        "tools": false,
+        "alias": "minimal"
+      },
+      "stage_a": "FAIL",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_00_aliases",
+      "arm": {
+        "arm": "aliases",
+        "provider": "router",
+        "tools": false,
+        "alias": " NONE "
+      },
+      "stage_a": "FAIL",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_00_aliases",
+      "arm": {
+        "arm": "aliases",
+        "provider": "router",
+        "tools": false,
+        "alias": " MiNiMaL "
+      },
+      "stage_a": "FAIL",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_00_aliases",
+      "arm": {
+        "arm": "aliases",
+        "provider": "router",
+        "tools": true,
+        "alias": "none"
+      },
+      "stage_a": "FAIL",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_00_aliases",
+      "arm": {
+        "arm": "aliases",
+        "provider": "router",
+        "tools": true,
+        "alias": "minimal"
+      },
+      "stage_a": "FAIL",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_00_aliases",
+      "arm": {
+        "arm": "aliases",
+        "provider": "router",
+        "tools": true,
+        "alias": " NONE "
+      },
+      "stage_a": "FAIL",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_00_aliases",
+      "arm": {
+        "arm": "aliases",
+        "provider": "router",
+        "tools": true,
+        "alias": " MiNiMaL "
+      },
+      "stage_a": "FAIL",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_00_aliases",
+      "arm": {
+        "arm": "aliases",
+        "provider": "anthropic",
+        "tools": false,
+        "alias": "none"
+      },
+      "stage_a": "FAIL",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_00_aliases",
+      "arm": {
+        "arm": "aliases",
+        "provider": "anthropic",
+        "tools": false,
+        "alias": "minimal"
+      },
+      "stage_a": "FAIL",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_00_aliases",
+      "arm": {
+        "arm": "aliases",
+        "provider": "anthropic",
+        "tools": false,
+        "alias": " NONE "
+      },
+      "stage_a": "FAIL",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_00_aliases",
+      "arm": {
+        "arm": "aliases",
+        "provider": "anthropic",
+        "tools": false,
+        "alias": " MiNiMaL "
+      },
+      "stage_a": "FAIL",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_00_aliases",
+      "arm": {
+        "arm": "aliases",
+        "provider": "anthropic",
+        "tools": true,
+        "alias": "none"
+      },
+      "stage_a": "FAIL",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_00_aliases",
+      "arm": {
+        "arm": "aliases",
+        "provider": "anthropic",
+        "tools": true,
+        "alias": "minimal"
+      },
+      "stage_a": "FAIL",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_00_aliases",
+      "arm": {
+        "arm": "aliases",
+        "provider": "anthropic",
+        "tools": true,
+        "alias": " NONE "
+      },
+      "stage_a": "FAIL",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_00_aliases",
+      "arm": {
+        "arm": "aliases",
+        "provider": "anthropic",
+        "tools": true,
+        "alias": " MiNiMaL "
+      },
+      "stage_a": "FAIL",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_00_aliases",
+      "arm": {
+        "arm": "aliases",
+        "provider": "openai",
+        "tools": false,
+        "alias": "none"
+      },
+      "stage_a": "FAIL",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_00_aliases",
+      "arm": {
+        "arm": "aliases",
+        "provider": "openai",
+        "tools": false,
+        "alias": "minimal"
+      },
+      "stage_a": "FAIL",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_00_aliases",
+      "arm": {
+        "arm": "aliases",
+        "provider": "openai",
+        "tools": false,
+        "alias": " NONE "
+      },
+      "stage_a": "FAIL",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_00_aliases",
+      "arm": {
+        "arm": "aliases",
+        "provider": "openai",
+        "tools": false,
+        "alias": " MiNiMaL "
+      },
+      "stage_a": "FAIL",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_00_aliases",
+      "arm": {
+        "arm": "aliases",
+        "provider": "openai",
+        "tools": true,
+        "alias": "none"
+      },
+      "stage_a": "FAIL",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_00_aliases",
+      "arm": {
+        "arm": "aliases",
+        "provider": "openai",
+        "tools": true,
+        "alias": "minimal"
+      },
+      "stage_a": "FAIL",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_00_aliases",
+      "arm": {
+        "arm": "aliases",
+        "provider": "openai",
+        "tools": true,
+        "alias": " NONE "
+      },
+      "stage_a": "FAIL",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_00_aliases",
+      "arm": {
+        "arm": "aliases",
+        "provider": "openai",
+        "tools": true,
+        "alias": " MiNiMaL "
+      },
+      "stage_a": "FAIL",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_00_aliases",
+      "arm": {
+        "arm": "aliases",
+        "provider": "relay",
+        "tools": false,
+        "alias": "none"
+      },
+      "stage_a": "FAIL",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_00_aliases",
+      "arm": {
+        "arm": "aliases",
+        "provider": "relay",
+        "tools": false,
+        "alias": "minimal"
+      },
+      "stage_a": "FAIL",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_00_aliases",
+      "arm": {
+        "arm": "aliases",
+        "provider": "relay",
+        "tools": false,
+        "alias": " NONE "
+      },
+      "stage_a": "FAIL",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_00_aliases",
+      "arm": {
+        "arm": "aliases",
+        "provider": "relay",
+        "tools": false,
+        "alias": " MiNiMaL "
+      },
+      "stage_a": "FAIL",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_00_aliases",
+      "arm": {
+        "arm": "aliases",
+        "provider": "relay",
+        "tools": true,
+        "alias": "none"
+      },
+      "stage_a": "FAIL",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_00_aliases",
+      "arm": {
+        "arm": "aliases",
+        "provider": "relay",
+        "tools": true,
+        "alias": "minimal"
+      },
+      "stage_a": "FAIL",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_00_aliases",
+      "arm": {
+        "arm": "aliases",
+        "provider": "relay",
+        "tools": true,
+        "alias": " NONE "
+      },
+      "stage_a": "FAIL",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_00_aliases",
+      "arm": {
+        "arm": "aliases",
+        "provider": "relay",
+        "tools": true,
+        "alias": " MiNiMaL "
+      },
+      "stage_a": "FAIL",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_00_aliases",
+      "arm": {
+        "arm": "ultra-continuation"
+      },
+      "stage_a": "PASS",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_00_aliases",
+      "arm": {
+        "arm": "explicit-log-continuation"
+      },
+      "stage_a": "PASS",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_01_object_entry",
+      "arm": {
+        "arm": "entry",
+        "effort": "off"
+      },
+      "stage_a": "FAIL",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_01_object_entry",
+      "arm": {
+        "arm": "entry",
+        "effort": "auto"
+      },
+      "stage_a": "FAIL",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_01_object_entry",
+      "arm": {
+        "arm": "entry",
+        "effort": "low"
+      },
+      "stage_a": "FAIL",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_01_object_entry",
+      "arm": {
+        "arm": "entry",
+        "effort": "medium"
+      },
+      "stage_a": "FAIL",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_01_object_entry",
+      "arm": {
+        "arm": "entry",
+        "effort": "high"
+      },
+      "stage_a": "FAIL",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_01_object_entry",
+      "arm": {
+        "arm": "entry",
+        "effort": "xhigh"
+      },
+      "stage_a": "FAIL",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_01_object_entry",
+      "arm": {
+        "arm": "entry",
+        "effort": "max"
+      },
+      "stage_a": "FAIL",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_01_object_entry",
+      "arm": {
+        "arm": "entry",
+        "effort": "none"
+      },
+      "stage_a": "FAIL",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_01_object_entry",
+      "arm": {
+        "arm": "entry",
+        "effort": "minimal"
+      },
+      "stage_a": "FAIL",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_01_object_entry",
+      "arm": {
+        "arm": "entry",
+        "effort": " NoNe "
+      },
+      "stage_a": "FAIL",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_01_object_entry",
+      "arm": {
+        "arm": "entry",
+        "effort": " MINIMAL "
+      },
+      "stage_a": "FAIL",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_02_outbound",
+      "arm": {
+        "arm": "object-outbound",
+        "provider": "router",
+        "tools": false,
+        "effort": "off"
+      },
+      "stage_a": "PASS",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_02_outbound",
+      "arm": {
+        "arm": "object-outbound",
+        "provider": "router",
+        "tools": false,
+        "effort": "auto"
+      },
+      "stage_a": "FAIL",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_02_outbound",
+      "arm": {
+        "arm": "object-outbound",
+        "provider": "router",
+        "tools": false,
+        "effort": "low"
+      },
+      "stage_a": "FAIL",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_02_outbound",
+      "arm": {
+        "arm": "object-outbound",
+        "provider": "router",
+        "tools": false,
+        "effort": "medium"
+      },
+      "stage_a": "FAIL",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_02_outbound",
+      "arm": {
+        "arm": "object-outbound",
+        "provider": "router",
+        "tools": false,
+        "effort": "high"
+      },
+      "stage_a": "FAIL",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_02_outbound",
+      "arm": {
+        "arm": "object-outbound",
+        "provider": "router",
+        "tools": false,
+        "effort": "xhigh"
+      },
+      "stage_a": "FAIL",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_02_outbound",
+      "arm": {
+        "arm": "object-outbound",
+        "provider": "router",
+        "tools": false,
+        "effort": "max"
+      },
+      "stage_a": "FAIL",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_02_outbound",
+      "arm": {
+        "arm": "object-outbound",
+        "provider": "router",
+        "tools": false,
+        "effort": "none"
+      },
+      "stage_a": "PASS",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_02_outbound",
+      "arm": {
+        "arm": "object-outbound",
+        "provider": "router",
+        "tools": false,
+        "effort": "minimal"
+      },
+      "stage_a": "FAIL",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_02_outbound",
+      "arm": {
+        "arm": "object-outbound",
+        "provider": "router",
+        "tools": true,
+        "effort": "off"
+      },
+      "stage_a": "PASS",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_02_outbound",
+      "arm": {
+        "arm": "object-outbound",
+        "provider": "router",
+        "tools": true,
+        "effort": "auto"
+      },
+      "stage_a": "FAIL",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_02_outbound",
+      "arm": {
+        "arm": "object-outbound",
+        "provider": "router",
+        "tools": true,
+        "effort": "low"
+      },
+      "stage_a": "FAIL",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_02_outbound",
+      "arm": {
+        "arm": "object-outbound",
+        "provider": "router",
+        "tools": true,
+        "effort": "medium"
+      },
+      "stage_a": "FAIL",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_02_outbound",
+      "arm": {
+        "arm": "object-outbound",
+        "provider": "router",
+        "tools": true,
+        "effort": "high"
+      },
+      "stage_a": "FAIL",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_02_outbound",
+      "arm": {
+        "arm": "object-outbound",
+        "provider": "router",
+        "tools": true,
+        "effort": "xhigh"
+      },
+      "stage_a": "FAIL",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_02_outbound",
+      "arm": {
+        "arm": "object-outbound",
+        "provider": "router",
+        "tools": true,
+        "effort": "max"
+      },
+      "stage_a": "FAIL",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_02_outbound",
+      "arm": {
+        "arm": "object-outbound",
+        "provider": "router",
+        "tools": true,
+        "effort": "none"
+      },
+      "stage_a": "PASS",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_02_outbound",
+      "arm": {
+        "arm": "object-outbound",
+        "provider": "router",
+        "tools": true,
+        "effort": "minimal"
+      },
+      "stage_a": "FAIL",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_02_outbound",
+      "arm": {
+        "arm": "object-outbound",
+        "provider": "anthropic",
+        "tools": false,
+        "effort": "off"
+      },
+      "stage_a": "PASS",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_02_outbound",
+      "arm": {
+        "arm": "object-outbound",
+        "provider": "anthropic",
+        "tools": false,
+        "effort": "auto"
+      },
+      "stage_a": "FAIL",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_02_outbound",
+      "arm": {
+        "arm": "object-outbound",
+        "provider": "anthropic",
+        "tools": false,
+        "effort": "low"
+      },
+      "stage_a": "FAIL",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_02_outbound",
+      "arm": {
+        "arm": "object-outbound",
+        "provider": "anthropic",
+        "tools": false,
+        "effort": "medium"
+      },
+      "stage_a": "FAIL",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_02_outbound",
+      "arm": {
+        "arm": "object-outbound",
+        "provider": "anthropic",
+        "tools": false,
+        "effort": "high"
+      },
+      "stage_a": "FAIL",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_02_outbound",
+      "arm": {
+        "arm": "object-outbound",
+        "provider": "anthropic",
+        "tools": false,
+        "effort": "xhigh"
+      },
+      "stage_a": "FAIL",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_02_outbound",
+      "arm": {
+        "arm": "object-outbound",
+        "provider": "anthropic",
+        "tools": false,
+        "effort": "max"
+      },
+      "stage_a": "FAIL",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_02_outbound",
+      "arm": {
+        "arm": "object-outbound",
+        "provider": "anthropic",
+        "tools": false,
+        "effort": "none"
+      },
+      "stage_a": "PASS",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_02_outbound",
+      "arm": {
+        "arm": "object-outbound",
+        "provider": "anthropic",
+        "tools": false,
+        "effort": "minimal"
+      },
+      "stage_a": "FAIL",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_02_outbound",
+      "arm": {
+        "arm": "object-outbound",
+        "provider": "anthropic",
+        "tools": true,
+        "effort": "off"
+      },
+      "stage_a": "PASS",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_02_outbound",
+      "arm": {
+        "arm": "object-outbound",
+        "provider": "anthropic",
+        "tools": true,
+        "effort": "auto"
+      },
+      "stage_a": "FAIL",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_02_outbound",
+      "arm": {
+        "arm": "object-outbound",
+        "provider": "anthropic",
+        "tools": true,
+        "effort": "low"
+      },
+      "stage_a": "FAIL",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_02_outbound",
+      "arm": {
+        "arm": "object-outbound",
+        "provider": "anthropic",
+        "tools": true,
+        "effort": "medium"
+      },
+      "stage_a": "FAIL",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_02_outbound",
+      "arm": {
+        "arm": "object-outbound",
+        "provider": "anthropic",
+        "tools": true,
+        "effort": "high"
+      },
+      "stage_a": "FAIL",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_02_outbound",
+      "arm": {
+        "arm": "object-outbound",
+        "provider": "anthropic",
+        "tools": true,
+        "effort": "xhigh"
+      },
+      "stage_a": "FAIL",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_02_outbound",
+      "arm": {
+        "arm": "object-outbound",
+        "provider": "anthropic",
+        "tools": true,
+        "effort": "max"
+      },
+      "stage_a": "FAIL",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_02_outbound",
+      "arm": {
+        "arm": "object-outbound",
+        "provider": "anthropic",
+        "tools": true,
+        "effort": "none"
+      },
+      "stage_a": "PASS",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_02_outbound",
+      "arm": {
+        "arm": "object-outbound",
+        "provider": "anthropic",
+        "tools": true,
+        "effort": "minimal"
+      },
+      "stage_a": "FAIL",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_02_outbound",
+      "arm": {
+        "arm": "object-outbound",
+        "provider": "openai",
+        "tools": false,
+        "effort": "off"
+      },
+      "stage_a": "PASS",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_02_outbound",
+      "arm": {
+        "arm": "object-outbound",
+        "provider": "openai",
+        "tools": false,
+        "effort": "auto"
+      },
+      "stage_a": "PASS",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_02_outbound",
+      "arm": {
+        "arm": "object-outbound",
+        "provider": "openai",
+        "tools": false,
+        "effort": "low"
+      },
+      "stage_a": "FAIL",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_02_outbound",
+      "arm": {
+        "arm": "object-outbound",
+        "provider": "openai",
+        "tools": false,
+        "effort": "medium"
+      },
+      "stage_a": "FAIL",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_02_outbound",
+      "arm": {
+        "arm": "object-outbound",
+        "provider": "openai",
+        "tools": false,
+        "effort": "high"
+      },
+      "stage_a": "FAIL",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_02_outbound",
+      "arm": {
+        "arm": "object-outbound",
+        "provider": "openai",
+        "tools": false,
+        "effort": "xhigh"
+      },
+      "stage_a": "FAIL",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_02_outbound",
+      "arm": {
+        "arm": "object-outbound",
+        "provider": "openai",
+        "tools": false,
+        "effort": "max"
+      },
+      "stage_a": "FAIL",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_02_outbound",
+      "arm": {
+        "arm": "object-outbound",
+        "provider": "openai",
+        "tools": false,
+        "effort": "none"
+      },
+      "stage_a": "PASS",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_02_outbound",
+      "arm": {
+        "arm": "object-outbound",
+        "provider": "openai",
+        "tools": false,
+        "effort": "minimal"
+      },
+      "stage_a": "FAIL",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_02_outbound",
+      "arm": {
+        "arm": "object-outbound",
+        "provider": "openai",
+        "tools": true,
+        "effort": "off"
+      },
+      "stage_a": "PASS",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_02_outbound",
+      "arm": {
+        "arm": "object-outbound",
+        "provider": "openai",
+        "tools": true,
+        "effort": "auto"
+      },
+      "stage_a": "PASS",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_02_outbound",
+      "arm": {
+        "arm": "object-outbound",
+        "provider": "openai",
+        "tools": true,
+        "effort": "low"
+      },
+      "stage_a": "FAIL",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_02_outbound",
+      "arm": {
+        "arm": "object-outbound",
+        "provider": "openai",
+        "tools": true,
+        "effort": "medium"
+      },
+      "stage_a": "FAIL",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_02_outbound",
+      "arm": {
+        "arm": "object-outbound",
+        "provider": "openai",
+        "tools": true,
+        "effort": "high"
+      },
+      "stage_a": "FAIL",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_02_outbound",
+      "arm": {
+        "arm": "object-outbound",
+        "provider": "openai",
+        "tools": true,
+        "effort": "xhigh"
+      },
+      "stage_a": "FAIL",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_02_outbound",
+      "arm": {
+        "arm": "object-outbound",
+        "provider": "openai",
+        "tools": true,
+        "effort": "max"
+      },
+      "stage_a": "FAIL",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_02_outbound",
+      "arm": {
+        "arm": "object-outbound",
+        "provider": "openai",
+        "tools": true,
+        "effort": "none"
+      },
+      "stage_a": "PASS",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_02_outbound",
+      "arm": {
+        "arm": "object-outbound",
+        "provider": "openai",
+        "tools": true,
+        "effort": "minimal"
+      },
+      "stage_a": "FAIL",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_02_outbound",
+      "arm": {
+        "arm": "object-outbound",
+        "provider": "relay",
+        "tools": false,
+        "effort": "off"
+      },
+      "stage_a": "PASS",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_02_outbound",
+      "arm": {
+        "arm": "object-outbound",
+        "provider": "relay",
+        "tools": false,
+        "effort": "auto"
+      },
+      "stage_a": "PASS",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_02_outbound",
+      "arm": {
+        "arm": "object-outbound",
+        "provider": "relay",
+        "tools": false,
+        "effort": "low"
+      },
+      "stage_a": "FAIL",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_02_outbound",
+      "arm": {
+        "arm": "object-outbound",
+        "provider": "relay",
+        "tools": false,
+        "effort": "medium"
+      },
+      "stage_a": "FAIL",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_02_outbound",
+      "arm": {
+        "arm": "object-outbound",
+        "provider": "relay",
+        "tools": false,
+        "effort": "high"
+      },
+      "stage_a": "FAIL",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_02_outbound",
+      "arm": {
+        "arm": "object-outbound",
+        "provider": "relay",
+        "tools": false,
+        "effort": "xhigh"
+      },
+      "stage_a": "FAIL",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_02_outbound",
+      "arm": {
+        "arm": "object-outbound",
+        "provider": "relay",
+        "tools": false,
+        "effort": "max"
+      },
+      "stage_a": "FAIL",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_02_outbound",
+      "arm": {
+        "arm": "object-outbound",
+        "provider": "relay",
+        "tools": false,
+        "effort": "none"
+      },
+      "stage_a": "PASS",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_02_outbound",
+      "arm": {
+        "arm": "object-outbound",
+        "provider": "relay",
+        "tools": false,
+        "effort": "minimal"
+      },
+      "stage_a": "FAIL",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_02_outbound",
+      "arm": {
+        "arm": "object-outbound",
+        "provider": "relay",
+        "tools": true,
+        "effort": "off"
+      },
+      "stage_a": "PASS",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_02_outbound",
+      "arm": {
+        "arm": "object-outbound",
+        "provider": "relay",
+        "tools": true,
+        "effort": "auto"
+      },
+      "stage_a": "PASS",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_02_outbound",
+      "arm": {
+        "arm": "object-outbound",
+        "provider": "relay",
+        "tools": true,
+        "effort": "low"
+      },
+      "stage_a": "FAIL",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_02_outbound",
+      "arm": {
+        "arm": "object-outbound",
+        "provider": "relay",
+        "tools": true,
+        "effort": "medium"
+      },
+      "stage_a": "FAIL",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_02_outbound",
+      "arm": {
+        "arm": "object-outbound",
+        "provider": "relay",
+        "tools": true,
+        "effort": "high"
+      },
+      "stage_a": "FAIL",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_02_outbound",
+      "arm": {
+        "arm": "object-outbound",
+        "provider": "relay",
+        "tools": true,
+        "effort": "xhigh"
+      },
+      "stage_a": "FAIL",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_02_outbound",
+      "arm": {
+        "arm": "object-outbound",
+        "provider": "relay",
+        "tools": true,
+        "effort": "max"
+      },
+      "stage_a": "FAIL",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_02_outbound",
+      "arm": {
+        "arm": "object-outbound",
+        "provider": "relay",
+        "tools": true,
+        "effort": "none"
+      },
+      "stage_a": "PASS",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_02_outbound",
+      "arm": {
+        "arm": "object-outbound",
+        "provider": "relay",
+        "tools": true,
+        "effort": "minimal"
+      },
+      "stage_a": "FAIL",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_02_outbound",
+      "arm": {
+        "arm": "legacy-output-continuation",
+        "provider": "router",
+        "tools": false,
+        "effort": "off"
+      },
+      "stage_a": "PASS",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_02_outbound",
+      "arm": {
+        "arm": "legacy-output-continuation",
+        "provider": "router",
+        "tools": false,
+        "effort": "auto"
+      },
+      "stage_a": "PASS",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_02_outbound",
+      "arm": {
+        "arm": "legacy-output-continuation",
+        "provider": "router",
+        "tools": false,
+        "effort": "low"
+      },
+      "stage_a": "PASS",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_02_outbound",
+      "arm": {
+        "arm": "legacy-output-continuation",
+        "provider": "router",
+        "tools": false,
+        "effort": "medium"
+      },
+      "stage_a": "PASS",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_02_outbound",
+      "arm": {
+        "arm": "legacy-output-continuation",
+        "provider": "router",
+        "tools": false,
+        "effort": "high"
+      },
+      "stage_a": "PASS",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_02_outbound",
+      "arm": {
+        "arm": "legacy-output-continuation",
+        "provider": "router",
+        "tools": false,
+        "effort": "xhigh"
+      },
+      "stage_a": "PASS",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_02_outbound",
+      "arm": {
+        "arm": "legacy-output-continuation",
+        "provider": "router",
+        "tools": false,
+        "effort": "max"
+      },
+      "stage_a": "PASS",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_02_outbound",
+      "arm": {
+        "arm": "legacy-output-continuation",
+        "provider": "router",
+        "tools": true,
+        "effort": "off"
+      },
+      "stage_a": "PASS",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_02_outbound",
+      "arm": {
+        "arm": "legacy-output-continuation",
+        "provider": "router",
+        "tools": true,
+        "effort": "auto"
+      },
+      "stage_a": "PASS",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_02_outbound",
+      "arm": {
+        "arm": "legacy-output-continuation",
+        "provider": "router",
+        "tools": true,
+        "effort": "low"
+      },
+      "stage_a": "PASS",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_02_outbound",
+      "arm": {
+        "arm": "legacy-output-continuation",
+        "provider": "router",
+        "tools": true,
+        "effort": "medium"
+      },
+      "stage_a": "PASS",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_02_outbound",
+      "arm": {
+        "arm": "legacy-output-continuation",
+        "provider": "router",
+        "tools": true,
+        "effort": "high"
+      },
+      "stage_a": "PASS",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_02_outbound",
+      "arm": {
+        "arm": "legacy-output-continuation",
+        "provider": "router",
+        "tools": true,
+        "effort": "xhigh"
+      },
+      "stage_a": "PASS",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_02_outbound",
+      "arm": {
+        "arm": "legacy-output-continuation",
+        "provider": "router",
+        "tools": true,
+        "effort": "max"
+      },
+      "stage_a": "PASS",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_02_outbound",
+      "arm": {
+        "arm": "legacy-output-continuation",
+        "provider": "anthropic",
+        "tools": false,
+        "effort": "off"
+      },
+      "stage_a": "PASS",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_02_outbound",
+      "arm": {
+        "arm": "legacy-output-continuation",
+        "provider": "anthropic",
+        "tools": false,
+        "effort": "auto"
+      },
+      "stage_a": "PASS",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_02_outbound",
+      "arm": {
+        "arm": "legacy-output-continuation",
+        "provider": "anthropic",
+        "tools": false,
+        "effort": "low"
+      },
+      "stage_a": "PASS",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_02_outbound",
+      "arm": {
+        "arm": "legacy-output-continuation",
+        "provider": "anthropic",
+        "tools": false,
+        "effort": "medium"
+      },
+      "stage_a": "PASS",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_02_outbound",
+      "arm": {
+        "arm": "legacy-output-continuation",
+        "provider": "anthropic",
+        "tools": false,
+        "effort": "high"
+      },
+      "stage_a": "PASS",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_02_outbound",
+      "arm": {
+        "arm": "legacy-output-continuation",
+        "provider": "anthropic",
+        "tools": false,
+        "effort": "xhigh"
+      },
+      "stage_a": "PASS",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_02_outbound",
+      "arm": {
+        "arm": "legacy-output-continuation",
+        "provider": "anthropic",
+        "tools": false,
+        "effort": "max"
+      },
+      "stage_a": "PASS",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_02_outbound",
+      "arm": {
+        "arm": "legacy-output-continuation",
+        "provider": "anthropic",
+        "tools": true,
+        "effort": "off"
+      },
+      "stage_a": "PASS",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_02_outbound",
+      "arm": {
+        "arm": "legacy-output-continuation",
+        "provider": "anthropic",
+        "tools": true,
+        "effort": "auto"
+      },
+      "stage_a": "PASS",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_02_outbound",
+      "arm": {
+        "arm": "legacy-output-continuation",
+        "provider": "anthropic",
+        "tools": true,
+        "effort": "low"
+      },
+      "stage_a": "PASS",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_02_outbound",
+      "arm": {
+        "arm": "legacy-output-continuation",
+        "provider": "anthropic",
+        "tools": true,
+        "effort": "medium"
+      },
+      "stage_a": "PASS",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_02_outbound",
+      "arm": {
+        "arm": "legacy-output-continuation",
+        "provider": "anthropic",
+        "tools": true,
+        "effort": "high"
+      },
+      "stage_a": "PASS",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_02_outbound",
+      "arm": {
+        "arm": "legacy-output-continuation",
+        "provider": "anthropic",
+        "tools": true,
+        "effort": "xhigh"
+      },
+      "stage_a": "PASS",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_02_outbound",
+      "arm": {
+        "arm": "legacy-output-continuation",
+        "provider": "anthropic",
+        "tools": true,
+        "effort": "max"
+      },
+      "stage_a": "PASS",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_02_outbound",
+      "arm": {
+        "arm": "legacy-output-continuation",
+        "provider": "openai",
+        "tools": false,
+        "effort": "off"
+      },
+      "stage_a": "PASS",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_02_outbound",
+      "arm": {
+        "arm": "legacy-output-continuation",
+        "provider": "openai",
+        "tools": false,
+        "effort": "auto"
+      },
+      "stage_a": "PASS",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_02_outbound",
+      "arm": {
+        "arm": "legacy-output-continuation",
+        "provider": "openai",
+        "tools": false,
+        "effort": "low"
+      },
+      "stage_a": "PASS",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_02_outbound",
+      "arm": {
+        "arm": "legacy-output-continuation",
+        "provider": "openai",
+        "tools": false,
+        "effort": "medium"
+      },
+      "stage_a": "PASS",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_02_outbound",
+      "arm": {
+        "arm": "legacy-output-continuation",
+        "provider": "openai",
+        "tools": false,
+        "effort": "high"
+      },
+      "stage_a": "PASS",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_02_outbound",
+      "arm": {
+        "arm": "legacy-output-continuation",
+        "provider": "openai",
+        "tools": false,
+        "effort": "xhigh"
+      },
+      "stage_a": "PASS",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_02_outbound",
+      "arm": {
+        "arm": "legacy-output-continuation",
+        "provider": "openai",
+        "tools": false,
+        "effort": "max"
+      },
+      "stage_a": "PASS",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_02_outbound",
+      "arm": {
+        "arm": "legacy-output-continuation",
+        "provider": "openai",
+        "tools": true,
+        "effort": "off"
+      },
+      "stage_a": "PASS",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_02_outbound",
+      "arm": {
+        "arm": "legacy-output-continuation",
+        "provider": "openai",
+        "tools": true,
+        "effort": "auto"
+      },
+      "stage_a": "PASS",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_02_outbound",
+      "arm": {
+        "arm": "legacy-output-continuation",
+        "provider": "openai",
+        "tools": true,
+        "effort": "low"
+      },
+      "stage_a": "PASS",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_02_outbound",
+      "arm": {
+        "arm": "legacy-output-continuation",
+        "provider": "openai",
+        "tools": true,
+        "effort": "medium"
+      },
+      "stage_a": "PASS",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_02_outbound",
+      "arm": {
+        "arm": "legacy-output-continuation",
+        "provider": "openai",
+        "tools": true,
+        "effort": "high"
+      },
+      "stage_a": "PASS",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_02_outbound",
+      "arm": {
+        "arm": "legacy-output-continuation",
+        "provider": "openai",
+        "tools": true,
+        "effort": "xhigh"
+      },
+      "stage_a": "PASS",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_02_outbound",
+      "arm": {
+        "arm": "legacy-output-continuation",
+        "provider": "openai",
+        "tools": true,
+        "effort": "max"
+      },
+      "stage_a": "PASS",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_02_outbound",
+      "arm": {
+        "arm": "legacy-output-continuation",
+        "provider": "relay",
+        "tools": false,
+        "effort": "off"
+      },
+      "stage_a": "PASS",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_02_outbound",
+      "arm": {
+        "arm": "legacy-output-continuation",
+        "provider": "relay",
+        "tools": false,
+        "effort": "auto"
+      },
+      "stage_a": "PASS",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_02_outbound",
+      "arm": {
+        "arm": "legacy-output-continuation",
+        "provider": "relay",
+        "tools": false,
+        "effort": "low"
+      },
+      "stage_a": "PASS",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_02_outbound",
+      "arm": {
+        "arm": "legacy-output-continuation",
+        "provider": "relay",
+        "tools": false,
+        "effort": "medium"
+      },
+      "stage_a": "PASS",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_02_outbound",
+      "arm": {
+        "arm": "legacy-output-continuation",
+        "provider": "relay",
+        "tools": false,
+        "effort": "high"
+      },
+      "stage_a": "PASS",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_02_outbound",
+      "arm": {
+        "arm": "legacy-output-continuation",
+        "provider": "relay",
+        "tools": false,
+        "effort": "xhigh"
+      },
+      "stage_a": "PASS",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_02_outbound",
+      "arm": {
+        "arm": "legacy-output-continuation",
+        "provider": "relay",
+        "tools": false,
+        "effort": "max"
+      },
+      "stage_a": "PASS",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_02_outbound",
+      "arm": {
+        "arm": "legacy-output-continuation",
+        "provider": "relay",
+        "tools": true,
+        "effort": "off"
+      },
+      "stage_a": "PASS",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_02_outbound",
+      "arm": {
+        "arm": "legacy-output-continuation",
+        "provider": "relay",
+        "tools": true,
+        "effort": "auto"
+      },
+      "stage_a": "PASS",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_02_outbound",
+      "arm": {
+        "arm": "legacy-output-continuation",
+        "provider": "relay",
+        "tools": true,
+        "effort": "low"
+      },
+      "stage_a": "PASS",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_02_outbound",
+      "arm": {
+        "arm": "legacy-output-continuation",
+        "provider": "relay",
+        "tools": true,
+        "effort": "medium"
+      },
+      "stage_a": "PASS",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_02_outbound",
+      "arm": {
+        "arm": "legacy-output-continuation",
+        "provider": "relay",
+        "tools": true,
+        "effort": "high"
+      },
+      "stage_a": "PASS",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_02_outbound",
+      "arm": {
+        "arm": "legacy-output-continuation",
+        "provider": "relay",
+        "tools": true,
+        "effort": "xhigh"
+      },
+      "stage_a": "PASS",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_02_outbound",
+      "arm": {
+        "arm": "legacy-output-continuation",
+        "provider": "relay",
+        "tools": true,
+        "effort": "max"
+      },
+      "stage_a": "PASS",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_02_outbound",
+      "arm": {
+        "arm": "low-cap-continuation"
+      },
+      "stage_a": "PASS",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_03_panel_conflict",
+      "arm": {
+        "provider": "router",
+        "tools": false
+      },
+      "stage_a": "FAIL",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_03_panel_conflict",
+      "arm": {
+        "provider": "router",
+        "tools": true
+      },
+      "stage_a": "FAIL",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_03_panel_conflict",
+      "arm": {
+        "provider": "anthropic",
+        "tools": false
+      },
+      "stage_a": "FAIL",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_03_panel_conflict",
+      "arm": {
+        "provider": "anthropic",
+        "tools": true
+      },
+      "stage_a": "FAIL",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_03_panel_conflict",
+      "arm": {
+        "provider": "openai",
+        "tools": false
+      },
+      "stage_a": "FAIL",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_03_panel_conflict",
+      "arm": {
+        "provider": "openai",
+        "tools": true
+      },
+      "stage_a": "FAIL",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_03_panel_conflict",
+      "arm": {
+        "provider": "relay",
+        "tools": false
+      },
+      "stage_a": "FAIL",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_03_panel_conflict",
+      "arm": {
+        "provider": "relay",
+        "tools": true
+      },
+      "stage_a": "FAIL",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_04_budget",
+      "arm": {
+        "arm": "04a-entry",
+        "budget": 1
+      },
+      "stage_a": "FAIL",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_04_budget",
+      "arm": {
+        "arm": "04a-entry",
+        "budget": 1024
+      },
+      "stage_a": "FAIL",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_04_budget",
+      "arm": {
+        "arm": "04a-entry",
+        "budget": 4999
+      },
+      "stage_a": "FAIL",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_04_budget",
+      "arm": {
+        "arm": "04a-entry",
+        "budget": 5000
+      },
+      "stage_a": "FAIL",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_04_budget",
+      "arm": {
+        "arm": "04a-entry",
+        "budget": 9999
+      },
+      "stage_a": "FAIL",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_04_budget",
+      "arm": {
+        "arm": "04a-entry",
+        "budget": 10000
+      },
+      "stage_a": "FAIL",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_04_budget",
+      "arm": {
+        "arm": "04a-entry",
+        "budget": 19999
+      },
+      "stage_a": "FAIL",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_04_budget",
+      "arm": {
+        "arm": "04a-entry",
+        "budget": 20000
+      },
+      "stage_a": "FAIL",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_04_budget",
+      "arm": {
+        "arm": "04a-entry",
+        "budget": 31999
+      },
+      "stage_a": "FAIL",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_04_budget",
+      "arm": {
+        "arm": "04a-entry",
+        "budget": 32000
+      },
+      "stage_a": "FAIL",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_04_budget",
+      "arm": {
+        "arm": "04a-entry",
+        "budget": 63999
+      },
+      "stage_a": "FAIL",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_04_budget",
+      "arm": {
+        "arm": "04a-entry",
+        "budget": 64000
+      },
+      "stage_a": "FAIL",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_04_budget",
+      "arm": {
+        "arm": "04a-entry",
+        "budget": 64001
+      },
+      "stage_a": "FAIL",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_04_budget",
+      "arm": {
+        "arm": "04b-budget-table"
+      },
+      "stage_a": "FAIL",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_05_auto",
+      "arm": {
+        "case": 0
+      },
+      "stage_a": "FAIL",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_05_auto",
+      "arm": {
+        "case": 1
+      },
+      "stage_a": "FAIL",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_05_auto",
+      "arm": {
+        "case": 2
+      },
+      "stage_a": "FAIL",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_05_auto",
+      "arm": {
+        "case": 3
+      },
+      "stage_a": "FAIL",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_05_auto",
+      "arm": {
+        "case": 4
+      },
+      "stage_a": "FAIL",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_05_auto",
+      "arm": {
+        "case": 5
+      },
+      "stage_a": "FAIL",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_05_auto",
+      "arm": {
+        "case": 6
+      },
+      "stage_a": "FAIL",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_05_auto",
+      "arm": {
+        "case": 7
+      },
+      "stage_a": "FAIL",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_05_auto",
+      "arm": {
+        "case": 8
+      },
+      "stage_a": "FAIL",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_06_precedence",
+      "arm": {
+        "arm": "string-wins-continuation",
+        "other_type": "dict",
+        "other": "{'effort': 'low'}"
+      },
+      "stage_a": "PASS",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_06_precedence",
+      "arm": {
+        "arm": "string-wins-continuation",
+        "other_type": "dict",
+        "other": "{'enabled': False}"
+      },
+      "stage_a": "PASS",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_06_precedence",
+      "arm": {
+        "arm": "string-wins-continuation",
+        "other_type": "str",
+        "other": "ZZ-SENTINEL-think02-private"
+      },
+      "stage_a": "PASS",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_06_precedence",
+      "arm": {
+        "arm": "string-wins-continuation",
+        "other_type": "list",
+        "other": "[]"
+      },
+      "stage_a": "PASS",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_06_precedence",
+      "arm": {
+        "arm": "string-wins-continuation",
+        "other_type": "int",
+        "other": "42"
+      },
+      "stage_a": "PASS",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_06_precedence",
+      "arm": {
+        "arm": "invalid-string-continuation",
+        "value_type": "str"
+      },
+      "stage_a": "PASS",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_06_precedence",
+      "arm": {
+        "arm": "invalid-string-continuation",
+        "value_type": "int"
+      },
+      "stage_a": "PASS",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_06_precedence",
+      "arm": {
+        "arm": "invalid-string-continuation",
+        "value_type": "bool"
+      },
+      "stage_a": "PASS",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_06_precedence",
+      "arm": {
+        "arm": "invalid-string-continuation",
+        "value_type": "list"
+      },
+      "stage_a": "PASS",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_06_precedence",
+      "arm": {
+        "arm": "null"
+      },
+      "stage_a": "FAIL",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_06_precedence",
+      "arm": {
+        "arm": "table12"
+      },
+      "stage_a": "FAIL",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_06_precedence",
+      "arm": {
+        "arm": "table13"
+      },
+      "stage_a": "FAIL",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_06_precedence",
+      "arm": {
+        "arm": "disabled-invalid"
+      },
+      "stage_a": "FAIL",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_06_precedence",
+      "arm": {
+        "arm": "table14"
+      },
+      "stage_a": "FAIL",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_06_precedence",
+      "arm": {
+        "arm": "table15"
+      },
+      "stage_a": "FAIL",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_06_precedence",
+      "arm": {
+        "arm": "absent-panel-continuation",
+        "explicit_null": false,
+        "object_null": false
+      },
+      "stage_a": "PASS",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_06_precedence",
+      "arm": {
+        "arm": "absent-panel-continuation",
+        "explicit_null": true,
+        "object_null": true
+      },
+      "stage_a": "PASS",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_06_precedence",
+      "arm": {
+        "arm": "absent-panel-continuation",
+        "explicit_null": false,
+        "object_null": true
+      },
+      "stage_a": "PASS",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_06_precedence",
+      "arm": {
+        "arm": "include-reasoning-continuation",
+        "provider": "router",
+        "tools": false
+      },
+      "stage_a": "PASS",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_06_precedence",
+      "arm": {
+        "arm": "include-reasoning-continuation",
+        "provider": "router",
+        "tools": true
+      },
+      "stage_a": "PASS",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_06_precedence",
+      "arm": {
+        "arm": "include-reasoning-continuation",
+        "provider": "anthropic",
+        "tools": false
+      },
+      "stage_a": "PASS",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_06_precedence",
+      "arm": {
+        "arm": "include-reasoning-continuation",
+        "provider": "anthropic",
+        "tools": true
+      },
+      "stage_a": "PASS",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_06_precedence",
+      "arm": {
+        "arm": "include-reasoning-continuation",
+        "provider": "openai",
+        "tools": false
+      },
+      "stage_a": "PASS",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_06_precedence",
+      "arm": {
+        "arm": "include-reasoning-continuation",
+        "provider": "openai",
+        "tools": true
+      },
+      "stage_a": "PASS",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_06_precedence",
+      "arm": {
+        "arm": "include-reasoning-continuation",
+        "provider": "relay",
+        "tools": false
+      },
+      "stage_a": "PASS",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_06_precedence",
+      "arm": {
+        "arm": "include-reasoning-continuation",
+        "provider": "relay",
+        "tools": true
+      },
+      "stage_a": "PASS",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_07_rejection",
+      "arm": {
+        "arm": "non-object",
+        "kind": "str"
+      },
+      "stage_a": "FAIL",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_07_rejection",
+      "arm": {
+        "arm": "non-object",
+        "kind": "list"
+      },
+      "stage_a": "FAIL",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_07_rejection",
+      "arm": {
+        "arm": "non-object",
+        "kind": "int"
+      },
+      "stage_a": "FAIL",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_07_rejection",
+      "arm": {
+        "arm": "non-object",
+        "kind": "bool"
+      },
+      "stage_a": "FAIL",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_07_rejection",
+      "arm": {
+        "arm": "invalid-effort",
+        "value": "ZZ-SENTINEL-think02-private"
+      },
+      "stage_a": "FAIL",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_07_rejection",
+      "arm": {
+        "arm": "invalid-effort",
+        "value": ""
+      },
+      "stage_a": "FAIL",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_07_rejection",
+      "arm": {
+        "arm": "invalid-effort",
+        "value": 4
+      },
+      "stage_a": "FAIL",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_07_rejection",
+      "arm": {
+        "arm": "string-rejection-continuation"
+      },
+      "stage_a": "PASS",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_08_logs",
+      "arm": {
+        "arm": "source",
+        "provider": "router",
+        "tools": false
+      },
+      "stage_a": "FAIL",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_08_logs",
+      "arm": {
+        "arm": "no-echo",
+        "provider": "router",
+        "tools": false
+      },
+      "stage_a": "PASS",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_08_logs",
+      "arm": {
+        "arm": "source",
+        "provider": "router",
+        "tools": true
+      },
+      "stage_a": "FAIL",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_08_logs",
+      "arm": {
+        "arm": "no-echo",
+        "provider": "router",
+        "tools": true
+      },
+      "stage_a": "PASS",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_08_logs",
+      "arm": {
+        "arm": "source",
+        "provider": "anthropic",
+        "tools": false
+      },
+      "stage_a": "FAIL",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_08_logs",
+      "arm": {
+        "arm": "no-echo",
+        "provider": "anthropic",
+        "tools": false
+      },
+      "stage_a": "PASS",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_08_logs",
+      "arm": {
+        "arm": "source",
+        "provider": "anthropic",
+        "tools": true
+      },
+      "stage_a": "FAIL",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_08_logs",
+      "arm": {
+        "arm": "no-echo",
+        "provider": "anthropic",
+        "tools": true
+      },
+      "stage_a": "PASS",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_08_logs",
+      "arm": {
+        "arm": "source",
+        "provider": "openai",
+        "tools": false
+      },
+      "stage_a": "FAIL",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_08_logs",
+      "arm": {
+        "arm": "no-echo",
+        "provider": "openai",
+        "tools": false
+      },
+      "stage_a": "PASS",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_08_logs",
+      "arm": {
+        "arm": "source",
+        "provider": "openai",
+        "tools": true
+      },
+      "stage_a": "FAIL",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_08_logs",
+      "arm": {
+        "arm": "no-echo",
+        "provider": "openai",
+        "tools": true
+      },
+      "stage_a": "PASS",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_08_logs",
+      "arm": {
+        "arm": "source",
+        "provider": "relay",
+        "tools": false
+      },
+      "stage_a": "FAIL",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_08_logs",
+      "arm": {
+        "arm": "no-echo",
+        "provider": "relay",
+        "tools": false
+      },
+      "stage_a": "PASS",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_08_logs",
+      "arm": {
+        "arm": "source",
+        "provider": "relay",
+        "tools": true
+      },
+      "stage_a": "FAIL",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_08_logs",
+      "arm": {
+        "arm": "no-echo",
+        "provider": "relay",
+        "tools": true
+      },
+      "stage_a": "PASS",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_09_regression",
+      "arm": {
+        "arm": "zero-diff",
+        "node": "_apply_reasoning"
+      },
+      "stage_a": "PASS",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_09_regression",
+      "arm": {
+        "arm": "zero-diff",
+        "node": "_EFFORT_BUDGET"
+      },
+      "stage_a": "PASS",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_09_regression",
+      "arm": {
+        "arm": "THINK-01-12"
+      },
+      "stage_a": "PASS",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "test_T_THINK_02_09_regression",
+      "arm": {
+        "arm": "ERR-01-X1"
+      },
+      "stage_a": "PASS",
+      "stage_b": "PASS"
+    }
+  ]
+}
