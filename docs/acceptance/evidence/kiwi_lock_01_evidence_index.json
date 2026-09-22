@@ -1,0 +1,101 @@
+{
+  "head": "788bfd1c6b741729434538243802a0be0f20d57b",
+  "ledgers": [
+    {
+      "file": "kiwi_build_01_knives.json",
+      "replay_head": "788bfd1c6b741729434538243802a0be0f20d57b",
+      "pinned_files": 9,
+      "states": {
+        "RED": 23
+      },
+      "source_blobs_match": true
+    },
+    {
+      "file": "kiwi_emb_01_knives.json",
+      "replay_head": "788bfd1c6b741729434538243802a0be0f20d57b",
+      "pinned_files": 15,
+      "states": {
+        "RED": 33,
+        "EQUIVALENT": 3
+      },
+      "source_blobs_match": true
+    },
+    {
+      "file": "kiwi_err_01_knives.json",
+      "replay_head": "788bfd1c6b741729434538243802a0be0f20d57b",
+      "pinned_files": 11,
+      "states": {
+        "RED": 11,
+        "EQUIVALENT": 1
+      },
+      "source_blobs_match": true
+    },
+    {
+      "file": "kiwi_lock_01_knives.json",
+      "replay_head": "788bfd1c6b741729434538243802a0be0f20d57b",
+      "pinned_files": 10,
+      "states": {
+        "RED": 7
+      },
+      "source_blobs_match": true
+    },
+    {
+      "file": "kiwi_prep_01_knives.json",
+      "replay_head": "788bfd1c6b741729434538243802a0be0f20d57b",
+      "pinned_files": 17,
+      "states": {
+        "RED": 29
+      },
+      "source_blobs_match": true
+    },
+    {
+      "file": "kiwi_sec_01a_build_knives.json",
+      "replay_head": "788bfd1c6b741729434538243802a0be0f20d57b",
+      "pinned_files": 7,
+      "states": {
+        "RED": 41
+      },
+      "source_blobs_match": true
+    },
+    {
+      "file": "kiwi_sec_01a_knives.json",
+      "replay_head": "788bfd1c6b741729434538243802a0be0f20d57b",
+      "pinned_files": 7,
+      "states": {
+        "RED": 41
+      },
+      "source_blobs_match": true
+    },
+    {
+      "file": "kiwi_sec_01b_knives.json",
+      "replay_head": "788bfd1c6b741729434538243802a0be0f20d57b",
+      "pinned_files": 6,
+      "states": {
+        "RED": 10
+      },
+      "source_blobs_match": true
+    },
+    {
+      "file": "kiwi_think_01_knives.json",
+      "replay_head": "788bfd1c6b741729434538243802a0be0f20d57b",
+      "pinned_files": 6,
+      "states": {
+        "RED": 10
+      },
+      "source_blobs_match": true
+    },
+    {
+      "file": "kiwi_w2_05b_knives.json",
+      "replay_head": "788bfd1c6b741729434538243802a0be0f20d57b",
+      "pinned_files": 9,
+      "states": {
+        "RED": 13
+      },
+      "source_blobs_match": true
+    }
+  ],
+  "ci_run": 35723084216,
+  "ci_conclusion": "success",
+  "ci_url": "https://github.com/LucieEveille/kiwi-mem/actions/runs/35723084216",
+  "evidence_note": "Evidence-only follow-up: all pinned source blobs match the delivery tree; two SEC-01a filenames share one identical-book replay."
+}

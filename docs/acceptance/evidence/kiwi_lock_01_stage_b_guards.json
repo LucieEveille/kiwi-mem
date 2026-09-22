@@ -1,0 +1,203 @@
+{
+  "ticket": "LOCK-01",
+  "stage": "B",
+  "stage_a_counts": {
+    "PASS": 14,
+    "FAIL": 17,
+    "ERROR": 0
+  },
+  "stage_b_counts": {
+    "PASS": 31,
+    "FAIL": 0,
+    "ERROR": 0
+  },
+  "same_arm_set": true,
+  "arms": [
+    {
+      "guard": "T-LOCK-01-01",
+      "arm": "return",
+      "stage_a": "FAIL",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "T-LOCK-01-01",
+      "arm": "row-unchanged",
+      "stage_a": "FAIL",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "T-LOCK-01-01",
+      "arm": "retire-count",
+      "stage_a": "FAIL",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "T-LOCK-01-01",
+      "arm": "retire-state",
+      "stage_a": "FAIL",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "T-LOCK-01-02",
+      "arm": "return",
+      "stage_a": "FAIL",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "T-LOCK-01-02",
+      "arm": "promote-side-effect",
+      "stage_a": "PASS",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "T-LOCK-01-02",
+      "arm": "retire-count",
+      "stage_a": "PASS",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "T-LOCK-01-02",
+      "arm": "retire-state",
+      "stage_a": "PASS",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "T-LOCK-01-03",
+      "arm": "return",
+      "stage_a": "FAIL",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "T-LOCK-01-03",
+      "arm": "promote-side-effect",
+      "stage_a": "PASS",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "T-LOCK-01-04",
+      "arm": "return",
+      "stage_a": "FAIL",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "T-LOCK-01-04",
+      "arm": "row-unchanged",
+      "stage_a": "FAIL",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "T-LOCK-01-05",
+      "arm": "user/success",
+      "stage_a": "FAIL",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "T-LOCK-01-05",
+      "arm": "user/reason",
+      "stage_a": "FAIL",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "T-LOCK-01-05",
+      "arm": "user/memory-id",
+      "stage_a": "PASS",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "T-LOCK-01-05",
+      "arm": "user/log",
+      "stage_a": "FAIL",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "T-LOCK-01-05",
+      "arm": "user/privacy",
+      "stage_a": "FAIL",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "T-LOCK-01-05",
+      "arm": "user/stats",
+      "stage_a": "PASS",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "T-LOCK-01-05",
+      "arm": "auto/success",
+      "stage_a": "PASS",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "T-LOCK-01-05",
+      "arm": "auto/reason",
+      "stage_a": "PASS",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "T-LOCK-01-05",
+      "arm": "auto/memory-id",
+      "stage_a": "PASS",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "T-LOCK-01-05",
+      "arm": "auto/log",
+      "stage_a": "PASS",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "T-LOCK-01-05",
+      "arm": "auto/privacy",
+      "stage_a": "PASS",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "T-LOCK-01-05",
+      "arm": "auto/stats",
+      "stage_a": "PASS",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "T-LOCK-01-06",
+      "arm": "return",
+      "stage_a": "FAIL",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "T-LOCK-01-06",
+      "arm": "no-business-exception",
+      "stage_a": "PASS",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "T-LOCK-01-07",
+      "arm": "user-lock",
+      "stage_a": "FAIL",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "T-LOCK-01-07",
+      "arm": "auto-retired",
+      "stage_a": "PASS",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "T-LOCK-01-07",
+      "arm": "actual-count",
+      "stage_a": "FAIL",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "T-LOCK-01-07",
+      "arm": "actual-titles",
+      "stage_a": "FAIL",
+      "stage_b": "PASS"
+    },
+    {
+      "guard": "T-LOCK-01-07",
+      "arm": "actual-log",
+      "stage_a": "FAIL",
+      "stage_b": "PASS"
+    }
+  ]
+}

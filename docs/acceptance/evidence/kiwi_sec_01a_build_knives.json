@@ -1,10 +1,10 @@
 {
   "ticket": "KIWI-SEC-01a",
-  "head": "adfba386709c82c3f590e97a69177a69851797b6",
+  "head": "788bfd1c6b741729434538243802a0be0f20d57b",
   "source_blobs": {
     "anthropic_adapter.py": "bcf29d0ddacfdcdf46322323d406a300624642d5",
     "config.py": "529b494a1c402a9ba8efb02d8ac8df8245f6bdbb",
-    "dream.py": "d6e6535d799988d581159d4cdcb21e1be984142d",
+    "dream.py": "8c890788c15c46de65f246ca9a7db455a7288802",
     "main.py": "bca93c8ed380032a7929515db749e2175d0bb934",
     "scripts/kiwi_sec_01a_knives.py": "e1a9f46606fca7de31b5f6e380a63a9a574a2ff0",
     "scripts/test_kiwi_sec_01a.py": "cb889b988cd6b2ed09060b73265b8e042eb2c3c5",

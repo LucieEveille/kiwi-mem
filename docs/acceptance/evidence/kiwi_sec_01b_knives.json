@@ -1,6 +1,6 @@
 {
   "ticket": "KIWI-SEC-01b",
-  "head": "adfba386709c82c3f590e97a69177a69851797b6",
+  "head": "788bfd1c6b741729434538243802a0be0f20d57b",
   "source_blobs": {
     "main.py": "bca93c8ed380032a7929515db749e2175d0bb934",
     "mcp_server.py": "8ee2860cea185fcc54af64ce2da2e96a508cdea4",
@@ -91,7 +91,7 @@
       "reason": [
         "'Calendar & Dream' != 'Memory Garden'",
         "'Memory Garden' != 'Calendar & Dream'",
-        "Lists differ: [('Calendar & Dream', {'get_calendar_range',[295 chars]y'})] != [('Memory Garden', {'trigger_digest', 'searc[295 chars]e'})]"
+        "Lists differ: [('Calendar & Dream', {'get_dream_scenes', '[295 chars]y'})] != [('Memory Garden', {'trigger_digest', 'searc[295 chars]e'})]"
       ],
       "exit_code": 1
     },
