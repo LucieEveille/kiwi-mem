@@ -3,7 +3,7 @@
 ## Unreleased — 2.0.0 integration / KIWI-THINK-02
 
 - 客户端 reasoning_effort 新认 none（off）和 minimal（low）；支持 OpenRouter 风格 reasoning 对象与预算取档。面板、端点天花板与出站转换保持原样。
-- Client reasoning_effort accepts none (off) and minimal (low); reasoning objects and budget floors are recognized at entry. Panel values, endpoint ceilings and outbound conversion remain unchanged. Pending acceptance and release.
+- Client reasoning_effort accepts none (off) and minimal (low); reasoning objects and budget floors are recognized at entry. Panel values, endpoint ceilings and outbound conversion remain unchanged.
 
 ## Unreleased — 2.0.0 integration / KIWI-LOCK-01
 
