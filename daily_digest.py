@@ -635,17 +635,22 @@ async def retire_stale_locks():
             """, retire_days)
 
             ids = [row["id"] for row in rows]
+            retired_ids = set()
             if ids:
-                await conn.execute("""
+                updated = await conn.fetch("""
                     UPDATE memories
                     SET is_permanent = FALSE,
                         lock_source = NULL,
                         importance = GREATEST(importance, 8),
                         dream_processed_at = NULL
                     WHERE id = ANY($1::int[])
+                      AND is_permanent = TRUE
+                      AND lock_source IN ('auto', 'dream')
+                    RETURNING id
                 """, ids)
+                retired_ids = {r["id"] for r in updated}
 
-        titles = [row["title"] or f"#{row['id']}" for row in rows]
+        titles = [row["title"] or f"#{row['id']}" for row in rows if row["id"] in retired_ids]
         if titles:
             print(f"auto lock retired {len(titles)} memories: {', '.join(titles[:10])}")
         else:

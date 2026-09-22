@@ -6021,13 +6021,16 @@ async def soft_delete_memories(memory_ids: list):
         """, memory_ids)
 
 
-async def promote_memory(memory_id: int):
-    """升格碎片为长期设定"""
+async def promote_memory(memory_id: int) -> bool:
+    """升格全局碎片；不改用户锁，返回是否实际更新。"""
     pool = await get_pool()
     async with pool.acquire() as conn:
-        await conn.execute(
-            "UPDATE memories SET is_permanent = TRUE, lock_source = 'dream' WHERE id = $1", memory_id
+        row = await conn.fetchrow(
+            "UPDATE memories SET is_permanent = TRUE, lock_source = 'dream' "
+            "WHERE id = $1 AND project_id IS NULL AND lock_source IS DISTINCT FROM 'user' "
+            "RETURNING id", memory_id
         )
+    return row is not None
 
 
 # ============================================================

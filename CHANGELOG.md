@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased — 2.0.0 integration / KIWI-LOCK-01
+
+- Dream 不再改写用户手动锁定的记忆；promote 只允许全局非用户锁行。退休 UPDATE 重核永久状态与锁来源，按实际更新行统计，不回溯修改历史行。
+- Dream promotion preserves user locks and only promotes eligible global rows. Retirement atomically rechecks lock state/source and reports actual updates. Historical rows are not migrated. Pending acceptance and release.
+
 ## Unreleased — 2.0.0 integration / W2-05b (#90)
 
 - 聊天抽屉五个记忆工具接入私有 scope 执行器：全局只看全局，项目看全局＋本项目，保存落当前层，锁定/解锁及总数均遵循可见集合；用户锁原子写入 `lock_source='user'`，但 Dream promote 仍可能改写来源并使该锁在满足退休条件后失效，见 [KIWI-LOCK-01 继承债](KNOWN_ISSUES.md#kiwi-lock-01)。

@@ -582,9 +582,14 @@ async def _execute_dream_action(action: dict, dream_id: int, stats: dict) -> dic
         elif action_type == "promote":
             mid = _safe_int(action.get("memory_id"))
             if mid is not None:
-                await promote_memory(mid)
+                promoted = await promote_memory(mid)
                 result["memory_id"] = mid
-                print(f"   ⭐ 升格记忆 #{mid}: {action.get('reason', '')}")
+                if promoted:
+                    print(f"   ⭐ 升格记忆 #{mid}: {action.get('reason', '')}")
+                else:
+                    result["success"] = False
+                    result["reason"] = "user_locked_or_out_of_scope"
+                    print(f"event=dream_promote_skipped memory_id={mid} reason=user_locked_or_out_of_scope")
 
         elif action_type == "soften":
             mid = action.get("memory_id")
