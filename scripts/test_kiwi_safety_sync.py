@@ -8254,8 +8254,11 @@ async def _w5b_seed():
         ("G4", None, "auto"), ("A1", "w5b-a", None),
         ("A2", "w5b-a", "user"), ("B1", "w5b-b", None),
     ):
+        # Independent resets must preserve ordering even on coarse Windows clocks.
+        # Keep the original output-equality assertion; give fixture rows distinct times.
+        created_at = StdDateTime(2026, 1, 1, 0, 0, len(ids), tzinfo=database.TZ_CST)
         ids[label] = await _seed_memory("W5BPROBE marker_" + label,
-            title=label, project_id=pid, locked=source is not None)
+            title=label, project_id=pid, locked=source is not None, created_at=created_at)
         await _pool_execute("UPDATE memories SET lock_source=$1, "
             "last_accessed=NOW()-INTERVAL '200 days' WHERE id=$2", source, ids[label])
     # Invisible lifecycle rows exercise the same WHERE for lists and counts.
