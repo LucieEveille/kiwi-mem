@@ -1,6 +1,7 @@
 {
   "ticket": "THINK-02",
   "stage": "B",
+  "replay_head": "42c2698a8bc25d06777ab445d846f3499eef18a9",
   "stage_a_counts": {
     "PASS": 112,
     "FAIL": 147,

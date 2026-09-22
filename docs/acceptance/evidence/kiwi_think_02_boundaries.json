@@ -1,11 +1,13 @@
 {
-  "base": "0cbd1afdf822e9a6c6aec8ebe4ffc4e64e27f2e9",
-  "head": "5105ca4ba4ea9cfcc0ff9b3e8100026b4b8e3f1e",
+  "base": "b1dd5dfeec0f8f46da14306bce6b752cf2cbee06",
+  "original_contract_base": "0cbd1afdf822e9a6c6aec8ebe4ffc4e64e27f2e9",
+  "head": "42c2698a8bc25d06777ab445d846f3499eef18a9",
   "kind": "Git object source comparison; LF bytes, AST node ranges include final newline",
   "checks": [
     {
       "file": "main.py",
       "node": "_apply_reasoning",
+      "comparison_base": "0cbd1afdf822e9a6c6aec8ebe4ffc4e64e27f2e9",
       "equal": true,
       "base_sha256": "429e1e5e41ad269d9ec6d0fac13e6f9edc05dba694c91d073e48705b99af81e7",
       "head_sha256": "429e1e5e41ad269d9ec6d0fac13e6f9edc05dba694c91d073e48705b99af81e7"
@@ -13,6 +15,7 @@
     {
       "file": "main.py",
       "node": "_provider_effort_profile",
+      "comparison_base": "0cbd1afdf822e9a6c6aec8ebe4ffc4e64e27f2e9",
       "equal": true,
       "base_sha256": "f41a8c45c55df88626390e62736d87ffa20950ccc63a34900d1840aebbbe1d29",
       "head_sha256": "f41a8c45c55df88626390e62736d87ffa20950ccc63a34900d1840aebbbe1d29"
@@ -20,6 +23,7 @@
     {
       "file": "main.py",
       "node": "_provider_effort_ceiling",
+      "comparison_base": "0cbd1afdf822e9a6c6aec8ebe4ffc4e64e27f2e9",
       "equal": true,
       "base_sha256": "e2167d01b378af7edbbbd79fdbffa79b9b06bbdf2ca1bae40e6422a0114ce23c",
       "head_sha256": "e2167d01b378af7edbbbd79fdbffa79b9b06bbdf2ca1bae40e6422a0114ce23c"
@@ -27,6 +31,7 @@
     {
       "file": "main.py",
       "node": "_clamp_effort",
+      "comparison_base": "0cbd1afdf822e9a6c6aec8ebe4ffc4e64e27f2e9",
       "equal": true,
       "base_sha256": "67980397973ac77989bb4bcefd8410afbb0131416fb259cf05d477db515b5c5c",
       "head_sha256": "67980397973ac77989bb4bcefd8410afbb0131416fb259cf05d477db515b5c5c"
@@ -34,6 +39,7 @@
     {
       "file": "main.py",
       "node": "_endpoint_host",
+      "comparison_base": "0cbd1afdf822e9a6c6aec8ebe4ffc4e64e27f2e9",
       "equal": true,
       "base_sha256": "2bef8ac2729df8a83fcba25e8932f6030105852bcb47b61f9ba16fb3358757fc",
       "head_sha256": "2bef8ac2729df8a83fcba25e8932f6030105852bcb47b61f9ba16fb3358757fc"
@@ -41,39 +47,107 @@
     {
       "file": "anthropic_adapter.py",
       "node": "_EFFORT_BUDGET",
+      "comparison_base": "0cbd1afdf822e9a6c6aec8ebe4ffc4e64e27f2e9",
       "equal": true,
       "base_sha256": "56e4593182cdf8b7a1439808632ec6afac945ea13f609f7c6330892f0de0bc1f",
       "head_sha256": "56e4593182cdf8b7a1439808632ec6afac945ea13f609f7c6330892f0de0bc1f"
     },
     {
-      "file": "scripts/test_kiwi_safety_sync.py",
-      "node": "test_w2_05b",
-      "equal": true,
-      "base_sha256": "6700d4389dd62ab41bcb7b8fe58903309f1350153918065dd18ab4283ca14248",
-      "head_sha256": "6700d4389dd62ab41bcb7b8fe58903309f1350153918065dd18ab4283ca14248"
-    },
-    {
       "file": "config.py",
+      "comparison_base": "0cbd1afdf822e9a6c6aec8ebe4ffc4e64e27f2e9",
       "base_blob": "529b494a1c402a9ba8efb02d8ac8df8245f6bdbb",
       "head_blob": "529b494a1c402a9ba8efb02d8ac8df8245f6bdbb",
       "equal": true
     },
     {
       "file": "anthropic_adapter.py",
+      "comparison_base": "0cbd1afdf822e9a6c6aec8ebe4ffc4e64e27f2e9",
       "base_blob": "bcf29d0ddacfdcdf46322323d406a300624642d5",
       "head_blob": "bcf29d0ddacfdcdf46322323d406a300624642d5",
       "equal": true
     },
     {
       "file": "admin-panel/js/config-schema.js",
+      "comparison_base": "0cbd1afdf822e9a6c6aec8ebe4ffc4e64e27f2e9",
       "base_blob": "1c5bb1b2be5c8bf02abd23491473647e02a2e498",
       "head_blob": "1c5bb1b2be5c8bf02abd23491473647e02a2e498",
       "equal": true
     },
     {
       "file": "scripts/test_kiwi_think_01.py",
+      "comparison_base": "0cbd1afdf822e9a6c6aec8ebe4ffc4e64e27f2e9",
       "base_blob": "e80f0b49f63116d29ee538bf3d0569fcc47a9ac8",
       "head_blob": "e80f0b49f63116d29ee538bf3d0569fcc47a9ac8",
+      "equal": true
+    },
+    {
+      "file": "main.py",
+      "comparison_base": "56a96469561f8189bdaa6c54f412a4de82001c51",
+      "base_blob": "cfc55bbb03cc845c99283dbb5b5868164b0d4d38",
+      "head_blob": "cfc55bbb03cc845c99283dbb5b5868164b0d4d38",
+      "equal": true
+    },
+    {
+      "file": "scripts/test_kiwi_think_02.py",
+      "comparison_base": "56a96469561f8189bdaa6c54f412a4de82001c51",
+      "base_blob": "88b942a35ea8ab1926d2c56e9e88e5d89bf78cbd",
+      "head_blob": "88b942a35ea8ab1926d2c56e9e88e5d89bf78cbd",
+      "equal": true
+    },
+    {
+      "file": "scripts/kiwi_think_02_knives.py",
+      "comparison_base": "56a96469561f8189bdaa6c54f412a4de82001c51",
+      "base_blob": "39ec084c517a3979c14e7a09f2adc647eeb96844",
+      "head_blob": "39ec084c517a3979c14e7a09f2adc647eeb96844",
+      "equal": true
+    },
+    {
+      "file": "scripts/test_kiwi_err_01.py",
+      "comparison_base": "56a96469561f8189bdaa6c54f412a4de82001c51",
+      "base_blob": "d005977ba18cf4f324c1ec58e4782f9898517592",
+      "head_blob": "d005977ba18cf4f324c1ec58e4782f9898517592",
+      "equal": true
+    },
+    {
+      "file": "database.py",
+      "comparison_base": "b1dd5dfeec0f8f46da14306bce6b752cf2cbee06",
+      "base_blob": "b648cc1fd85b41e1d0162fd94cb58bdd3db1c3df",
+      "head_blob": "b648cc1fd85b41e1d0162fd94cb58bdd3db1c3df",
+      "equal": true
+    },
+    {
+      "file": "dream.py",
+      "comparison_base": "b1dd5dfeec0f8f46da14306bce6b752cf2cbee06",
+      "base_blob": "8c890788c15c46de65f246ca9a7db455a7288802",
+      "head_blob": "8c890788c15c46de65f246ca9a7db455a7288802",
+      "equal": true
+    },
+    {
+      "file": "daily_digest.py",
+      "comparison_base": "b1dd5dfeec0f8f46da14306bce6b752cf2cbee06",
+      "base_blob": "58582cba0aba882c9d4a700e5d005a5a1f8ccd14",
+      "head_blob": "58582cba0aba882c9d4a700e5d005a5a1f8ccd14",
+      "equal": true
+    },
+    {
+      "file": "scripts/test_kiwi_safety_sync.py",
+      "comparison_base": "b1dd5dfeec0f8f46da14306bce6b752cf2cbee06",
+      "base_blob": "4e277615646b167cc9322513914980cb6436b137",
+      "head_blob": "4e277615646b167cc9322513914980cb6436b137",
+      "equal": true
+    },
+    {
+      "file": "scripts/kiwi_lock_01_knives.py",
+      "comparison_base": "b1dd5dfeec0f8f46da14306bce6b752cf2cbee06",
+      "base_blob": "81195681b15956bb52401c3413166dd36e963ee8",
+      "head_blob": "81195681b15956bb52401c3413166dd36e963ee8",
+      "equal": true
+    },
+    {
+      "file": "scripts/kiwi_w2_05b_knives.py",
+      "comparison_base": "b1dd5dfeec0f8f46da14306bce6b752cf2cbee06",
+      "base_blob": "cd673b9e851aeaee64ae28c6178641b72aea1de4",
+      "head_blob": "cd673b9e851aeaee64ae28c6178641b72aea1de4",
       "equal": true
     }
   ]

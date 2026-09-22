@@ -1,0 +1,29 @@
+{
+  "base": "b1dd5dfeec0f8f46da14306bce6b752cf2cbee06",
+  "replay_head": "42c2698a8bc25d06777ab445d846f3499eef18a9",
+  "postgresql": "16.15, disposable loopback cluster",
+  "permanent_guards": 198,
+  "safety_log_sha256": "23a96a5b868948d5b913aa7d71282cdb234a9b568e1e09479d992877811e8c84",
+  "lock_subarms": {
+    "PASS": 31,
+    "FAIL": 0,
+    "ERROR": 0
+  },
+  "think_subarms": {
+    "PASS": 259,
+    "FAIL": 0,
+    "ERROR": 0
+  },
+  "think_same_stage_a_arm_set": true,
+  "w2_05b_subarms": {
+    "PASS": 61,
+    "FAIL": 0,
+    "ERROR": 0
+  },
+  "w2_05b_knives": 13,
+  "w2_05b_preflight_and_restored_guards": 198,
+  "think_knives": 8,
+  "think_all_red_assertions": true,
+  "think_preflight_and_restored_green": true,
+  "no_model_or_production_io": true
+}

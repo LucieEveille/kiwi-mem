@@ -1,11 +1,11 @@
 {
   "ticket": "W2-05b",
-  "head": "788bfd1c6b741729434538243802a0be0f20d57b",
+  "head": "42c2698a8bc25d06777ab445d846f3499eef18a9",
   "source_blobs": {
     "database.py": "b648cc1fd85b41e1d0162fd94cb58bdd3db1c3df",
     "tool_drawer.py": "dca86657bfda9be7cdea3813a9f3313806523bb9",
     "mcp_server.py": "8ee2860cea185fcc54af64ce2da2e96a508cdea4",
-    "main.py": "bca93c8ed380032a7929515db749e2175d0bb934",
+    "main.py": "cfc55bbb03cc845c99283dbb5b5868164b0d4d38",
     "daily_digest.py": "58582cba0aba882c9d4a700e5d005a5a1f8ccd14",
     "security.py": "b398ee6bd03e7c3d00ddd893dd3aaac2ed763dd8",
     "scripts/test_kiwi_safety_sync.py": "4e277615646b167cc9322513914980cb6436b137",
@@ -51,7 +51,7 @@
         "ERROR": 0
       },
       "exit_code": 1,
-      "log_sha256": "2ec42bd10575adbda993d55bc2c34cd9df78abffe464ed4bfbbc28dc54d39211",
+      "log_sha256": "729b321e205aa284100e9894b4ac2303eef48799407258ac79c93e89e76fc78b",
       "restored_sha256": "c606bf9a0fcb708360fd3fd4673134542af5b1406a782f1590a0bb2b5f739c7d"
     },
     {
@@ -104,8 +104,8 @@
         "ERROR": 0
       },
       "exit_code": 1,
-      "log_sha256": "e16798b5ccbbaa57ae1360e64ed0b1db753c72ca489e4aa8971573f212eb9104",
-      "restored_sha256": "39af33c5cf46aaacefea39d4b61bd40506cc87b036f50783156c7ade7ab989ae"
+      "log_sha256": "94bf934f699fa8bb1496e4fdd0fb26914e869c4dc9e62452b27b9c2a5b227c14",
+      "restored_sha256": "1255f3c96cb649053bf557527a71026e4edbfe21e7fcbd430b1594a97658b31d"
     },
     {
       "knife": "K-W5b-3",
@@ -130,7 +130,7 @@
         "ERROR": 0
       },
       "exit_code": 1,
-      "log_sha256": "8abfd3656094cb441a5ef0a237e62af662a4fd3c94904d0b5b85e0b3a0dff8eb",
+      "log_sha256": "4097b176cf968c4c5d94ba854f750af3818206311b0d0a0ea64c713ac571a23f",
       "restored_sha256": "c606bf9a0fcb708360fd3fd4673134542af5b1406a782f1590a0bb2b5f739c7d"
     },
     {
@@ -156,7 +156,7 @@
         "ERROR": 0
       },
       "exit_code": 1,
-      "log_sha256": "6c019c4b6eecb9b7686828b9f3917300e3bcd99097f403f18dd495dd695dd56e",
+      "log_sha256": "d95dcaad8b5790890ee313cba5445b2f70604f1ebb565b0f25941161ed92f391",
       "restored_sha256": "c606bf9a0fcb708360fd3fd4673134542af5b1406a782f1590a0bb2b5f739c7d"
     },
     {
@@ -182,7 +182,7 @@
         "ERROR": 0
       },
       "exit_code": 1,
-      "log_sha256": "586cabbdee6343894a714d1ec5736e83f1891522346efdb1c6af190106b4581f",
+      "log_sha256": "46fe60580d0f6a136cd5281492ee52273189d94b9e3491edf0f1cddb2a654b78",
       "restored_sha256": "c606bf9a0fcb708360fd3fd4673134542af5b1406a782f1590a0bb2b5f739c7d"
     },
     {
@@ -289,7 +289,7 @@
         "ERROR": 0
       },
       "exit_code": 1,
-      "log_sha256": "0ba69d965ec58a2682ad61051303835065f296b8fac3ffdfad95fc916ee9058e",
+      "log_sha256": "70a0c58836c6578d78b4cbf3f6a1e1e584bb6ded83486fff0e099be9b267739b",
       "restored_sha256": "c606bf9a0fcb708360fd3fd4673134542af5b1406a782f1590a0bb2b5f739c7d"
     },
     {
@@ -360,7 +360,7 @@
         "ERROR": 0
       },
       "exit_code": 1,
-      "log_sha256": "edf8c9976f6954bf70c6ab4b0346c70a1e2904a057d390790dffe5144b1fee94",
+      "log_sha256": "ea65d9bb347f71f2952ee245f9c40dbe7b46314f462ebbe426f402516d1999cc",
       "restored_sha256": "c606bf9a0fcb708360fd3fd4673134542af5b1406a782f1590a0bb2b5f739c7d"
     },
     {
@@ -422,7 +422,7 @@
         "ERROR": 0
       },
       "exit_code": 1,
-      "log_sha256": "02debf4308f144f50a739211a4be16f9624c9c535f9a2406a03a7e7f28915e6c",
+      "log_sha256": "9609be287e6377dfdec6f2612700954b4aee96a77ef921b135322b57397f87b0",
       "restored_sha256": "c606bf9a0fcb708360fd3fd4673134542af5b1406a782f1590a0bb2b5f739c7d"
     },
     {
@@ -484,7 +484,7 @@
         "ERROR": 0
       },
       "exit_code": 1,
-      "log_sha256": "f3506739e781e2610585bfa84304a2fa11a3f4f1759322ba8aa8391a242ca712",
+      "log_sha256": "7ee814fd3e68c908d8afcd1bf9659c15dba0f30ed4b40f2f1dabb4d54a85b289",
       "restored_sha256": "c606bf9a0fcb708360fd3fd4673134542af5b1406a782f1590a0bb2b5f739c7d"
     },
     {
@@ -519,8 +519,8 @@
         "ERROR": 0
       },
       "exit_code": 1,
-      "log_sha256": "8f9305a1d17ed308ce12f7ccf6dd5b6da51782a5f42271a82122a4c8107ca427",
-      "restored_sha256": "39af33c5cf46aaacefea39d4b61bd40506cc87b036f50783156c7ade7ab989ae"
+      "log_sha256": "b5033d95095c7cbc66d06c53eafa7f5d56398cb0358ad5d29ab4d5676032f3d2",
+      "restored_sha256": "1255f3c96cb649053bf557527a71026e4edbfe21e7fcbd430b1594a97658b31d"
     },
     {
       "knife": "K-W5b-11",
@@ -545,8 +545,8 @@
         "ERROR": 0
       },
       "exit_code": 1,
-      "log_sha256": "09096121243b88f4d1d49eb9c52f57c7617fda0b63db03a3ea21eca12a5fd4bc",
-      "restored_sha256": "39af33c5cf46aaacefea39d4b61bd40506cc87b036f50783156c7ade7ab989ae"
+      "log_sha256": "0a7c1c85d401e0b46b43413b6702a30663f538ccafac0bbbb97e2671908fa10b",
+      "restored_sha256": "1255f3c96cb649053bf557527a71026e4edbfe21e7fcbd430b1594a97658b31d"
     },
     {
       "knife": "K-W5b-12",
@@ -580,7 +580,7 @@
         "ERROR": 0
       },
       "exit_code": 1,
-      "log_sha256": "85dac8569ad551b81c61f75a8699fd2ad2c2c153e50aaaf0f71e786aaac60b5d",
+      "log_sha256": "8475ffb1654a21c66f72935b34e11eb65e661f78763b40665018d4d611a8ab6c",
       "restored_sha256": "c606bf9a0fcb708360fd3fd4673134542af5b1406a782f1590a0bb2b5f739c7d"
     },
     {
@@ -615,7 +615,7 @@
         "ERROR": 0
       },
       "exit_code": 1,
-      "log_sha256": "704177a76ba31155f33ecbbf688500ceb9775efbb410ee3ea53b8bff7093316e",
+      "log_sha256": "af156f816034acb9b8058d571f6e1a6b9d53004013039c29b2056ba54bbdcbc5",
       "restored_sha256": "c606bf9a0fcb708360fd3fd4673134542af5b1406a782f1590a0bb2b5f739c7d"
     }
   ]

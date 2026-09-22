@@ -1,11 +1,13 @@
 # THINK-02 Stage B construction evidence
 
-Status: implemented on PR #92; Draft, pending independent replay and a later rebase after LOCK-01 merges. No merge or deployment is authorized by this report.
+Status: implemented on PR #92 and rebased after LOCK-01 squash; Draft, pending independent replay of the integrated version. No merge or deployment is authorized by this report.
 
-Base: `0cbd1afdf822e9a6c6aec8ebe4ffc4e64e27f2e9` (`release/kiwi-sync`).
+Current integration base: `b1dd5dfeec0f8f46da14306bce6b752cf2cbee06` (`release/kiwi-sync`, LOCK-01 #91 squash).
+Integrated replay head: `42c2698a8bc25d06777ab445d846f3499eef18a9`.
+Original contract base: `0cbd1afdf822e9a6c6aec8ebe4ffc4e64e27f2e9`.
 Accepted tests-only Stage A: `38fbbfef0a9e412a1f599cd1d84daa6a8140649b`.
-Implementation: `5b87acd79458c6d87edad8234fc8f359960e549f`.
-Fixture calibration and replay head: `5105ca4ba4ea9cfcc0ff9b3e8100026b4b8e3f1e`.
+Historical implementation: `5b87acd79458c6d87edad8234fc8f359960e549f`; historical fixture calibration/replay: `5105ca4ba4ea9cfcc0ff9b3e8100026b4b8e3f1e`.
+Pre-rebase delivery: `56a96469561f8189bdaa6c54f412a4de82001c51` (retained as a local backup branch).
 
 ## Result and limits
 
@@ -32,11 +34,17 @@ All **259 sub-arms in ten groups PASS**, with the same arm identities as accepte
 
 K-THINK2-0 through K-THINK2-7 are all **RED from their named target assertions, zero ERROR arms**; 259-arm checks pass before and after byte-for-byte restoration. [Knife ledger](evidence/kiwi_think_02_knives.json), [per-arm transition table](evidence/kiwi_think_02_stage_b_guards.json).
 
-THINK-01's twelve guards remain unchanged and pass; its ten mutations remain RED. The complete ERR suite passes 339 tests, including one new six-case self-test of the narrow input-validator exception allowance. ERR mutations retain 11 RED / 1 pre-existing EQUIVALENT. Disposable PostgreSQL 16 passes **191** inherited permanent guards on this independent branch; LOCK's seven guards will join only after the required later rebase. W2-05b's 13 mutations and restored full suite pass.
+THINK-01's twelve guards remain unchanged and pass; its ten mutations are RED. Disposable PostgreSQL 16.15 passes **198** permanent guards, including all seven LOCK guards (31 PASS / 0 FAIL / 0 ERROR sub-arms); W2-05b has 61 PASS / 0 FAIL / 0 ERROR sub-arms. W2-05b's 13 mutations are RED and its restored 198-guard full suite passes. These are disposable real-database tests; embedding, model and HTTP boundaries remain mocked. No real model/client session or production operation is claimed.
 
-Affected PREP, BUILD, SEC-01a/01b, EMB, ERR, THINK-01 and W2-05b books are replayed in `evidence/`. The two historical SEC-01a filenames contain the same replay of their identical book; existing equivalent mutations retain their explicit status.
+Affected PREP, BUILD, SEC-01a/01b, EMB, ERR, THINK-01, W2-05b and LOCK-01 books were replayed alongside THINK-02. The two historical SEC-01a filenames contain the same replay of their identical book; existing equivalent mutations retain their explicit status (EMB: 33 RED / 3 EQUIVALENT; ERR: 11 RED / 1 EQUIVALENT). LOCK's seven mutations are RED. The final evidence index records all eleven ledger files and verifies every pinned source blob against the integrated delivery tree; no CRASH or SURVIVED result remains.
 
-Complete CI: **PASS**. Run [35723090192](https://github.com/LucieEveille/kiwi-mem/actions/runs/35723090192), pinned to the replay head above. THINK-02 mutations are now executed and uploaded by CI. Evidence-only follow-up commits do not alter the pinned source blobs.
+Integrated CI: **PASS**, run [35728780538](https://github.com/LucieEveille/kiwi-mem/actions/runs/35728780538), pinned to the integrated replay head above. Both LOCK-01 and THINK-02 mutations are executed and uploaded by CI. The evidence-only follow-up does not alter the pinned source blobs; any automatically triggered follow-up CI is a separate run, not the source of these replay artifacts.
+
+## Rebase reconciliation
+
+The shared CHANGELOG, KNOWN_ISSUES and UPGRADING entries preserve both tickets. LOCK's accepted title and removal of its pending-acceptance sentence remain intact. CI retains the LOCK and THINK mutation steps and artifact paths, plus THINK's ten guard groups. The identical W2-05b fixture calibration already in the LOCK squash was automatically dropped from the rebased history.
+
+`main.py`, the THINK-02 guard/knife files and the calibrated ERR guard are byte-identical to the pre-rebase delivery. LOCK's `database.py`, `dream.py`, `daily_digest.py`, safety guard file, LOCK knife and W2-05b knife are byte-identical to the integration base. Only shared documents/CI were reconciled; the boundary proof records these Git blob comparisons. [Integrated local checks](evidence/kiwi_think_02_rebase_checks.json).
 
 ## Calibrations and zero-diff proof
 
@@ -53,4 +61,4 @@ The base and head source-slice SHA256 values are identical:
 
 [Full boundary proof](evidence/kiwi_think_02_boundaries.json) also covers endpoint helpers and unchanged config, adapter, panel schema and THINK-01 guard files. Public reasoning docs include the six-client pinned source table, mapping rules and remaining limitations.
 
-Next gate: LOCK-01 independent acceptance and separately authorized squash; then rebase this branch, reconcile shared docs/CI and regenerate affected evidence against the integrated head before final THINK-02 acceptance.
+Next gate: independent replay of this integrated THINK-02 delivery. PR #92 remains Draft; stop after delivery and await the user's next authorization.
