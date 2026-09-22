@@ -8624,6 +8624,187 @@ async def test_w2_05b() -> bool:
     return not counts["FAIL"] and not counts["ERROR"]
 
 
+_L01_RESULTS: list[dict] = []
+
+
+async def _l01_seed(source=None, *, project=False, title="acceptance-lock-01-X"):
+    if project:
+        await _pool_execute("INSERT INTO chat_projects (id,name) VALUES ('proj-A','acceptance-lock-01') "
+                            "ON CONFLICT (id) DO NOTHING")
+    mid = await _seed_memory("LOCK01-BODY-SENTINEL", locked=source is not None,
+                             project_id="proj-A" if project else None, title=title)
+    await _pool_execute("UPDATE memories SET lock_source=$1, "
+                        "last_accessed=NOW()-INTERVAL '400 days' WHERE id=$2", source, mid)
+    return mid
+
+
+async def _l01_state(mid):
+    return dict(await _pool_fetchrow(
+        "SELECT is_permanent,lock_source,importance FROM memories WHERE id=$1", mid))
+
+
+async def _l01_window(retire, x, y):
+    """Only the retirement SELECT is simulated; all writes/RETURNING use PG."""
+    real_pool = await database.get_pool()
+    stale = await _pool_fetch("SELECT id,title FROM memories WHERE id=ANY($1::int[]) ORDER BY id", [x, y])
+    calls = {"select": 0, "update": 0}
+
+    class Connection:
+        def __init__(self, conn):
+            self.conn = conn
+
+        def __getattr__(self, name):
+            return getattr(self.conn, name)
+
+        async def fetch(self, sql, *args):
+            normalized = " ".join(sql.split()).lower()
+            if normalized.startswith("select id, coalesce(title,") and "from memories" in normalized:
+                calls["select"] += 1
+                return stale
+            if normalized.startswith("update memories"):
+                calls["update"] += 1
+            return await self.conn.fetch(sql, *args)
+
+        async def execute(self, sql, *args):
+            if " ".join(sql.split()).lower().startswith("update memories"):
+                calls["update"] += 1
+            return await self.conn.execute(sql, *args)
+
+    class Acquire:
+        async def __aenter__(self):
+            self.context = real_pool.acquire()
+            return Connection(await self.context.__aenter__())
+
+        async def __aexit__(self, *args):
+            return await self.context.__aexit__(*args)
+
+    class Pool:
+        def acquire(self):
+            return Acquire()
+
+    async def wrapped_pool():
+        return Pool()
+
+    with patch.object(database, "get_pool", wrapped_pool):
+        result = await retire()
+    require(calls == {"select": 1, "update": 1}, "T-LOCK-01-07 must reach one SELECT seam and one real UPDATE")
+    return result
+
+
+async def test_lock_01() -> bool:
+    """Seven groups; every sub-arm reports assertion FAIL separately from ERROR.
+
+    01..06 use PostgreSQL without replacing database operations. 07 simulates
+    SELECT's stale result only. No expected-failure exemption or implementation.
+    """
+    import daily_digest
+    import dream
+    require((await _pool_fetchval("SELECT current_database()")).startswith(DATABASE_PREFIX),
+            "LOCK-01 refuses non-disposable database")
+    _L01_RESULTS.clear()
+    for number in range(1, 8):
+        guard = f"T-LOCK-01-{number:02d}"
+        begin(guard)
+        start = len(_L01_RESULTS)
+
+        def check(label, condition, message, category="new_contract"):
+            try:
+                require(condition, message)
+            except AssertionError as exc:
+                row = dict(guard=guard, arm=label, category=category,
+                           status="FAIL", reason=str(exc), failure_kind="assertion")
+            else:
+                row = dict(guard=guard, arm=label, category=category,
+                           status="PASS", reason="assertion reached")
+            _L01_RESULTS.append(row)
+
+        try:
+            await _truncate("memories", "chat_projects", "gateway_config")
+            await _upsert_config("lock_retire_enabled", "true")
+            await _upsert_config("lock_retire_days", "90")
+            if number in (1, 2, 3, 4):
+                source = {1: "user", 2: "auto", 3: None, 4: None}[number]
+                mid = await _l01_seed(source, project=number == 4)
+                before = await _l01_state(mid)
+                result = await database.promote_memory(mid)
+                expected = number in (2, 3)
+                check("return", result is expected, f"promote must return {expected}; got {result!r}")
+                after = await _l01_state(mid)
+                if number in (1, 4):
+                    check("row-unchanged", after == before, "promote changed a protected row")
+                else:
+                    check("promote-side-effect", after["is_permanent"] is True and after["lock_source"] == "dream",
+                          "allowed global row was not promoted", "continuation")
+                if number in (1, 2):
+                    retired = await daily_digest.retire_stale_locks()
+                    require(retired["status"] == "success", "retirement did not complete")
+                    check("retire-count", retired["retired"] == (0 if number == 1 else 1),
+                          "retirement count differs", "new_contract" if number == 1 else "continuation")
+                    final = await _l01_state(mid)
+                    check("retire-state", final == before if number == 1 else
+                          final == dict(is_permanent=False, lock_source=None, importance=8),
+                          "retirement state differs", "new_contract" if number == 1 else "continuation")
+            elif number == 5:
+                for source in ("user", "auto"):
+                    mid = await _l01_seed(source)
+                    stats = {"created": 0, "merged": 0, "deleted": 0}
+                    before_stats = dict(stats)
+                    console = io.StringIO()
+                    with redirect_stdout(console):
+                        result = await dream._execute_dream_action(
+                            {"type": "promote", "memory_id": mid, "reason": "LOCK01-REASON-SENTINEL"}, 0, stats)
+                    log = console.getvalue()
+                    rejected = source == "user"
+                    check(source + "/success", result.get("success") is (not rejected), "wrong Dream success")
+                    check(source + "/reason", result.get("reason") == "user_locked_or_out_of_scope" if rejected
+                          else "reason" not in result, "wrong Dream rejection reason")
+                    check(source + "/memory-id", result.get("memory_id") == mid, "Dream lost memory_id", "continuation")
+                    event = f"event=dream_promote_skipped memory_id={mid} reason=user_locked_or_out_of_scope"
+                    check(source + "/log", event in log.splitlines() if rejected else
+                          "event=dream_promote_skipped" not in log, "wrong Dream skip event")
+                    check(source + "/privacy", "LOCK01-BODY-SENTINEL" not in log and
+                          (not rejected or "LOCK01-REASON-SENTINEL" not in log), "Dream log disclosed sentinel")
+                    check(source + "/stats", stats == before_stats, "promote changed Dream stats", "continuation")
+            elif number == 6:
+                result = await database.promote_memory(2147483647)
+                check("return", result is False, f"missing ID must return False; got {result!r}")
+                check("no-business-exception", True, "missing ID raised", "continuation")
+            else:
+                x = await _l01_seed("auto", title="acceptance-lock-01-X")
+                y = await _l01_seed("user", title="acceptance-lock-01-Y")
+                before = await _l01_state(y)
+                console = io.StringIO()
+                with redirect_stdout(console):
+                    result = await _l01_window(daily_digest.retire_stale_locks, x, y)
+                require(result["status"] == "success", "retirement did not complete")
+                check("user-lock", await _l01_state(y) == before, "stale SELECT allowed UPDATE to clear user lock")
+                check("auto-retired", await _l01_state(x) == dict(is_permanent=False, lock_source=None, importance=8),
+                      "eligible auto row did not retire", "continuation")
+                check("actual-count", result["retired"] == 1, "retired must count actual updated rows")
+                check("actual-titles", result["titles"] == ["acceptance-lock-01-X"], "titles must contain only updated rows")
+                check("actual-log", "auto lock retired 1 memories: acceptance-lock-01-X" in console.getvalue()
+                      and "acceptance-lock-01-Y" not in console.getvalue(), "retirement log used stale SELECT rows")
+        except AssertionError as exc:
+            _L01_RESULTS.append(dict(guard=guard, arm="reached-boundary", status="FAIL",
+                                    failure_kind="assertion", reason=str(exc)))
+        except Exception as exc:
+            _L01_RESULTS.append(dict(guard=guard, arm="execution", status="ERROR", reason=type(exc).__name__))
+        finally:
+            await _truncate("memories", "chat_projects", "gateway_config")
+        rows = _L01_RESULTS[start:]
+        for row in rows:
+            print("LOCK-01 ARM " + json.dumps(row, sort_keys=True))
+        if rows and all(row["status"] == "PASS" for row in rows):
+            passed(guard)
+    counts = {s: sum(row["status"] == s for row in _L01_RESULTS) for s in ("PASS", "FAIL", "ERROR")}
+    print("LOCK-01 SUMMARY " + json.dumps(counts, sort_keys=True))
+    report_path = os.environ.get("KIWI_LOCK_01_REPORT")
+    if report_path:
+        Path(report_path).write_text(json.dumps({"counts": counts, "arms": _L01_RESULTS},
+                                    indent=2) + "\n", encoding="utf-8")
+    return not counts["FAIL"] and not counts["ERROR"]
+
+
 async def async_main() -> int:
     admin_dsn = _validated_admin_dsn()
     database_name = ""
@@ -8635,6 +8816,7 @@ async def async_main() -> int:
         await test_prep_observation_schema()
         print(f"W2-05b inherited baseline: {len(PASSED)} existing guards passed")
         w5b_ok = await test_w2_05b()
+        lock_ok = await test_lock_01()
         legacy_passed = [name for name in PASSED if name.startswith("T-S")]
         w1_01_passed = [name for name in PASSED if name.startswith("T-W1-01-")]
         w1_06_passed = [name for name in PASSED if name.startswith("T-W1-06-")]
@@ -8663,13 +8845,13 @@ async def async_main() -> int:
             print(f"MUTED: {len(_MUTES_USED)} assertion(s) let through via KIWI_KNIFE_MUTE: "
                   f"{sorted(set(_MUTES_USED))}")
             print("NOT A CLEAN RUN — mutes are for mutation-knife evidence only")
-        elif w5b_ok:
+        elif w5b_ok and lock_ok:
             print(f"PASS: {len(PASSED)} total permanent behavior guards")
         else:
-            print(f"FAIL: {len(PASSED)} passed permanent behavior guards; W2-05b arms reported separately")
+            print(f"FAIL: {len(PASSED)} passed permanent behavior guards; W2-05b / LOCK-01 arms reported separately")
         print("Real database path: disposable PostgreSQL verified")
         print("Real model/API path: not called; embedding/model/HTTP boundaries were mocked")
-        return 0 if w5b_ok else 1
+        return 0 if w5b_ok and lock_ok else 1
     finally:
         if database is not None:
             await database.close_pool()
