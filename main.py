@@ -1822,37 +1822,71 @@ async def extract_file_content(file: UploadFile = File(...)):
         return stable_error(e)
 
 
-def _normalize_reasoning_effort(value):
+_REASONING_EFFORT_ALIASES = {"none": "off", "minimal": "low"}
+_REASONING_BUDGET_FLOORS = (
+    (64000, "max"), (32000, "xhigh"), (20000, "high"),
+    (10000, "medium"), (5000, "low"),
+)
+
+
+def _normalize_reasoning_effort(value, field="reasoning_effort"):
     """Normalize the public reasoning-effort request contract or reject it explicitly."""
     if value is None:
         return None
     if not isinstance(value, str):
         raise ValueError(
-            "reasoning_effort 必须是 "
+            f"{field} 必须是 "
             + "/".join(REASONING_EFFORT_VALUES)
             + " 之一"
         )
     normalized = value.strip().lower()
+    normalized = _REASONING_EFFORT_ALIASES.get(normalized, normalized)
     if normalized not in REASONING_EFFORT_VALUES:
         raise ValueError(
-            "reasoning_effort 必须是 "
+            f"{field} 必须是 "
             + "/".join(REASONING_EFFORT_VALUES)
             + " 之一"
         )
     return normalized
 
 
+def _parse_reasoning_object(obj):
+    """Read client reasoning intent; outbound translation remains unchanged."""
+    if not isinstance(obj, dict):
+        raise ValueError("reasoning 必须是对象，可含 effort（" + "/".join(REASONING_EFFORT_VALUES)
+                         + "）、max_tokens（正整数）或 enabled（布尔）")
+    if obj.get("enabled") is False:
+        return "off"
+    effort = obj.get("effort")
+    if effort is not None:
+        return _normalize_reasoning_effort(effort, field="reasoning.effort")
+    max_tokens = obj.get("max_tokens")
+    if isinstance(max_tokens, int) and not isinstance(max_tokens, bool) and max_tokens > 0:
+        for floor, level in _REASONING_BUDGET_FLOORS:
+            if max_tokens >= floor:
+                return level
+        return "low"
+    return "auto"
+
+
+def _reasoning_400(message, param):
+    return JSONResponse(status_code=400, content={"error": {
+        "message": message, "type": "invalid_request_error",
+        "param": param, "code": "invalid_value",
+    }})
+
+
 REASONING_EFFORT_DEFAULT = "off"
 
 
-async def _resolve_reasoning_effort(explicit):
+async def _resolve_reasoning_effort(explicit, source_hint=None):
     """Resolve explicit > panel > off once per request.
 
     panel includes the schema default returned by get_config; default denotes
     only an empty/invalid-value fallback. Never log the raw configuration value.
     """
     if explicit is not None:
-        return explicit, "explicit"
+        return explicit, source_hint or "explicit"
     raw = await get_config("reasoning_effort")
     if isinstance(raw, str):
         candidate = raw.strip().lower()
@@ -2031,18 +2065,17 @@ async def chat_completions(request: Request):
     try:
         reasoning_effort = _normalize_reasoning_effort(body.pop("reasoning_effort", None))
     except ValueError as e:
-        return JSONResponse(
-            status_code=400,
-            content={
-                "error": {
-                    "message": str(e),
-                    "type": "invalid_request_error",
-                    "param": "reasoning_effort",
-                    "code": "invalid_value",
-                }
-            },
-        )
-    reasoning_effort, reasoning_source = await _resolve_reasoning_effort(reasoning_effort)
+        return _reasoning_400(str(e), "reasoning_effort")
+    reasoning_source_hint = None
+    if reasoning_effort is None and "reasoning" in body:
+        client_reasoning = body.get("reasoning")
+        if client_reasoning is not None:
+            try:
+                reasoning_effort = _parse_reasoning_object(client_reasoning)
+            except ValueError as e:
+                return _reasoning_400(str(e), "reasoning")
+            reasoning_source_hint = "explicit_object"
+    reasoning_effort, reasoning_source = await _resolve_reasoning_effort(reasoning_effort, source_hint=reasoning_source_hint)
     print(f"event=reasoning_effort_resolved source={reasoning_source} effort={reasoning_effort}")
     messages = body.get("messages", [])
     

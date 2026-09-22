@@ -183,7 +183,9 @@ class Think02Guards(unittest.IsolatedAsyncioTestCase):
                         sent, log, _ = self.success(await self.request_case(provider, tools=tools, reasoning={'effort': value}))
                         self.outbound_effort(sent, provider, level)
                         if provider == 'relay' and level in ('xhigh', 'max'):
-                            self.assertEqual(log.count('event=reasoning_effort_downgrade'), 1)
+                            # 0cbd1af already applies at entry and again in the
+                            # tool loop; preserve that existing logging shape.
+                            self.assertEqual(log.count('event=reasoning_effort_downgrade'), 2 if tools else 1)
         # Existing explicit entry proves the unchanged output layer independently.
         for provider in PROVIDERS:
             for tools in (False, True):

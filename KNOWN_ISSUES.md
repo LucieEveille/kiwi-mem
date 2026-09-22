@@ -130,3 +130,10 @@ Status scans are O(N). Native Anthropic format is excluded, but relay capability
 - W2五处固定响应、记忆系统未启用200、周/月/周期model returned invalid format、embedding-probe200均保留。
 - 日历错误子码/面板提示归2.0.x #11～#18；P3 SSE/路径/空体/账单观察归2.0.x #5；路径U+200B与二次映射/分块尾部观察继续登记，不纳入本票证明。
 - HTTP/1.1 trace过滤只承诺已验格式中的reason字段；不承诺headers脱敏或全部httpcore版本。
+
+
+## KIWI-THINK-02: retained compatibility boundaries (2.0.x)
+
+- Nested `reasoning.exclude` is not interpreted; the object is removed by the existing outbound translator. It is not a promise to hide or suppress reasoning output.
+- Top-level `include_reasoning` is not normalized: ordinary OpenAI forwarding retains it, while tool-loop reconstruction and Anthropic conversion omit it. This ticket preserves those different paths.
+- `minimal` maps lossily to low. Object budgets 1–4999 map to the lowest reasoning tier (5000); the input is a tier selector, not an exact reasoning-token cap. Upstream/model defaults may still reason when the gateway is off.
