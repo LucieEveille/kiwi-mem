@@ -48,8 +48,27 @@ The W2-05b implementation closes the drawer scope follow-up on the integration b
 
 The five drawer tools (`search_memory`, `save_memory`, `get_recent`, `lock_memory`, `unlock_memory`) use a private database executor after the existing quarantine check. Global scope (including `scope=None`) reads only global memories; a live project reads global plus its own memories. Search/recent totals and the post-save total use that same collection, exclude digested, deleted and expired memories, and do not shrink with the result limit. Saves write to the current project, or to global when there is no project.
 
-Lock/unlock uses one scope-filtered `UPDATE … RETURNING`: live projects may change their own and global memories. A user lock atomically writes `lock_source='user'`; the retirement task itself does not select rows while that source remains `user`. Until [KIWI-LOCK-01](../KNOWN_ISSUES.md#kiwi-lock-01) is fixed, however, Dream's promote action overwrites the source with `dream`, after which stale-lock retirement removes the lock when its retirement conditions are met (the memory is not deleted). Explicit unlock clears the source. Missing and out-of-scope IDs share one refusal message without a reason lookup. Boolean and string IDs are refused. Content/title are stripped for storage, importance is clamped to 1–10, and result limits to 1–50. Tool failures emit one redacted `drawer_memory_tool_failed` event and a fixed result.
+Lock/unlock uses one scope-filtered `UPDATE … RETURNING`: live projects may change their own and global memories. A user lock atomically writes `lock_source='user'`; neither stale-lock retirement (whose UPDATE re-checks the source atomically) nor Dream's promote action changes it. Explicit unlock clears the source. Missing and out-of-scope IDs share one refusal message without a reason lookup. Boolean and string IDs are refused. Content/title are stripped for storage, importance is clamped to 1–10, and result limits to 1–50. Tool failures emit one redacted `drawer_memory_tool_failed` event and a fixed result.
 
 These drawer calls no longer loop back through `GATEWAY_BASE` or `/debug/*`; the existing embedding provider calls within search/save remain. The public MCP still exposes six tools (including `trigger_digest`); the drawer still discovers the same five memory schemas in the same order. Public MCP functions, the three debug handlers, old database calls without `visible_scope`, and W2-05 quarantine/routing behavior retain their existing contracts.
 
 Database callers opt in using keyword-only `visible_scope=("global", None)` or `("live_project", project_id)`; combining this with `project_id`, or passing an invalid/quarantined scope, raises `ValueError`. Evidence: frozen `T-W2-05b-01…07` real-PG16 guards and `docs/acceptance/evidence/kiwi_w2_05b_knives.json` (13 mutations). This closes the implementation debt required before W2-06a; it does not authorize consumer cutover or deployment.
+
+
+### Dream promotion and stale-lock writes (LOCK-01)
+
+An explicit user lock must survive background promotion and retirement. Dream
+still reads user-locked memories as context, but promotion updates only global
+rows (`project_id IS NULL`) whose source is distinct from `user`. The atomic
+UPDATE returns whether a row changed. A business rejection becomes
+`success=false, reason=user_locked_or_out_of_scope`, with one fixed
+`dream_promote_skipped` event; it neither retries nor changes Dream statistics.
+Database infrastructure failures retain the existing Dream error path.
+
+Retirement keeps its SELECT, configuration and age cutoff. Its UPDATE rechecks
+that each selected row is still permanent and still auto/dream-locked, then uses
+`RETURNING id` for the count, titles and log. Thus a user lock applied after
+selection survives the write. Age is still evaluated at SELECT time; refreshing
+last_accessed after selection is outside this protection. No historical data is
+rewritten. The seven guards include a simulated stale SELECT with real PG writes;
+that case does not claim two-connection concurrency scheduling.

@@ -1,0 +1,56 @@
+{
+  "base": "0cbd1afdf822e9a6c6aec8ebe4ffc4e64e27f2e9",
+  "head": "788bfd1c6b741729434538243802a0be0f20d57b",
+  "kind": "Git object source comparison; LF bytes, AST node ranges include final newline",
+  "checks": [
+    {
+      "file": "database.py",
+      "node": "_check_auto_lock",
+      "equal": true,
+      "base_sha256": "82d006448f8cdac2adb44387bdd9160150f3423ac6a473ca016c4dfdce9437a2",
+      "head_sha256": "82d006448f8cdac2adb44387bdd9160150f3423ac6a473ca016c4dfdce9437a2"
+    },
+    {
+      "file": "database.py",
+      "node": "get_unprocessed_memories",
+      "equal": true,
+      "base_sha256": "3965acf6bcb4645f5813f8fc46893caa2661a4e21cd211bd1029333e854e88d6",
+      "head_sha256": "3965acf6bcb4645f5813f8fc46893caa2661a4e21cd211bd1029333e854e88d6"
+    },
+    {
+      "file": "database.py",
+      "node": "get_permanent_memories",
+      "equal": true,
+      "base_sha256": "bd179f6de8ef075ac1aee18185740390d2ec5c16a88d1a5759b29aa13829989b",
+      "head_sha256": "bd179f6de8ef075ac1aee18185740390d2ec5c16a88d1a5759b29aa13829989b"
+    },
+    {
+      "file": "database.py",
+      "node": "set_memory_permanent_scoped",
+      "equal": true,
+      "base_sha256": "9cbc6dfa5ff784d35b484f358756ab3835d45eb9e7fb0c39ee4d30f77188c339",
+      "head_sha256": "9cbc6dfa5ff784d35b484f358756ab3835d45eb9e7fb0c39ee4d30f77188c339"
+    },
+    {
+      "file": "main.py",
+      "node": "batch_update_memories",
+      "equal": true,
+      "base_sha256": "46e3d739eb4c459579be36cca491eee26ca75c091f91a4ed9680d4eaf173add9",
+      "head_sha256": "46e3d739eb4c459579be36cca491eee26ca75c091f91a4ed9680d4eaf173add9"
+    },
+    {
+      "file": "scripts/test_kiwi_safety_sync.py",
+      "node": "test_w2_05b",
+      "equal": true,
+      "base_sha256": "6700d4389dd62ab41bcb7b8fe58903309f1350153918065dd18ab4283ca14248",
+      "head_sha256": "6700d4389dd62ab41bcb7b8fe58903309f1350153918065dd18ab4283ca14248"
+    },
+    {
+      "file": "daily_digest.py",
+      "node": "retirement SELECT literal",
+      "equal": true,
+      "base_sha256": "1b81f055c11890c4b30a237193d100b2e6c18b1a30999057f96f44171427e145",
+      "head_sha256": "1b81f055c11890c4b30a237193d100b2e6c18b1a30999057f96f44171427e145"
+    }
+  ]
+}

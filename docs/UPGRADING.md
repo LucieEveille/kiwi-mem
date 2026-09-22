@@ -150,3 +150,9 @@ Existing vectors become `unknown` and are excluded from new-profile semantic com
 Malformed JSON and non-UTF-8 request/backup-member bytes return 400/invalid_request. The four optional-body routes listed above preserve empty/whitespace bodies as `{}`; malformed nonempty bodies fail. Reset requires a body, while its fixed confirmation and generic failure responses remain intact. Non-object JSON is otherwise not standardized here. Empty provider names/search queries and non-ZIP uploads use the same 400 envelope. Enumerated background failure dictionaries gain error_code, preserving other fields and the day-page tuple; admin model-result endpoints map status by code.
 
 Exceptions remain explicit: the reasoning_effort nested error shape and allowed choices (without echoing input), five W2 fixed responses, HTTP-200 memory-disabled response, three calendar `model returned invalid format` dictionaries, and HTTP-200 embedding diagnostics. No new authentication, error codes, or panel changes are introduced.
+
+### 2.0 用户锁 / User locks
+
+Dream 不再改写用户手动锁定的记忆；promote 只允许全局非用户锁行。退休 UPDATE 重核永久状态与锁来源，按实际更新行统计，不回溯修改历史行。
+
+Dream promotion preserves user locks and only promotes eligible global rows. Retirement atomically rechecks lock state/source and reports actual updates. Historical rows are not migrated.

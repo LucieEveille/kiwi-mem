@@ -143,6 +143,11 @@ jobs:
           python scripts/test_kiwi_err_01.py
           python scripts/kiwi_err_01_knives.py --output /tmp/kiwi_err_01_knives.json
 
+      - name: LOCK-01 变异证据
+        run: |
+          python scripts/kiwi_lock_01_knives.py --output /tmp/kiwi_lock_01_knives.json
+          cat /tmp/kiwi_lock_01_knives.json
+
       - name: 保存 BUILD 验证证据
         if: always()
         uses: actions/upload-artifact@v4
@@ -158,3 +163,4 @@ jobs:
             /tmp/kiwi_think_01_knives.json
             /tmp/kiwi_emb_01_knives.json
             /tmp/kiwi_err_01_knives.json
+            /tmp/kiwi_lock_01_knives.json

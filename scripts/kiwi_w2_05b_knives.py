@@ -2,11 +2,12 @@
 """W2-05b: 13 scoped-memory mutations on disposable localhost PG16.
 
 Run from a clean committed checkout, --output outside that checkout. The full
-191-guard suite must pass before and after; each mutation runs the frozen 61
+permanent-guard suite must pass before and after; each mutation runs the frozen 61
 W2-05b arms in a fresh database. Only the named target's assertion failure, with
 zero ERROR arms, counts as RED. Embeddings/HTTP use the Stage A test boundaries.
 """
 import argparse
+import ast
 import asyncio
 import hashlib
 import importlib
@@ -143,9 +144,12 @@ def execute(output):
         raise RuntimeError('requires clean committed checkout and output outside checkout')
     folder = output.parent / (output.stem + '-runs')
     folder.mkdir(parents=True, exist_ok=True)
+    guard_tree = ast.parse((ROOT / 'scripts/test_kiwi_safety_sync.py').read_text(encoding='utf-8'))
+    expected_total = 191 + (7 if any(isinstance(n, ast.AsyncFunctionDef) and n.name == 'test_lock_01'
+                                    for n in guard_tree.body) else 0)
     preflight, pre_arms, pre_log = run_tests(folder, 'preflight', full=True)
-    if preflight or not pre_arms or pre_arms['counts'] != {'PASS': 61, 'FAIL': 0, 'ERROR': 0} or 'PASS: 191 total' not in pre_log:
-        raise RuntimeError('full 191-guard preflight not green; no mutations applied')
+    if preflight or not pre_arms or pre_arms['counts'] != {'PASS': 61, 'FAIL': 0, 'ERROR': 0} or f'PASS: {expected_total} total' not in pre_log:
+        raise RuntimeError('full permanent-guard preflight not green; no mutations applied')
     results = []
     for number, (filename, guard, arm, description) in CASES.items():
         path = ROOT / filename
@@ -179,12 +183,12 @@ def execute(output):
     ledger = dict(ticket='W2-05b', head=git('rev-parse', 'HEAD'),
                   source_blobs={p: git('rev-parse', 'HEAD:' + p) for p in files},
                   kind='disposable PostgreSQL 16; frozen Stage A guards; mocked embeddings/model/HTTP',
-                  preflight=preflight, preflight_guards=191, restored_suite=restored,
-                  restored_guards=191 if 'PASS: 191 total' in post_log else None,
+                  preflight=preflight, preflight_guards=expected_total, restored_suite=restored,
+                  restored_guards=expected_total if f'PASS: {expected_total} total' in post_log else None,
                   preflight_arms=pre_arms['counts'], restored_arms=post_arms['counts'] if post_arms else None,
                   results=results)
     output.write_text(json.dumps(ledger, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
-    return 0 if not restored and ledger['restored_guards'] == 191 and all(r['status'] == 'RED' for r in results) else 1
+    return 0 if not restored and ledger['restored_guards'] == expected_total and all(r['status'] == 'RED' for r in results) else 1
 
 
 if __name__ == '__main__':

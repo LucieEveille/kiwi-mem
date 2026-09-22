@@ -32,16 +32,18 @@
 
 <a id="kiwi-lock-01"></a>
 
-### KIWI-LOCK-01：Dream promote 可覆盖用户锁来源，导致后续静默解锁
+### KIWI-LOCK-01：Dream promote 与退休用户锁保护（已修复，PR #91，爹爹 2026-09-22 验收放行）
 
-继承链条四步：
+修复前的继承链条四步：
 
 1. 用户主动锁定记忆，写入 `is_permanent=TRUE`、`lock_source='user'`。
 2. `dream._execute_dream_action` 执行 `promote`，调用 `database.promote_memory`。
 3. `promote_memory` 无条件将锁来源覆盖为 `lock_source='dream'`，保留 `is_permanent=TRUE`。
 4. 退休任务启用且 `last_accessed` 非空、超过 `lock_retire_days` 时，`daily_digest.retire_stale_locks` 选中该行，将 `is_permanent` 改为 `FALSE`、`lock_source` 清为 `NULL`。
 
-影响面：用户锁会静默失效；上述退休操作不删除记忆。该链条在基线 `f70c476` 已存在，W2-05b 未改 `promote_memory`、`dream.py` 或 `daily_digest.py`；修复归 **KIWI-LOCK-01**，本次仅补正文边界与挂账。
+影响面：用户锁会静默失效；上述退休操作不删除记忆。该链条在基线 `f70c476` 已存在，W2-05b 未改 `promote_memory`、`dream.py` 或 `daily_digest.py`；已由 **LOCK-01** 修复：promote 不改写用户锁、不改写非全局行；退休 UPDATE 原子重核永久状态与 auto/dream 来源，计数、标题与日志依据实际更新行。原有历史误改行不回溯修复。
+
+保留边界：退休年龄沿用 SELECT 时的 `last_accessed` 快照；SELECT 后访问时间刷新仍可能被退休，UPDATE 本票只重核永久状态与锁来源。
 
 ---
 
