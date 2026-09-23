@@ -700,8 +700,8 @@ def target_return(row):
     tree=ast.parse((ROOT/'main.py').read_text(encoding='utf8'))
     fn=next(n for n in tree.body if isinstance(n,ast.AsyncFunctionDef) and n.name==row['function'])
     handlers=[n for n in ast.walk(fn) if isinstance(n,ast.ExceptHandler) and isinstance(n.type,ast.Name) and n.type.id==row['catch']]
-    # The business handler is the last such catch in these registered functions.
-    handler=max(handlers,key=lambda n:n.lineno)
+    # X1 is the string-input catch; THINK-02 adds a later object-input catch.
+    handler=(min if row['id']=='X1' else max)(handlers,key=lambda n:n.lineno)
     return max((n for n in ast.walk(handler) if isinstance(n,ast.Return)),key=lambda n:n.lineno).lineno
 
 class FakePool:
@@ -724,7 +724,23 @@ def find_raw_exception_returns(source_text):
             for ret in (n for n in ast.walk(handler) if isinstance(n,ast.Return)):
                 raw=any(isinstance(n,ast.Call) and isinstance(n.func,ast.Name) and n.func.id=='str' and any(isinstance(a,ast.Name) and a.id==handler.name for a in n.args) or isinstance(n,ast.JoinedStr) and any(isinstance(x,ast.FormattedValue) and isinstance(x.value,ast.Name) and x.value.id==handler.name for x in n.values) for n in ast.walk(ret))
                 literal_param=any(isinstance(n,ast.Dict) and any(isinstance(k,ast.Constant) and k.value=='param' and isinstance(v,ast.Constant) and v.value=='reasoning_effort' for k,v in zip(n.keys,n.values)) for n in ast.walk(ret))
-                x1=fn.name=='chat_completions' and isinstance(handler.type,ast.Name) and handler.type.id=='ValueError' and literal_param
+                # The helper form is allowed only around the two input validators,
+                # with the matching literal parameter; unrelated exceptions fail.
+                helper_param = None
+                call = ret.value
+                if (isinstance(call,ast.Call) and isinstance(call.func,ast.Name)
+                        and call.func.id=='_reasoning_400' and len(call.args)==2
+                        and not call.keywords and isinstance(call.args[1],ast.Constant)):
+                    helper_param = call.args[1].value
+                validator = {'reasoning_effort':'_normalize_reasoning_effort',
+                             'reasoning':'_parse_reasoning_object'}.get(helper_param)
+                parent = next((n for n in ast.walk(fn) if isinstance(n,ast.Try) and handler in n.handlers),None)
+                validated = bool(validator and parent and len(parent.body)==1
+                    and isinstance(parent.body[0],ast.Assign)
+                    and isinstance(parent.body[0].value,ast.Call)
+                    and isinstance(parent.body[0].value.func,ast.Name)
+                    and parent.body[0].value.func.id==validator)
+                x1=fn.name=='chat_completions' and isinstance(handler.type,ast.Name) and handler.type.id=='ValueError' and (literal_param or validated)
                 if raw and not x1:bad.append((fn.name,ret.lineno,'raw_exception'))
     return bad
 
@@ -880,6 +896,23 @@ class ErrGuards(unittest.IsolatedAsyncioTestCase):
         hits=fn(source)
         self.assertEqual(bool(hits),expected,name)
         for hit in hits:self.assertEqual(len(hit),3)
+
+    def test_T01b_reasoning_helper_boundary(self):
+        template = ('@app.post("/v1/chat/completions")\nasync def {function}():\n'
+                    '    try: result = {validator}(body)\n'
+                    '    except {exception} as e:\n'
+                    '        return _reasoning_400(str(e), "{param}")\n')
+        for function, validator, exception, param, bad in [
+            ('chat_completions','_normalize_reasoning_effort','ValueError','reasoning_effort',False),
+            ('chat_completions','_parse_reasoning_object','ValueError','reasoning',False),
+            ('chat_completions','untrusted_work','ValueError','reasoning',True),
+            ('chat_completions','_parse_reasoning_object','Exception','reasoning',True),
+            ('chat_completions','_parse_reasoning_object','ValueError','other',True),
+            ('other_route','_parse_reasoning_object','ValueError','reasoning',True),
+        ]:
+            with self.subTest(function=function,validator=validator,exception=exception,param=param):
+                self.detector_sample('reasoning-helper',template.format(
+                    function=function,validator=validator,exception=exception,param=param),bad)
 
     async def test_T10_memory_disabled(self):
         with patch.object(app,'get_memory_enabled',AsyncMock(return_value=False)):

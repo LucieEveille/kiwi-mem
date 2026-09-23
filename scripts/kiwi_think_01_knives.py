@@ -22,7 +22,7 @@ CASES = {
     9: ('main.py', ['09'], 'resolved log omits source key'),
     10: ('docs/UPGRADING.md', ['11'], 'remove THINK upgrade paragraph'),
 }
-RESOLVE = '    reasoning_effort, reasoning_source = await _resolve_reasoning_effort(reasoning_effort)\n'
+RESOLVE = '    reasoning_effort, reasoning_source = await _resolve_reasoning_effort(reasoning_effort, source_hint=reasoning_source_hint)\n'
 LOG = '    print(f"event=reasoning_effort_resolved source={reasoning_source} effort={reasoning_effort}")\n'
 
 
@@ -40,7 +40,7 @@ def mutate(n, source):
     if n == 2:
         return replace_once(source, 'if skip_prompt or reasoning_effort in (None, "off"):', 'if skip_prompt or reasoning_effort == "off":')
     if n == 3:
-        before = '    if explicit is not None:\n        return explicit, "explicit"\n    raw = await get_config("reasoning_effort")'
+        before = '    if explicit is not None:\n        return explicit, source_hint or "explicit"\n    raw = await get_config("reasoning_effort")'
         after = '    raw = await get_config("reasoning_effort")\n    if explicit is not None and raw == "off":\n        return explicit, "explicit"'
         return replace_once(source, before, after)
     if n == 4:

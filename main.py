@@ -1822,37 +1822,89 @@ async def extract_file_content(file: UploadFile = File(...)):
         return stable_error(e)
 
 
-def _normalize_reasoning_effort(value):
+_REASONING_EFFORT_ALIASES = {"none": "off", "minimal": "low"}
+_REASONING_BUDGET_FLOORS = (
+    (64000, "max"), (32000, "xhigh"), (20000, "high"),
+    (10000, "medium"), (5000, "low"),
+)
+
+
+def _normalize_reasoning_effort(value, field="reasoning_effort"):
     """Normalize the public reasoning-effort request contract or reject it explicitly."""
     if value is None:
         return None
     if not isinstance(value, str):
         raise ValueError(
-            "reasoning_effort 必须是 "
+            f"{field} 必须是 "
             + "/".join(REASONING_EFFORT_VALUES)
             + " 之一"
         )
     normalized = value.strip().lower()
+    normalized = _REASONING_EFFORT_ALIASES.get(normalized, normalized)
     if normalized not in REASONING_EFFORT_VALUES:
         raise ValueError(
-            "reasoning_effort 必须是 "
+            f"{field} 必须是 "
             + "/".join(REASONING_EFFORT_VALUES)
             + " 之一"
         )
     return normalized
 
 
+def _parse_reasoning_object(obj):
+    """客户端 reasoning 对象 → (effort, source_hint, ignored_fields)。
+    effort 为七档之一：source_hint ∈ {"explicit_object", "object_fallback"}；
+    effort 为 None：source_hint == "ignored"，视同未传对象（落 THINK-01 三层）。
+    非 dict / effort 非法 → ValueError（入口 400，message 不回显）。
+    合同 v1.6.2 §十五-2：先逐字段分类 enabled / max_tokens（缺席 / 合法 / 异常），enabled:false 命中即短路返回 off；
+    effort 仅在未短路时校验（非法 → 400）并生效；再依次 max_tokens、enabled:true；
+    没有合法值时：含异常字段 → off（Kiwi 容错政策：不主动开启）；否则视同未传。"""
+    if not isinstance(obj, dict):
+        raise ValueError("reasoning 必须是对象，可含 effort（" + "/".join(REASONING_EFFORT_VALUES)
+                         + "）、max_tokens（非负整数）或 enabled（布尔）")
+    ignored = []
+    enabled = obj.get("enabled")                      # None ＝ 缺席 / null
+    if enabled is not None and not isinstance(enabled, bool):
+        ignored.append("enabled"); enabled = None     # 异常：非布尔
+    max_tokens = obj.get("max_tokens")
+    if max_tokens is not None and (isinstance(max_tokens, bool) or not isinstance(max_tokens, int) or max_tokens < 0):
+        ignored.append("max_tokens"); max_tokens = None   # 异常：布尔 / 字符串 / 浮点 / 负数
+    if enabled is False:                              # ① 短路：不校验 effort（既有行为，T-06 disabled-invalid 延续）
+        return "off", "explicit_object", ignored
+    effort = obj.get("effort")
+    if effort is not None:                            # ② 只在会被解析到时校验：非法 → ValueError → 400（既有规则不变）
+        return _normalize_reasoning_effort(effort, field="reasoning.effort"), "explicit_object", ignored
+    if max_tokens is not None:                        # ③
+        if max_tokens == 0:
+            return "off", "explicit_object", ignored  # Kiwi 兼容规则：零预算按关闭
+        for floor, level in _REASONING_BUDGET_FLOORS:
+            if max_tokens >= floor:
+                return level, "explicit_object", ignored
+        return "low", "explicit_object", ignored      # 1–4999
+    if enabled is True:                               # ④
+        return "auto", "explicit_object", ignored
+    if ignored:                                       # 无合法值 ＋ 含异常 → 保守 off
+        return "off", "object_fallback", ignored
+    return None, "ignored", ignored                   # {} / 全 null / 只有未知字段 → 视同未传
+
+
+def _reasoning_400(message, param):
+    return JSONResponse(status_code=400, content={"error": {
+        "message": message, "type": "invalid_request_error",
+        "param": param, "code": "invalid_value",
+    }})
+
+
 REASONING_EFFORT_DEFAULT = "off"
 
 
-async def _resolve_reasoning_effort(explicit):
+async def _resolve_reasoning_effort(explicit, source_hint=None):
     """Resolve explicit > panel > off once per request.
 
     panel includes the schema default returned by get_config; default denotes
     only an empty/invalid-value fallback. Never log the raw configuration value.
     """
     if explicit is not None:
-        return explicit, "explicit"
+        return explicit, source_hint or "explicit"
     raw = await get_config("reasoning_effort")
     if isinstance(raw, str):
         candidate = raw.strip().lower()
@@ -2031,18 +2083,26 @@ async def chat_completions(request: Request):
     try:
         reasoning_effort = _normalize_reasoning_effort(body.pop("reasoning_effort", None))
     except ValueError as e:
-        return JSONResponse(
-            status_code=400,
-            content={
-                "error": {
-                    "message": str(e),
-                    "type": "invalid_request_error",
-                    "param": "reasoning_effort",
-                    "code": "invalid_value",
-                }
-            },
-        )
-    reasoning_effort, reasoning_source = await _resolve_reasoning_effort(reasoning_effort)
+        return _reasoning_400(str(e), "reasoning_effort")
+    reasoning_source_hint = None
+    if reasoning_effort is None and "reasoning" in body:
+        client_reasoning = body.get("reasoning")
+        if client_reasoning is not None:                 # 显式 null 视同缺席
+            try:
+                parsed, hint, ignored_fields = _parse_reasoning_object(client_reasoning)
+            except ValueError as e:
+                return _reasoning_400(str(e), "reasoning")
+            fields = ",".join(ignored_fields)
+            if hint == "ignored":
+                print("event=reasoning_object_ignored reason=no_control_fields")
+            elif hint == "object_fallback":
+                print(f"event=reasoning_object_fallback reason=invalid_control_value fields={fields}")
+                reasoning_effort, reasoning_source_hint = parsed, hint
+            else:
+                if ignored_fields:
+                    print(f"event=reasoning_object_field_ignored fields={fields}")
+                reasoning_effort, reasoning_source_hint = parsed, hint
+    reasoning_effort, reasoning_source = await _resolve_reasoning_effort(reasoning_effort, source_hint=reasoning_source_hint)
     print(f"event=reasoning_effort_resolved source={reasoning_source} effort={reasoning_effort}")
     messages = body.get("messages", [])
     

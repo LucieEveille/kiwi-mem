@@ -127,6 +127,9 @@ jobs:
       - name: 运行 THINK-01 守卫
         run: python scripts/test_kiwi_think_01.py
 
+      - name: 运行 THINK-02 守卫
+        run: python scripts/test_kiwi_think_02.py
+
       - name: THINK-01 变异证据
         run: |
           python scripts/kiwi_think_01_knives.py --output /tmp/kiwi_think_01_knives.json
@@ -148,6 +151,11 @@ jobs:
           python scripts/kiwi_lock_01_knives.py --output /tmp/kiwi_lock_01_knives.json
           cat /tmp/kiwi_lock_01_knives.json
 
+      - name: THINK-02 变异证据
+        run: |
+          python scripts/kiwi_think_02_knives.py --output /tmp/kiwi_think_02_knives.json
+          cat /tmp/kiwi_think_02_knives.json
+
       - name: 保存 BUILD 验证证据
         if: always()
         uses: actions/upload-artifact@v4
@@ -164,3 +172,5 @@ jobs:
             /tmp/kiwi_emb_01_knives.json
             /tmp/kiwi_err_01_knives.json
             /tmp/kiwi_lock_01_knives.json
+
+            /tmp/kiwi_think_02_knives.json

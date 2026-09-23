@@ -1,0 +1,111 @@
+{
+  "base": "b1dd5dfeec0f8f46da14306bce6b752cf2cbee06",
+  "head": "42c2698a8bc25d06777ab445d846f3499eef18a9",
+  "ledgers": [
+    {
+      "file": "kiwi_build_01_knives.json",
+      "replay_head": "42c2698a8bc25d06777ab445d846f3499eef18a9",
+      "pinned_files": 9,
+      "states": {
+        "RED": 23
+      },
+      "source_blobs_match": true
+    },
+    {
+      "file": "kiwi_emb_01_knives.json",
+      "replay_head": "42c2698a8bc25d06777ab445d846f3499eef18a9",
+      "pinned_files": 15,
+      "states": {
+        "RED": 33,
+        "EQUIVALENT": 3
+      },
+      "source_blobs_match": true
+    },
+    {
+      "file": "kiwi_err_01_knives.json",
+      "replay_head": "42c2698a8bc25d06777ab445d846f3499eef18a9",
+      "pinned_files": 11,
+      "states": {
+        "RED": 11,
+        "EQUIVALENT": 1
+      },
+      "source_blobs_match": true
+    },
+    {
+      "file": "kiwi_lock_01_knives.json",
+      "replay_head": "42c2698a8bc25d06777ab445d846f3499eef18a9",
+      "pinned_files": 10,
+      "states": {
+        "RED": 7
+      },
+      "source_blobs_match": true
+    },
+    {
+      "file": "kiwi_prep_01_knives.json",
+      "replay_head": "42c2698a8bc25d06777ab445d846f3499eef18a9",
+      "pinned_files": 17,
+      "states": {
+        "RED": 29
+      },
+      "source_blobs_match": true
+    },
+    {
+      "file": "kiwi_sec_01a_build_knives.json",
+      "replay_head": "42c2698a8bc25d06777ab445d846f3499eef18a9",
+      "pinned_files": 7,
+      "states": {
+        "RED": 41
+      },
+      "source_blobs_match": true
+    },
+    {
+      "file": "kiwi_sec_01a_knives.json",
+      "replay_head": "42c2698a8bc25d06777ab445d846f3499eef18a9",
+      "pinned_files": 7,
+      "states": {
+        "RED": 41
+      },
+      "source_blobs_match": true
+    },
+    {
+      "file": "kiwi_sec_01b_knives.json",
+      "replay_head": "42c2698a8bc25d06777ab445d846f3499eef18a9",
+      "pinned_files": 6,
+      "states": {
+        "RED": 10
+      },
+      "source_blobs_match": true
+    },
+    {
+      "file": "kiwi_think_01_knives.json",
+      "replay_head": "42c2698a8bc25d06777ab445d846f3499eef18a9",
+      "pinned_files": 6,
+      "states": {
+        "RED": 10
+      },
+      "source_blobs_match": true
+    },
+    {
+      "file": "kiwi_think_02_knives.json",
+      "replay_head": "42c2698a8bc25d06777ab445d846f3499eef18a9",
+      "pinned_files": 7,
+      "states": {
+        "RED": 8
+      },
+      "source_blobs_match": true
+    },
+    {
+      "file": "kiwi_w2_05b_knives.json",
+      "replay_head": "42c2698a8bc25d06777ab445d846f3499eef18a9",
+      "pinned_files": 9,
+      "states": {
+        "RED": 13
+      },
+      "source_blobs_match": true
+    }
+  ],
+  "ci_run": 35728780538,
+  "ci_conclusion": "success",
+  "ci_url": "https://github.com/LucieEveille/kiwi-mem/actions/runs/35728780538",
+  "evidence_note": "Integrated replay after LOCK-01 squash. Evidence-only follow-up preserves all pinned source blobs. Two historical SEC-01a filenames share the identical-book CI replay. W2-05b was replayed locally on disposable PostgreSQL 16."
+}
