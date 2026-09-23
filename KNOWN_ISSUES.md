@@ -137,3 +137,5 @@ Status scans are O(N). Native Anthropic format is excluded, but relay capability
 - Nested `reasoning.exclude` is not interpreted; the object is removed by the existing outbound translator. It is not a promise to hide or suppress reasoning output.
 - Top-level `include_reasoning` is not normalized: ordinary OpenAI forwarding retains it, while tool-loop reconstruction and Anthropic conversion omit it. This ticket preserves those different paths.
 - `minimal` maps lossily to low. Object budgets 1–4999 map to the lowest reasoning tier (5000); the input is a tier selector, not an exact reasoning-token cap. Upstream/model defaults may still reason when the gateway is off.
+
+- `off` 只表示网关不发送思考控制字段，上游模型 / 中转是否仍推理由其自身决定；关闭在特定中转上是否生效归 COMPAT 验收与候选 CAP-01。 Off does not guarantee upstream disablement; COMPAT acceptance and candidate CAP-01 cover that capability.

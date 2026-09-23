@@ -4,11 +4,11 @@ KIWI-THINK-01（PR #86）用于 2.0 集成分支。用户应能决定是否让�
 
 ## 优先级与边界 / Precedence and scope
 
-**显式 ＞ 面板 ＞ off**：请求 `reasoning_effort` 显式合法值优先；缺席或 null 时再读非 null 的 `reasoning` 对象，两者均缺席或 null 时读取面板同名配置。配置系统返回出厂默认 off 也算配置来源；空、None 或非法配置防御兜底为 off。请求非法值仍返回原有 400 invalid_value，大小写与首尾空格规范化不变。
+**显式 ＞ 面板 ＞ off**：请求 `reasoning_effort` 显式合法值优先；缺席或 null 时再读非 null 的 `reasoning` 对象，没有有效对象控制且无异常字段时读取面板同名配置。配置系统返回出厂默认 off 也算配置来源；空、None 或非法配置防御兜底为 off。请求非法值仍返回原有 400 invalid_value，大小写与首尾空格规范化不变。
 
 `off` 表示网关不主动开启：删除 `reasoning` / `reasoning_effort` 后不添加开启参数。它不保证上游模型自身不推理或不收费；强制关闭与模型能力归后续专项票。`exclude` 隐藏推理内容而不关闭推理。内部 `skip_system_prompt` 请求不主动开启思考，无论面板如何设置。
 
-The precedence is explicit request > panel configuration > off. When the string is missing or null, a non-null reasoning object is parsed next; only if both are absent or null is configuration read once; valid explicit input wins without reading the panel. The configuration getter includes the factory default. Empty or invalid configuration falls back to off. Invalid explicit input retains the existing HTTP 400 contract.
+The precedence is explicit request > panel configuration > off. When the string is missing or null, a non-null reasoning object is parsed next; an object with no effective or invalid controls also falls back to configuration; valid explicit input wins without reading the panel. The configuration getter includes the factory default. Empty or invalid configuration falls back to off. Invalid explicit input retains the existing HTTP 400 contract.
 
 Off means Kiwi does not actively enable reasoning, not that upstream reasoning is forcibly disabled. Model defaults and mandatory reasoning can still apply. Internal skip-system-prompt requests do not enable reasoning. The gateway does not send provider-specific disable controls in this ticket.
 
@@ -36,7 +36,7 @@ The unchanged Anthropic adapter emits thinking with budget_tokens, not an OpenRo
 
 ## 诊断与升级 / Diagnostics and upgrade
 
-- `event=reasoning_effort_resolved source=explicit|explicit_object|panel|default effort=<七档>`：成功规范化并解析后每请求一行。panel 包括库无行时的出厂 off；default 仅空或非法值兜底，不能用它判断用户是否从未设置。
+- `event=reasoning_effort_resolved source=explicit|explicit_object|object_fallback|panel|default effort=<七档>`：成功规范化并解析后每请求一行。panel 包括库无行时的出厂 off；default 仅空或非法值兜底，不能用它判断用户是否从未设置。
 - `event=reasoning_effort_config_invalid increment=1`：非空非法字符串配置，不回显原值。
 - `event=reasoning_effort_downgrade`：现有端点降档事件保持原样。Anthropic 既有 budget_clamp / disable 事件也保留。
 
@@ -49,22 +49,31 @@ The resolved event logs only an enum effort and a fixed source. Panel includes f
 
 字符串 `reasoning_effort` 在入口接受 `none → off`、`minimal → low`（有损映射），大小写与首尾空白不敏感；对象 `effort` 共用同一别名表。七档枚举、面板值与 400 消息中的七档列表不扩展。
 
-优先级：非 null 的 `reasoning_effort` 先校验；合法时忽略整个 `reasoning`（即使它非法），非法则返回 400。字符串缺席/null 才读非 null 的对象；两者都缺席才落面板，再按既有规则落 off。
+入口对所有客户端与后端统一解析，不按品牌或地址猜语义。前端输入先归一到网关七档，再走既有后端转换；请求成功不等于上游一定执行了设置。
 
-| 输入 / Input | 入口档 / Resolved effort |
-|---|---|
-| `enabled:false`，无论 effort 是否存在或有效 | off |
-| `effort` 非 null | 七档或别名；非法值/空串/非字符串 → 400 |
-| `effort:null` 且 `max_tokens:12000` | medium |
-| `effort:high, max_tokens:100` | high，effort 优先 |
-| 只有正整数 `max_tokens` | 见下方预算表 |
-| `max_tokens` 为 0、负、布尔、字符串或浮点（含 5000.0） | auto |
-| `{}`、`enabled:true`、`enabled:"false"`、只有未知键 | auto |
-| 非对象的非 null `reasoning` | 400 |
-| `reasoning:null` | 缺席，继续面板回退 |
+三步规则：
+
+1. 非 null 的顶层字符串先校验，合法时覆盖整个对象，连对象诊断事件也不产生；非法字符串沿用 400。字符串缺席/null 才解析非 null 对象，非对象沿用 400。
+2. 对象字段分类：缺席/null 等于没提供；`enabled` 只认布尔；`max_tokens` 只认非负整数且排除布尔；其它值为异常。按 **enabled:false → effort → max_tokens → enabled:true** 顺序采用合法控制。false 立即短路，不校验低优先级 effort；否则非 null effort 必须合法，仍沿用 400。
+3. 无合法控制可生效时：有异常字段，本轮 off、不回退面板；没有异常字段，按面板/default。异常容错是 Kiwi 政策，不是推断字符串 "false" 或负数的意图。
+
+| 输入 / Input | 有效档 / Result | 诊断 / Diagnostic |
+|---|---|---|
+| `enabled:false`，含非法 effort | off / explicit_object | 若预算异常，field_ignored |
+| 合法 effort（含 none/minimal），即使预算为 0 | effort 档优先 / explicit_object | 若 enabled/预算异常，field_ignored |
+| 无更高优先级控制，`max_tokens:0` | off / explicit_object，Kiwi 零预算兼容规则 | 若 enabled 异常，field_ignored |
+| 无更高优先级控制，正整数预算 | 预算下界取档 / explicit_object | 若 enabled 异常，field_ignored |
+| `enabled:true`，无合法 effort/预算 | auto / explicit_object | 若预算异常，field_ignored |
+| 只有异常 enabled 或预算 | off / object_fallback | fallback |
+| `{}`、全 null、只有未知字段 | 面板/default | ignored |
+| 对象缺席/null | 面板/default | 无 |
+| 非对象，或未被 false 短路的非法 effort | 400 | 无对象诊断 |
+
+例如 `enabled:"false", effort:high` 仍取 high；`enabled:true, max_tokens:"5000"` 仍取 auto；`effort:high, max_tokens:0` 仍取 high。只有无法识别的控制且无合法控制可采用，才保守落 off。合法开启不得被低优先级异常值否决。
 
 | max_tokens | Tier |
 |---|---|
+| 0 | off |
 | 1–4999 | low（最低映射预算 5000） |
 | 5000–9999 | low |
 | 10000–19999 | medium |
@@ -72,11 +81,19 @@ The resolved event logs only an enum effort and a fixed source. Panel includes f
 | 32000–63999 | xhigh |
 | ≥64000 | max |
 
-对象只选择档位，不将客户端预算原值透传。档位仍走既有端点天花板与 Anthropic adapter；`off` 只表示网关不发思考字段，不保证模型不推理。`exclude` 不解释、随对象被现有 translator 移除；顶层 `include_reasoning` 保留各路径现状（普通 OpenAI 转发保留，工具循环和 Anthropic 转换不带）。
+三个诊断事件仅含固定原因与字段名，不含原值或对象原文：
 
-错误保留嵌套 `error` 四键：`message/type/param/code`，其中 `type=invalid_request_error`、`code=invalid_value`。对象路径 `param=reasoning`：非对象消息以 `reasoning 必须是对象` 开头，非法 effort 以 `reasoning.effort 必须是` 开头；字符串路径仍为 `param=reasoning_effort`。消息不回显输入。对象解析成功记录 `source=explicit_object`；日志不打印对象原文。
+- `event=reasoning_object_ignored reason=no_control_fields`
+- `event=reasoning_object_fallback reason=invalid_control_value fields=enabled,max_tokens`（只列实际异常字段，顺序固定）
+- `event=reasoning_object_field_ignored fields=enabled,max_tokens`（其它合法控制生效）
 
-English: the non-null explicit string has priority and ignores the object, including invalid objects. Otherwise a non-null reasoning object selects a tier: false disables, non-null effort takes precedence over a budget, and valid positive-integer budgets use the floors above. All remaining objects select auto; null is absent. Strings and object efforts share the aliases. Invalid objects/efforts use the existing four-key error envelope with param=reasoning, without echoing input. Existing outbound ceilings and conversion remain unchanged; low budgets and minimal are lossy mappings, not exact caps or a guarantee about model behavior.
+对象只选择档位，不透传预算原值。最小预算与 minimal→low 都是有损映射。`off` 只表示网关不发送思考控制字段，上游模型/中转是否仍推理由其自身决定；特定中转的关闭效果归 COMPAT 验收与候选 CAP-01。`exclude` 不解释、随对象被现有 translator 移除；顶层 `include_reasoning` 保留各路径现状（普通 OpenAI 转发保留，工具循环和 Anthropic 转换不带）。
+
+错误保留嵌套 `error` 四键：`message/type/param/code`，其中 `type=invalid_request_error`、`code=invalid_value`。对象路径 `param=reasoning`：非对象消息以 `reasoning 必须是对象` 开头，非法 effort 以 `reasoning.effort 必须是` 开头；字符串路径仍为 `param=reasoning_effort`。消息不回显输入，本次不新增拒绝形状。
+
+English: input normalization is independent of client brand and backend address. A valid non-null explicit string wins over the entire object without object diagnostics. Otherwise classify enabled and max_tokens as absent/null, valid, or invalid. Apply false first (without validating effort), then effort/aliases, nonnegative integer budget, and true. Invalid non-null effort still returns 400 unless false short-circuits it. Zero budget is a Kiwi off alias; positive budgets select tiers, not exact caps. If no valid control applies, invalid controls resolve to off without panel fallback; empty/all-null/unknown-only objects use the panel. This is a conservative Kiwi policy, not a guess about negative numbers or string booleans. Valid higher-priority controls still win over invalid or lower-priority controls.
+
+The three events above contain only field names and fixed reasons. Sources are explicit_object for valid controls, object_fallback for conservative off, or panel/default for ignored objects. No new rejection shapes are introduced. The existing outbound layer is unchanged; off cannot guarantee that an upstream model stops reasoning. COMPAT/CAP-01 own that capability boundary.
 
 ## 已实证的第三方客户端出站形态 / Pinned client audit
 
@@ -90,5 +107,9 @@ English: the non-null explicit string has priority and ignores the object, inclu
 | [Kelivo 3762450](https://github.com/Chevey339/kelivo/tree/3762450a2561786a4ee0e9d5a44d40947cca345c) | 普通路径省略字段 | provider 名含 openrouter 的路径可发 `{effort}` |
 | [Operit dbf7191](https://github.com/AAswordman/Operit/tree/dbf71916fae9750cfdc9f9a774f5a0fee56633fb) | 普通路径省略字段 | OpenRouter 类型 `{effort}` / `{max_tokens}`，预算最低 1024 |
 | [SillyTavern 06bde93](https://github.com/SillyTavern/SillyTavern/tree/06bde939fb1e9c4c8d8641d810f0a916b5bce127) | 取决于 source/model 条件 | 思考 UI 含 minimal；是否发 effort 受模型与 provider 分支限制 |
+
+六家均未实证发送零/负预算、非布尔 enabled 或空对象；异常处置为防御性合同。
+
+None of these six pinned audits demonstrated those malformed/empty shapes; the fallback policy is defensive.
 
 These are source-level observations at pinned commits, not a current-version or all-settings compatibility guarantee. A client omitting both fields falls back to Kiwi's panel setting. Final release acceptance still requires client testing on the integrated release candidate.

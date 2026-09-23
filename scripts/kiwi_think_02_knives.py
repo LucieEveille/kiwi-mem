@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""THINK-02: eight reasoning input mutations; mocked storage and upstream.
+"""THINK-02: twelve reasoning input mutations; mocked storage and upstream.
 
 Run from a clean committed checkout, --output outside that checkout. The full
-259-arm suite must pass before and after; each mutation runs all ten groups. Only the named target's assertion failure, with
+suite must pass before and after; each mutation runs all ten groups with the
+preflight's exact arm identity set. Only the named target's assertion failure, with
 zero ERROR arms, counts as RED. Embeddings/HTTP use the Stage A test boundaries.
 """
 import argparse
@@ -23,9 +24,13 @@ CASES = {
     2: ('main.py', '03', '', 'enabled false becomes auto'),
     3: ('main.py', '04', '', 'budget equality drops one level'),
     4: ('main.py', '06', '', 'object overrides explicit string'),
-    5: ('main.py', '07', '', 'non-object silently becomes auto'),
+    5: ('main.py', '07', '', 'non-object silently becomes empty object'),
     6: ('main.py', '04', '04b-budget-table', 'input budget floor drifts from adapter'),
     7: ('main.py', '08', '', 'echo raw reasoning object'),
+    8: ('main.py', '05', '05b-', 'invalid controls fall back to auto'),
+    9: ('main.py', '05', '05-', 'empty/null/unknown object becomes auto'),
+    10: ('main.py', '06', '', 'invalid controls override valid higher-priority controls'),
+    11: ('main.py', '03', '03-zero-panel-high', 'zero budget falls through to low'),
 }
 
 
@@ -44,17 +49,44 @@ def mutate(number, source):
     if number == 1:
         return replace_once(source, OBJECT_IF, 'if False:')
     if number == 2:
-        return replace_once(source, 'if obj.get("enabled") is False:\n        return "off"', 'if obj.get("enabled") is False:\n        return "auto"')
+        return replace_once(source, 'return "off", "explicit_object", ignored\n    effort =', 'return "auto", "explicit_object", ignored\n    effort =')
     if number == 3:
         return replace_once(source, 'if max_tokens >= floor:', 'if max_tokens > floor:')
     if number == 4:
         return replace_once(source, OBJECT_IF, 'if "reasoning" in body:')
     if number == 5:
-        before = '        raise ValueError("reasoning 必须是对象，可含 effort（" + "/".join(REASONING_EFFORT_VALUES)\n                         + "）、max_tokens（正整数）或 enabled（布尔）")'
+        before = '        raise ValueError("reasoning 必须是对象，可含 effort（" + "/".join(REASONING_EFFORT_VALUES)\n                         + "）、max_tokens（非负整数）或 enabled（布尔）")'
         return replace_once(source, before, '        obj = {}')
     if number == 6:
         return replace_once(source, '(5000, "low")', '(4000, "low")')
-    return replace_once(source, 'def _parse_reasoning_object(obj):\n', 'def _parse_reasoning_object(obj):\n    print(obj)\n')
+    if number == 7:
+        return replace_once(source, 'def _parse_reasoning_object(obj):\n', 'def _parse_reasoning_object(obj):\n    print(obj)\n')
+    if number == 8:
+        return replace_once(source, 'return "off", "object_fallback", ignored', 'return "auto", "explicit_object", ignored')
+    if number == 9:
+        return replace_once(source, 'return None, "ignored", ignored', 'return "auto", "explicit_object", ignored')
+    if number == 10:
+        return replace_once(source, '    if enabled is False:', '    if ignored:\n        return "off", "object_fallback", ignored\n    if enabled is False:')
+    if number == 11:
+        return replace_once(source, '        if max_tokens == 0:\n            return "off", "explicit_object", ignored  # Kiwi 兼容规则：零预算按关闭\n', '')
+    raise ValueError('unknown knife')
+
+
+def identities(report):
+    return [json.dumps([r['guard'], r['arm']], sort_keys=True, ensure_ascii=False)
+            for r in report.get('arms', [])]
+
+
+def complete(report, expected):
+    if not report:
+        return False
+    actual = identities(report)
+    counts = {s: sum(r['status'] == s for r in report['arms']) for s in ('PASS', 'FAIL', 'ERROR')}
+    return (report.get('groups_run') == 10 and report.get('errors') == 0
+            and counts == report.get('counts') and counts['ERROR'] == 0
+            and len(actual) == len(expected) and len(set(actual)) == len(actual)
+            and set(actual) == expected
+            and all(r.get('failure_kind') == 'AssertionError' for r in report['arms'] if r['status'] == 'FAIL'))
 
 
 def git(*args):
@@ -85,8 +117,9 @@ def execute(output):
     folder = output.parent / (output.stem + '-runs')
     folder.mkdir(parents=True, exist_ok=True)
     preflight, pre_arms, pre_log = run_tests(folder, 'preflight', full=True)
-    if preflight or not pre_arms or pre_arms['counts'] != {'PASS': 259, 'FAIL': 0, 'ERROR': 0}:
-        raise RuntimeError('259-arm preflight not green; no mutations applied')
+    expected = set(identities(pre_arms or {}))
+    if preflight or not expected or not complete(pre_arms, expected) or pre_arms['counts']['FAIL']:
+        raise RuntimeError('full preflight not green; no mutations applied')
     results = []
     for number, (filename, guard, arm, description) in CASES.items():
         path = ROOT / filename
@@ -99,11 +132,12 @@ def execute(output):
             code, report, log = run_tests(folder, f'K-THINK2-{number}')
             target = [r for r in (report or {}).get('arms', []) if r['guard'].startswith('test_T_THINK_02_' + guard + '_')
                       and arm in json.dumps(r['arm']) and r['status'] == 'FAIL']
-            complete = report and len(report['arms']) == 259 and report['counts']['ERROR'] == 0 and report['errors'] == 0
-            state = 'RED' if code == 1 and complete and target else 'SURVIVED' if code == 0 else 'CRASH'
+            arm_set_equal = complete(report, expected)
+            state = 'RED' if code == 1 and arm_set_equal and target else 'SURVIVED' if code == 0 else 'CRASH'
             results.append(dict(knife=f'K-THINK2-{number}', mutation=description, status=state,
                                 target_guard='T-THINK-02-' + guard, target_arm=arm, failures=target,
                                 counts=report['counts'] if report else None, exit_code=code,
+                                arm_set_equal=arm_set_equal,
                                 log_sha256=hashlib.sha256(log.encode('utf-8')).hexdigest(),
                                 restored_sha256=digest))
             print(f'K-THINK2-{number}: {state}', flush=True)
@@ -122,9 +156,12 @@ def execute(output):
                   preflight=preflight, preflight_guards=10, restored_suite=restored,
                   restored_guards=post_arms.get('groups_run') if post_arms else None,
                   preflight_arms=pre_arms['counts'], restored_arms=post_arms['counts'] if post_arms else None,
+                  expected_arm_count=len(expected),
+                  arm_identities_sha256=hashlib.sha256('\n'.join(sorted(expected)).encode('utf-8')).hexdigest(),
+                  restored_arm_set_equal=complete(post_arms, expected),
                   results=results)
     output.write_text(json.dumps(ledger, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
-    return 0 if not restored and ledger['restored_guards'] == 10 and ledger['restored_arms'] == {'PASS': 259, 'FAIL': 0, 'ERROR': 0} and all(r['status'] == 'RED' for r in results) else 1
+    return 0 if not restored and complete(post_arms, expected) and not post_arms['counts']['FAIL'] and all(r['status'] == 'RED' for r in results) else 1
 
 
 if __name__ == '__main__':

@@ -2,6 +2,9 @@
 
 ## Unreleased — 2.0.0 integration / KIWI-THINK-02
 
+- P1：零预算按关闭；异常控制无合法值可生效时保守落 off，空对象回面板；三个诊断事件只记字段名。有效合法控制仍按优先级生效，本次不新增拒绝形状。
+- P1: zero budget resolves to off; invalid controls fall back to off only when no valid control applies. Empty objects use the panel; diagnostics record field names only. Existing priorities and rejection shapes are preserved.
+
 - 客户端 reasoning_effort 新认 none（off）和 minimal（low）；支持 OpenRouter 风格 reasoning 对象与预算取档。面板、端点天花板与出站转换保持原样。
 - Client reasoning_effort accepts none (off) and minimal (low); reasoning objects and budget floors are recognized at entry. Panel values, endpoint ceilings and outbound conversion remain unchanged.
 

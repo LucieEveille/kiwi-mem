@@ -157,15 +157,22 @@ class Think02Guards(unittest.IsolatedAsyncioTestCase):
                     check('no_value_echo', lambda: self.assertNotIn(SENTINEL, log + response.text))
 
     def parser_case(self, case, obj, expected):
-        actual = gateway._parse_reasoning_object(obj)
+        try:
+            actual = gateway._parse_reasoning_object(obj)
+        except ValueError:
+            # A mutated validator rejecting a valid input is a business-result
+            # mismatch. Other exception types must still surface as ERROR.
+            actual = None
         identity = dict(arm='parser-' + case)
         self.check(identity, 'tuple_type', lambda: self.assertIsInstance(actual, tuple))
         # Check type before length/unpacking; old scalar returns produce only
         # named AssertionErrors, never IndexError/ValueError unpack failures.
         self.check(identity, 'tuple_length', lambda: self.assertTrue(isinstance(actual, tuple) and len(actual) == 3))
-        if isinstance(actual, tuple) and len(actual) == 3:
-            for index, name in enumerate(('parsed_effort', 'source_hint', 'ignored_fields')):
-                self.check(identity, name, lambda i=index: self.assertEqual(actual[i], expected[i]))
+        for index, name in enumerate(('parsed_effort', 'source_hint', 'ignored_fields')):
+            def compare(i=index):
+                self.assertTrue(isinstance(actual, tuple) and len(actual) == 3, 'parser tuple prerequisite')
+                self.assertEqual(actual[i], expected[i])
+            self.check(identity, name, compare)
 
     def resolved(self, log, source, effort):
         lines = [x for x in log.splitlines() if x.startswith('event=reasoning_effort_resolved')]
@@ -177,6 +184,7 @@ class Think02Guards(unittest.IsolatedAsyncioTestCase):
         return sent, log, pool
 
     def outbound_effort(self, sent, provider, level):
+        self.assertIsNotNone(sent, 'expected a successful request to reach upstream')
         fields = {k: sent[k] for k in ('reasoning', 'reasoning_effort', 'thinking') if k in sent}
         if level == 'off' or (level == 'auto' and provider in ('openai', 'relay')):
             self.assertEqual(fields, {})
@@ -469,6 +477,7 @@ if __name__ == '__main__':
               'errors': len(result.errors), 'failures': len(result.failures),
               'assertions': ASSERTIONS,
               'assertion_counts': {s: sum(r['status'] == s for r in ASSERTIONS) for s in ('PASS', 'FAIL', 'ERROR')}}
+    print('THINK-02 assertion_counts ' + json.dumps(report['assertion_counts'], sort_keys=True))
     if os.environ.get('KIWI_THINK_02_REPORT'):
         Path(os.environ['KIWI_THINK_02_REPORT']).write_text(json.dumps(report, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
     sys.exit(0 if result.wasSuccessful() else 1)

@@ -86,7 +86,7 @@ Compose 三步：
 
 2.0 起网关缺省不再主动开启思考：客户端未提供非 null 的 `reasoning_effort` 或 `reasoning` 时按面板「思考强度」（默认 off）；依赖缺省开思考的客户端请显式传值或在面板选档。模型自身默认推理的行为不受影响。Anthropic 直连不再在你没开思考时把 temperature 改成 1。
 
-`reasoning_effort` 接受 `none`（off）与 `minimal`（有损映射到 low）。`reasoning` 对象按 `enabled:false` → off、`effort` → 同档（含别名）、仅有 `max_tokens` → 预算下界取档解析；1–4999 按 low，最低映射预算为 5000，不保证满足较小预算。合法字符串入口优先于对象；null 视同缺席。`off` 表示网关不发思考字段，不保证模型不推理。`reasoning.exclude` 与顶层 `include_reasoning` 不纳入统一解析，各路径行为保持；详见 [reasoning contract](reasoning-effort.md)。
+`reasoning_effort` 接受 `none`（off）与 `minimal`（有损映射到 low）。`reasoning` 对象按 `enabled:false` → off、`effort` → 同档（含别名）、仅有 `max_tokens` → 预算下界取档解析；1–4999 按 low，最低映射预算为 5000，不保证满足较小预算。合法字符串入口优先于对象；null 视同缺席。`off` 表示网关不发思考字段，不保证模型不推理。`max_tokens:0` 按关闭；空对象、全 null 或只有未知字段按面板。对象内无法识别的 `enabled` / `max_tokens` 值被忽略，仍按优先级采用其它合法控制；没有合法控制可生效时本轮按关闭处理、不回退面板。合法 enabled:false 短路先于 effort 校验，本次不新增 400。`reasoning.exclude` 与顶层 `include_reasoning` 不纳入统一解析，各路径行为保持；详见 [reasoning contract](reasoning-effort.md)。
 
 ### English: 2.0 MCP access controls
 
@@ -100,7 +100,7 @@ Stable errors are 421 mcp_host_not_allowed, 403 mcp_origin_not_allowed and 400 i
 
 Kiwi no longer enables thinking by default in 2.0. When neither a non-null `reasoning_effort` nor a non-null `reasoning` object is supplied, the gateway uses the panel setting (off by default). Clients relying on the previous implicit enablement should send an explicit effort or select a panel value. Upstream models may still reason by default. Direct Anthropic requests no longer have temperature changed to 1 due to implicit gateway enablement.
 
-`reasoning_effort` also accepts `none` (off) and `minimal` (lossily mapped to low). A `reasoning` object supports `enabled:false`, `effort` including aliases, or a positive integer `max_tokens` mapped by budget floors. Values below 5000 still map to low (budget 5000), so this is not an exact budget cap. A valid explicit string wins; null is absent. Off omits gateway reasoning controls and cannot guarantee that the model stops reasoning. `reasoning.exclude` and top-level `include_reasoning` keep their existing path-specific behavior. See [the reasoning contract](reasoning-effort.md).
+`reasoning_effort` also accepts `none` (off) and `minimal` (lossily mapped to low). A `reasoning` object supports `enabled:false`, `effort` including aliases, or a nonnegative integer `max_tokens` (zero means off; positive values use budget floors). Values below 5000 still map to low (budget 5000), so this is not an exact budget cap. A valid explicit string wins; null is absent. Off omits gateway reasoning controls and cannot guarantee that the model stops reasoning. Empty/all-null/unknown-only objects use the panel. Invalid enabled/max_tokens values are ignored while other valid controls retain their priority; with no valid control to apply, invalid controls resolve to off without panel fallback. Valid enabled:false short-circuits effort validation; this change adds no rejection shapes. `reasoning.exclude` and top-level `include_reasoning` keep their existing path-specific behavior. See [the reasoning contract](reasoning-effort.md).
 
 ### 2.0 嵌入换尺子 / Embedding identity upgrade
 

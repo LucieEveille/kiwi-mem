@@ -1851,22 +1851,40 @@ def _normalize_reasoning_effort(value, field="reasoning_effort"):
 
 
 def _parse_reasoning_object(obj):
-    """Read client reasoning intent; outbound translation remains unchanged."""
+    """客户端 reasoning 对象 → (effort, source_hint, ignored_fields)。
+    effort 为七档之一：source_hint ∈ {"explicit_object", "object_fallback"}；
+    effort 为 None：source_hint == "ignored"，视同未传对象（落 THINK-01 三层）。
+    非 dict / effort 非法 → ValueError（入口 400，message 不回显）。
+    合同 v1.6.2 §十五-2：先逐字段分类 enabled / max_tokens（缺席 / 合法 / 异常），enabled:false 命中即短路返回 off；
+    effort 仅在未短路时校验（非法 → 400）并生效；再依次 max_tokens、enabled:true；
+    没有合法值时：含异常字段 → off（Kiwi 容错政策：不主动开启）；否则视同未传。"""
     if not isinstance(obj, dict):
         raise ValueError("reasoning 必须是对象，可含 effort（" + "/".join(REASONING_EFFORT_VALUES)
-                         + "）、max_tokens（正整数）或 enabled（布尔）")
-    if obj.get("enabled") is False:
-        return "off"
-    effort = obj.get("effort")
-    if effort is not None:
-        return _normalize_reasoning_effort(effort, field="reasoning.effort")
+                         + "）、max_tokens（非负整数）或 enabled（布尔）")
+    ignored = []
+    enabled = obj.get("enabled")                      # None ＝ 缺席 / null
+    if enabled is not None and not isinstance(enabled, bool):
+        ignored.append("enabled"); enabled = None     # 异常：非布尔
     max_tokens = obj.get("max_tokens")
-    if isinstance(max_tokens, int) and not isinstance(max_tokens, bool) and max_tokens > 0:
+    if max_tokens is not None and (isinstance(max_tokens, bool) or not isinstance(max_tokens, int) or max_tokens < 0):
+        ignored.append("max_tokens"); max_tokens = None   # 异常：布尔 / 字符串 / 浮点 / 负数
+    if enabled is False:                              # ① 短路：不校验 effort（既有行为，T-06 disabled-invalid 延续）
+        return "off", "explicit_object", ignored
+    effort = obj.get("effort")
+    if effort is not None:                            # ② 只在会被解析到时校验：非法 → ValueError → 400（既有规则不变）
+        return _normalize_reasoning_effort(effort, field="reasoning.effort"), "explicit_object", ignored
+    if max_tokens is not None:                        # ③
+        if max_tokens == 0:
+            return "off", "explicit_object", ignored  # Kiwi 兼容规则：零预算按关闭
         for floor, level in _REASONING_BUDGET_FLOORS:
             if max_tokens >= floor:
-                return level
-        return "low"
-    return "auto"
+                return level, "explicit_object", ignored
+        return "low", "explicit_object", ignored      # 1–4999
+    if enabled is True:                               # ④
+        return "auto", "explicit_object", ignored
+    if ignored:                                       # 无合法值 ＋ 含异常 → 保守 off
+        return "off", "object_fallback", ignored
+    return None, "ignored", ignored                   # {} / 全 null / 只有未知字段 → 视同未传
 
 
 def _reasoning_400(message, param):
@@ -2069,12 +2087,21 @@ async def chat_completions(request: Request):
     reasoning_source_hint = None
     if reasoning_effort is None and "reasoning" in body:
         client_reasoning = body.get("reasoning")
-        if client_reasoning is not None:
+        if client_reasoning is not None:                 # 显式 null 视同缺席
             try:
-                reasoning_effort = _parse_reasoning_object(client_reasoning)
+                parsed, hint, ignored_fields = _parse_reasoning_object(client_reasoning)
             except ValueError as e:
                 return _reasoning_400(str(e), "reasoning")
-            reasoning_source_hint = "explicit_object"
+            fields = ",".join(ignored_fields)
+            if hint == "ignored":
+                print("event=reasoning_object_ignored reason=no_control_fields")
+            elif hint == "object_fallback":
+                print(f"event=reasoning_object_fallback reason=invalid_control_value fields={fields}")
+                reasoning_effort, reasoning_source_hint = parsed, hint
+            else:
+                if ignored_fields:
+                    print(f"event=reasoning_object_field_ignored fields={fields}")
+                reasoning_effort, reasoning_source_hint = parsed, hint
     reasoning_effort, reasoning_source = await _resolve_reasoning_effort(reasoning_effort, source_hint=reasoning_source_hint)
     print(f"event=reasoning_effort_resolved source={reasoning_source} effort={reasoning_effort}")
     messages = body.get("messages", [])
