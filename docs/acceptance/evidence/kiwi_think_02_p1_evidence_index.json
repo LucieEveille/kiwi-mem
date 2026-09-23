@@ -1,0 +1,121 @@
+{
+  "replay_head": "0c43b2621e034c40acb4a795366463e65bd4300c",
+  "stage_a_head": "a49808d5aea9338fb8ddde229866770d7b87c77a",
+  "stage_a_counts": {
+    "PASS": 3478,
+    "FAIL": 1390,
+    "ERROR": 0
+  },
+  "stage_a_assertion_counts": {
+    "PASS": 6830,
+    "FAIL": 1390,
+    "ERROR": 0
+  },
+  "stage_b_counts": {
+    "PASS": 4955,
+    "FAIL": 0,
+    "ERROR": 0
+  },
+  "stage_b_assertion_counts": {
+    "PASS": 9142,
+    "FAIL": 0,
+    "ERROR": 0
+  },
+  "all_accepted_stage_a_arm_identities_preserved": true,
+  "additional_parser_field_arms": 87,
+  "ledgers": [
+    {
+      "file": "kiwi_build_01_knives.json",
+      "replay_head": "0c43b2621e034c40acb4a795366463e65bd4300c",
+      "source_blobs_match": true,
+      "states": {
+        "RED": 23
+      }
+    },
+    {
+      "file": "kiwi_emb_01_knives.json",
+      "replay_head": "0c43b2621e034c40acb4a795366463e65bd4300c",
+      "source_blobs_match": true,
+      "states": {
+        "RED": 33,
+        "EQUIVALENT": 3
+      }
+    },
+    {
+      "file": "kiwi_err_01_knives.json",
+      "replay_head": "0c43b2621e034c40acb4a795366463e65bd4300c",
+      "source_blobs_match": true,
+      "states": {
+        "RED": 11,
+        "EQUIVALENT": 1
+      }
+    },
+    {
+      "file": "kiwi_lock_01_knives.json",
+      "replay_head": "0c43b2621e034c40acb4a795366463e65bd4300c",
+      "source_blobs_match": true,
+      "states": {
+        "RED": 7
+      }
+    },
+    {
+      "file": "kiwi_prep_01_knives.json",
+      "replay_head": "0c43b2621e034c40acb4a795366463e65bd4300c",
+      "source_blobs_match": true,
+      "states": {
+        "RED": 29
+      }
+    },
+    {
+      "file": "kiwi_sec_01a_build_knives.json",
+      "replay_head": "0c43b2621e034c40acb4a795366463e65bd4300c",
+      "source_blobs_match": true,
+      "states": {
+        "RED": 41
+      }
+    },
+    {
+      "file": "kiwi_sec_01a_knives.json",
+      "replay_head": "0c43b2621e034c40acb4a795366463e65bd4300c",
+      "source_blobs_match": true,
+      "states": {
+        "RED": 41
+      }
+    },
+    {
+      "file": "kiwi_sec_01b_knives.json",
+      "replay_head": "0c43b2621e034c40acb4a795366463e65bd4300c",
+      "source_blobs_match": true,
+      "states": {
+        "RED": 10
+      }
+    },
+    {
+      "file": "kiwi_think_01_knives.json",
+      "replay_head": "0c43b2621e034c40acb4a795366463e65bd4300c",
+      "source_blobs_match": true,
+      "states": {
+        "RED": 10
+      }
+    },
+    {
+      "file": "kiwi_think_02_knives.json",
+      "replay_head": "0c43b2621e034c40acb4a795366463e65bd4300c",
+      "source_blobs_match": true,
+      "states": {
+        "RED": 12
+      }
+    },
+    {
+      "file": "kiwi_w2_05b_knives.json",
+      "replay_head": "0c43b2621e034c40acb4a795366463e65bd4300c",
+      "source_blobs_match": true,
+      "states": {
+        "RED": 13
+      }
+    }
+  ],
+  "ci_run": 35877901656,
+  "ci_conclusion": "success",
+  "note": "Ten inherited ledger files plus THINK-02 total eleven. SEC-01a two historical names share one identical-book replay. Source blobs match the final code; evidence-only follow-up adds no pinned changes."
+}

@@ -1,0 +1,24 @@
+{
+  "replay_head": "0c43b2621e034c40acb4a795366463e65bd4300c",
+  "ERR_tests": 339,
+  "ERR_failures": 0,
+  "ERR_errors": 0,
+  "THINK01_guards": 12,
+  "permanent_postgresql_guards": 198,
+  "THINK02_summary": {
+    "PASS": 4955,
+    "FAIL": 0,
+    "ERROR": 0
+  },
+  "assertion_counts": {
+    "PASS": 9142,
+    "FAIL": 0,
+    "ERROR": 0
+  },
+  "mutations": 12,
+  "all_RED": true,
+  "all_mutation_arm_sets_equal": true,
+  "fixture": "real ASGI/adapter; fake config/storage/upstream; PostgreSQL disposable only",
+  "stage_a_report_sha256": "1ac1a4ce76ce5020da5b0b0e6f261f8b1f79aa3eb36dd36666c53788b188bc8f",
+  "stage_b_report_sha256": "7b517e6e6472f75e1203ab08a57fe441ffad39d8edfbc2e422e76e6860fa6fcd"
+}

@@ -1,0 +1,77 @@
+{
+  "base": "60fc44c",
+  "head": "0c43b2621e034c40acb4a795366463e65bd4300c",
+  "only_two_main_sections": true,
+  "checks": [
+    {
+      "file": "main.py",
+      "node": "_apply_reasoning",
+      "before_sha256": "429e1e5e41ad269d9ec6d0fac13e6f9edc05dba694c91d073e48705b99af81e7",
+      "after_sha256": "429e1e5e41ad269d9ec6d0fac13e6f9edc05dba694c91d073e48705b99af81e7",
+      "equal": true
+    },
+    {
+      "file": "main.py",
+      "node": "_normalize_reasoning_effort",
+      "before_sha256": "2484673ec9203427e6b39e51f8c807c6fcd72607c0f0cf63eac490182c0b0ced",
+      "after_sha256": "2484673ec9203427e6b39e51f8c807c6fcd72607c0f0cf63eac490182c0b0ced",
+      "equal": true
+    },
+    {
+      "file": "main.py",
+      "node": "_reasoning_400",
+      "before_sha256": "c6e6d3bb29cb77184ae31c63d2773752edc94ee1efc67076d783b00ba4ceb01a",
+      "after_sha256": "c6e6d3bb29cb77184ae31c63d2773752edc94ee1efc67076d783b00ba4ceb01a",
+      "equal": true
+    },
+    {
+      "file": "main.py",
+      "node": "_resolve_reasoning_effort",
+      "before_sha256": "8e09c4c9212e8bab6da1a31886cf78b2176518ca6435ac722723dd044883e836",
+      "after_sha256": "8e09c4c9212e8bab6da1a31886cf78b2176518ca6435ac722723dd044883e836",
+      "equal": true
+    },
+    {
+      "file": "main.py",
+      "node": "_provider_effort_profile",
+      "before_sha256": "f41a8c45c55df88626390e62736d87ffa20950ccc63a34900d1840aebbbe1d29",
+      "after_sha256": "f41a8c45c55df88626390e62736d87ffa20950ccc63a34900d1840aebbbe1d29",
+      "equal": true
+    },
+    {
+      "file": "main.py",
+      "node": "_provider_effort_ceiling",
+      "before_sha256": "e2167d01b378af7edbbbd79fdbffa79b9b06bbdf2ca1bae40e6422a0114ce23c",
+      "after_sha256": "e2167d01b378af7edbbbd79fdbffa79b9b06bbdf2ca1bae40e6422a0114ce23c",
+      "equal": true
+    },
+    {
+      "file": "main.py",
+      "node": "_clamp_effort",
+      "before_sha256": "67980397973ac77989bb4bcefd8410afbb0131416fb259cf05d477db515b5c5c",
+      "after_sha256": "67980397973ac77989bb4bcefd8410afbb0131416fb259cf05d477db515b5c5c",
+      "equal": true
+    },
+    {
+      "file": "main.py",
+      "node": "_endpoint_host",
+      "before_sha256": "2bef8ac2729df8a83fcba25e8932f6030105852bcb47b61f9ba16fb3358757fc",
+      "after_sha256": "2bef8ac2729df8a83fcba25e8932f6030105852bcb47b61f9ba16fb3358757fc",
+      "equal": true
+    },
+    {
+      "file": "anthropic_adapter.py",
+      "node": "_EFFORT_BUDGET",
+      "before_sha256": "56e4593182cdf8b7a1439808632ec6afac945ea13f609f7c6330892f0de0bc1f",
+      "after_sha256": "56e4593182cdf8b7a1439808632ec6afac945ea13f609f7c6330892f0de0bc1f",
+      "equal": true
+    }
+  ],
+  "rejection_shape_matrix": {
+    "combinations": 4320,
+    "baseline_rejected": 1320,
+    "implementation_rejected": 1320,
+    "differences": 0,
+    "method": "AST extracted actual Git functions, only controlled globals, no network"
+  }
+}
