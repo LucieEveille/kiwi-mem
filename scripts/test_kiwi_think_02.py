@@ -10,6 +10,7 @@ import hashlib
 import io
 import json
 import logging
+import functools
 import os
 from pathlib import Path
 import subprocess
@@ -33,6 +34,7 @@ LEVELS = ('off', 'auto', 'low', 'medium', 'high', 'xhigh', 'max')
 INPUTS = [(x, x) for x in LEVELS] + [('none', 'off'), ('minimal', 'low')]
 SENTINEL = 'ZZ-SENTINEL-think02-private'
 BUDGETS = {'low': 5000, 'medium': 10000, 'high': 20000, 'xhigh': 32000, 'max': 64000}
+ASSERTIONS = []
 
 
 def source_slice(filename, name, assignment=False):
@@ -114,7 +116,56 @@ class Think02Guards(unittest.IsolatedAsyncioTestCase):
         else:
             self.assertEqual(calls, [], 'rejected input must not reach upstream')
             sent = None
+        response.extensions['think02_upstream_calls'] = len(calls)
         return response, sent, console.getvalue() + logs.getvalue(), pool
+
+    def check(self, identity, assertion, callback):
+        # Separate subtests let a source/event failure coexist with a green
+        # outbound assertion. Never turn a setup exception into red evidence.
+        with self.subTest(**identity, assertion=assertion):
+            callback()
+
+    async def p1_case(self, case, obj, level, source='explicit_object',
+                      diagnostic=None, panels=('high',), explicit=MISSING,
+                      rejected=False):
+        for panel in panels:
+            for provider in PROVIDERS:
+                for tools in (False, True):
+                    identity = dict(arm=case, panel=panel, provider=provider, tools=tools)
+                    self._evidence_case = identity
+                    try:
+                        result = await self.request_case(provider, tools=tools, panel=panel,
+                                                         reasoning=obj, explicit=explicit)
+                    finally:
+                        self._evidence_case = {}
+                    response, sent, log, _ = result
+                    check = lambda name, fn: self.check(identity, name, fn)
+                    check('http_status', lambda: self.assertEqual(response.status_code, 400 if rejected else 200))
+                    check('upstream_calls', lambda: self.assertEqual(response.extensions['think02_upstream_calls'], 0 if rejected else 1))
+                    if rejected:
+                        check('error_envelope', lambda: self.rejected(result, 'reasoning', 'reasoning.effort 必须是'))
+                    else:
+                        expected = panel if level is None else level
+                        check('outbound_fields', lambda: self.outbound_effort(sent, provider, expected))
+                        lines = [x for x in log.splitlines() if x.startswith('event=reasoning_effort_resolved ')]
+                        check('resolved_count', lambda: self.assertEqual(len(lines), 1))
+                        resolved = dict(part.split('=', 1) for part in lines[0].split()) if len(lines) == 1 else {}
+                        check('source', lambda: self.assertEqual(resolved.get('source'), source))
+                        check('effort', lambda: self.assertEqual(resolved.get('effort'), expected))
+                    events = [x for x in log.splitlines() if x.startswith('event=reasoning_object_')]
+                    check('diagnostic', lambda: self.assertEqual(events, [] if diagnostic is None else ['event=reasoning_object_' + diagnostic]))
+                    check('no_value_echo', lambda: self.assertNotIn(SENTINEL, log + response.text))
+
+    def parser_case(self, case, obj, expected):
+        actual = gateway._parse_reasoning_object(obj)
+        identity = dict(arm='parser-' + case)
+        self.check(identity, 'tuple_type', lambda: self.assertIsInstance(actual, tuple))
+        # Check type before length/unpacking; old scalar returns produce only
+        # named AssertionErrors, never IndexError/ValueError unpack failures.
+        self.check(identity, 'tuple_length', lambda: self.assertTrue(isinstance(actual, tuple) and len(actual) == 3))
+        if isinstance(actual, tuple) and len(actual) == 3:
+            for index, name in enumerate(('parsed_effort', 'source_hint', 'ignored_fields')):
+                self.check(identity, name, lambda i=index: self.assertEqual(actual[i], expected[i]))
 
     def resolved(self, log, source, effort):
         lines = [x for x in log.splitlines() if x.startswith('event=reasoning_effort_resolved')]
@@ -151,6 +202,7 @@ class Think02Guards(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(error['param'], param)
         self.assertTrue(error['message'].startswith(prefix), error['message'])
         self.assertNotIn(SENTINEL, response.text + log)
+        self.assertEqual(response.extensions['think02_upstream_calls'], 0, 'rejected upstream_calls')
         return error
 
     async def test_T_THINK_02_00_aliases(self):
@@ -205,6 +257,7 @@ class Think02Guards(unittest.IsolatedAsyncioTestCase):
                     sent, log, _ = self.success(await self.request_case(provider, tools=tools, panel='high', reasoning={'enabled': False}))
                     self.outbound_effort(sent, provider, 'off')
                     self.resolved(log, 'explicit_object', 'off')
+        await self.p1_case('03-zero-panel-high', {'max_tokens': 0}, 'off')
 
     async def test_T_THINK_02_04_budget(self):
         boundaries = [(1,'low'), (1024,'low'), (4999,'low'), (5000,'low'), (9999,'low'),
@@ -220,14 +273,26 @@ class Think02Guards(unittest.IsolatedAsyncioTestCase):
             _, node = source_slice('anthropic_adapter.py', '_EFFORT_BUDGET', True)
             self.assertEqual({level: budget for budget, level in floors}, ast.literal_eval(node.value))
             self.assertEqual(len(floors), 5)
+        await self.p1_case('04-zero-budget', {'max_tokens': 0}, 'off')
+        self.parser_case('zero-budget', {'max_tokens': 0}, ('off', 'explicit_object', []))
 
     async def test_T_THINK_02_05_auto(self):
-        values = [{}, {'enabled': True}, {'unknown': SENTINEL}, {'enabled': 'false'}]
-        values += [{'max_tokens': n} for n in (0, -1, True, '5000', 5000.0)]
-        for index, value in enumerate(values):
-            with self.subTest(case=index):
-                _, log, _ = self.success(await self.request_case(reasoning=value, panel='high'))
-                self.resolved(log, 'explicit_object', 'auto')
+        panels = ('off', 'auto', 'high')
+        for name, obj in [('empty', {}), ('enabled-null', {'enabled': None}),
+                          ('budget-null', {'max_tokens': None}), ('effort-null', {'effort': None}),
+                          ('unknown', {'foo': 1})]:
+            await self.p1_case('05-' + name, obj, None, 'panel',
+                               'ignored reason=no_control_fields', panels)
+            self.parser_case(name, obj, (None, 'ignored', []))
+        await self.p1_case('05-enabled-true', {'enabled': True}, 'auto', panels=panels)
+        for name, key, value in [('enabled-string', 'enabled', 'false'),
+                                  ('enabled-zero', 'enabled', 0), ('enabled-one', 'enabled', 1),
+                                  ('budget-string', 'max_tokens', '5000'), ('budget-bool', 'max_tokens', True),
+                                  ('budget-float', 'max_tokens', 5000.0), ('budget-negative', 'max_tokens', -5)]:
+            obj = {key: value}
+            await self.p1_case('05b-' + name, obj, 'off', 'object_fallback',
+                               'fallback reason=invalid_control_value fields=' + key, panels)
+            self.parser_case(name, obj, ('off', 'object_fallback', [key]))
 
     async def test_T_THINK_02_06_precedence(self):
         for other in ({'effort': 'low'}, {'enabled': False}, SENTINEL, [], 42):
@@ -262,6 +327,40 @@ class Think02Guards(unittest.IsolatedAsyncioTestCase):
                         self.assertIs(sent.get('include_reasoning'), True)
                     else:
                         self.assertNotIn('include_reasoning', sent)
+        for index, obj in enumerate(({'enabled': False}, {'enabled': SENTINEL, 'max_tokens': SENTINEL}, [], SENTINEL)):
+            await self.p1_case('06a-string-wins-' + str(index), obj, 'high', 'explicit', explicit='high')
+        # Fixed expected values from decision table 13-16, 21, 24-32; do not
+        # derive the oracle using the parser under test.
+        cases = [
+            (13, {'enabled': 'false', 'effort': 'high'}, 'high', 'explicit_object', ['enabled']),
+            (14, {'enabled': True, 'max_tokens': '5000'}, 'auto', 'explicit_object', ['max_tokens']),
+            (15, {'enabled': True, 'max_tokens': 0}, 'off', 'explicit_object', []),
+            (16, {'effort': 'low', 'max_tokens': -5}, 'low', 'explicit_object', ['max_tokens']),
+            (21, {'enabled': 'false', 'max_tokens': 0}, 'off', 'explicit_object', ['enabled']),
+            (24, {'enabled': False, 'max_tokens': 'x'}, 'off', 'explicit_object', ['max_tokens']),
+            (25, {'enabled': [], 'max_tokens': 'x'}, 'off', 'object_fallback', ['enabled', 'max_tokens']),
+            (26, {'enabled': None, 'effort': None, 'max_tokens': None, 'other': 1}, None, 'ignored', []),
+            (27, {'enabled': 'false', 'max_tokens': 12000}, 'medium', 'explicit_object', ['enabled']),
+            (28, {'enabled': True, 'effort': ' NONE ', 'max_tokens': 64000}, 'off', 'explicit_object', []),
+            (29, {'effort': 'high', 'max_tokens': 0}, 'high', 'explicit_object', []),
+            (31, {'enabled': False, 'effort': {}, 'max_tokens': -1}, 'off', 'explicit_object', ['max_tokens']),
+            (32, {'enabled': False, 'effort': 'bogus', 'max_tokens': 0}, 'off', 'explicit_object', []),
+            ('extra-1', {'enabled': 1, 'effort': 'minimal', 'max_tokens': True}, 'low', 'explicit_object', ['enabled', 'max_tokens']),
+            ('extra-2', {'enabled': True, 'effort': None, 'max_tokens': 1}, 'low', 'explicit_object', []),
+            ('extra-3', {'enabled': False, 'effort': [], 'max_tokens': '5000'}, 'off', 'explicit_object', ['max_tokens']),
+        ]
+        for row, obj, level, hint, ignored in cases:
+            diagnostic = None
+            if hint == 'ignored':
+                diagnostic = 'ignored reason=no_control_fields'
+            elif hint == 'object_fallback':
+                diagnostic = 'fallback reason=invalid_control_value fields=' + ','.join(ignored)
+            elif ignored:
+                diagnostic = 'field_ignored fields=' + ','.join(ignored)
+            await self.p1_case('06-table-' + str(row), obj, level,
+                               'panel' if hint == 'ignored' else hint, diagnostic)
+            self.parser_case('table-' + str(row), obj, (level, hint, ignored))
+        await self.p1_case('06-table-30', {'effort': 'bogus', 'max_tokens': 0}, None, rejected=True)
 
     async def test_T_THINK_02_07_rejection(self):
         for value in (SENTINEL, [SENTINEL], 1, True):
@@ -274,6 +373,7 @@ class Think02Guards(unittest.IsolatedAsyncioTestCase):
                 self.assertIn('/'.join(LEVELS), error['message'])
         with self.subTest(arm='string-rejection-continuation'):
             self.rejected(await self.request_case(explicit=SENTINEL), 'reasoning_effort', 'reasoning_effort 必须是')
+        await self.p1_case('07-invalid-effort-zero', {'effort': SENTINEL, 'max_tokens': 0}, None, rejected=True)
 
     async def test_T_THINK_02_08_logs(self):
         for provider in PROVIDERS:
@@ -284,6 +384,14 @@ class Think02Guards(unittest.IsolatedAsyncioTestCase):
                     self.resolved(log, 'explicit_object', 'high')
                 with self.subTest(arm='no-echo', provider=provider, tools=tools):
                     self.assertNotIn(SENTINEL, result[2])
+        for name, obj, level, source, diagnostic in [
+            ('fallback', {'enabled': SENTINEL, 'max_tokens': SENTINEL}, 'off', 'object_fallback',
+             'fallback reason=invalid_control_value fields=enabled,max_tokens'),
+            ('field-ignored', {'enabled': SENTINEL, 'max_tokens': SENTINEL, 'effort': 'high'}, 'high', 'explicit_object',
+             'field_ignored fields=enabled,max_tokens'),
+            ('ignored', {'private': SENTINEL}, None, 'panel', 'ignored reason=no_control_fields'),
+        ]:
+            await self.p1_case('08-' + name, obj, level, source, diagnostic, ('off', 'auto', 'high'))
 
     async def test_T_THINK_02_09_regression(self):
         for file, name, assign, expected in [
@@ -305,6 +413,33 @@ class Think02Guards(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
 
 
+def record_assertion(method):
+    """Record legacy and P1 assertions without changing unittest semantics."""
+    @functools.wraps(method)
+    def wrapped(self, *args, **kwargs):
+        if getattr(self, '_recording_assertion', False):
+            return method(self, *args, **kwargs)
+        self._recording_assertion = True
+        row = {'guard': self._testMethodName,
+               'arm': dict(self._subtest.params) if self._subtest is not None else getattr(self, '_evidence_case', {}),
+               'assertion': method.__name__, 'status': 'PASS', 'reason': 'assertion satisfied'}
+        try:
+            return method(self, *args, **kwargs)
+        except Exception as error:
+            row.update(status='FAIL' if isinstance(error, self.failureException) else 'ERROR',
+                       reason=str(error), failure_kind=type(error).__name__)
+            raise
+        finally:
+            ASSERTIONS.append(row)
+            self._recording_assertion = False
+    return wrapped
+
+
+for _assertion_name in ('assertEqual', 'assertTrue', 'assertFalse', 'assertIn',
+                        'assertNotIn', 'assertIs', 'assertIsNotNone', 'assertIsInstance'):
+    setattr(Think02Guards, _assertion_name, record_assertion(getattr(unittest.TestCase, _assertion_name)))
+
+
 class EvidenceResult(unittest.TextTestResult):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -322,9 +457,18 @@ if __name__ == '__main__':
     suite = unittest.defaultTestLoader.loadTestsFromTestCase(Think02Guards)
     result = unittest.TextTestRunner(verbosity=2, resultclass=EvidenceResult).run(suite)
     counts = {s: sum(r['status'] == s for r in result.arms) for s in ('PASS', 'FAIL', 'ERROR')}
+    # Per-arm ordinals distinguish multiple primitive assertions without
+    # replacing stable guard/subtest identities or hard-coding a total.
+    ordinals = {}
+    for row in ASSERTIONS:
+        identity = json.dumps([row['guard'], row['arm']], sort_keys=True)
+        ordinals[identity] = ordinals.get(identity, 0) + 1
+        row['ordinal'] = ordinals[identity]
     print('THINK-02 SUMMARY ' + json.dumps(counts, sort_keys=True))
     report = {'groups_run': result.testsRun, 'counts': counts, 'arms': result.arms,
-              'errors': len(result.errors), 'failures': len(result.failures)}
+              'errors': len(result.errors), 'failures': len(result.failures),
+              'assertions': ASSERTIONS,
+              'assertion_counts': {s: sum(r['status'] == s for r in ASSERTIONS) for s in ('PASS', 'FAIL', 'ERROR')}}
     if os.environ.get('KIWI_THINK_02_REPORT'):
         Path(os.environ['KIWI_THINK_02_REPORT']).write_text(json.dumps(report, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
     sys.exit(0 if result.wasSuccessful() else 1)
