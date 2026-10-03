@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased — 2.0.0 integration / KIWI-OUT-01
+
+- 显式输出上限与 stop 接入普通转发及工具循环的 OpenAI / Anthropic 出站；入口统一校验、移除 null，并存上限以 max_tokens 优先。OpenAI 保留来源键名；Anthropic 转为 max_tokens / stop_sequences，工具循环逐轮携带。详见 [客户端兼容性](docs/client-compatibility.md)。
+- Explicit output limits and stop controls now reach ordinary forwarding and tool-loop requests in both formats, with entry validation, null removal, and max_tokens precedence. OpenAI preserves the source limit key; Anthropic uses max_tokens / stop_sequences. Limits apply per model request; upstream model support still applies.
+- FUT-17：`skip_system_prompt` 只认布尔 `true`；字符串和数字不再跳过人设、落账、提取与思考控制。Only boolean `true` skips the persona, ledger recording, extraction, and reasoning controls.
+
 ## Unreleased — 2.0.0 integration / KIWI-THINK-02
 
 - P1：零预算按关闭；异常控制无合法值可生效时保守落 off，空对象回面板；三个诊断事件只记字段名。有效合法控制仍按优先级生效，本次不新增拒绝形状。

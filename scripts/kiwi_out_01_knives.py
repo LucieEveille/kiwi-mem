@@ -31,10 +31,14 @@ CASES = {
 }
 
 
+class AnchorLost(RuntimeError):
+    """The source no longer has the exact mutation target."""
+
+
 def one(items):
     items = list(items)
     if len(items) != 1:
-        raise RuntimeError(f'anchor count {len(items)}, expected one')
+        raise AnchorLost(f'anchor count {len(items)}, expected one')
     return items[0]
 
 
@@ -89,6 +93,8 @@ def mutate(number, source):
         node = one(n for n in ast.walk(handler) if isinstance(n, ast.Return)
                    and isinstance(n.value, ast.Call) and isinstance(n.value.func, ast.Name)
                    and n.value.func.id == '_param_400')
+        if len(node.value.args) != 2 or node.value.keywords:
+            raise AnchorLost('_param_400 positional arguments missing')
         node.value.args[0] = ast.parse(f'str({handler.name})', mode='eval').body
         return rewrite(source, node, ast.unparse(node))
     if number == '05':
@@ -107,7 +113,7 @@ def mutate(number, source):
         if not (isinstance(node.value, ast.Compare) and len(node.value.ops) == 1
                 and isinstance(node.value.ops[0], ast.Is) and isinstance(node.value.comparators[0], ast.Constant)
                 and node.value.comparators[0].value is True):
-            raise RuntimeError('skip_prompt is True anchor missing')
+            raise AnchorLost('skip_prompt is True anchor missing')
         node.value = node.value.left
         return rewrite(source, node, ast.unparse(node))
     if number == '07':
@@ -122,8 +128,9 @@ def mutate(number, source):
         return rewrite(source, node, ast.unparse(node))
     if number == '08':
         fn = function(tree, '_parse_output_controls')
-        first = next(n for n in fn.body if not (isinstance(n, ast.Expr) and isinstance(n.value, ast.Constant)
-                                               and isinstance(n.value.value, str)))
+        statements = [n for n in fn.body if not (isinstance(n, ast.Expr) and isinstance(n.value, ast.Constant)
+                                               and isinstance(n.value.value, str))]
+        first = one(statements[:1])
         return rewrite(source, first, 'print("event=max_completion_tokens_aliased")\n' + ast.unparse(first))
     if number == '09':
         fn = function(tree, '_parse_output_controls')
@@ -134,7 +141,7 @@ def mutate(number, source):
                  and any(isinstance(c, ast.Call) and isinstance(c.func, ast.Attribute)
                          and c.func.attr == 'pop' for c in ast.walk(n))]
         if len(nodes) != 3:
-            raise RuntimeError(f'null cleanup anchor count {len(nodes)}, expected three')
+            raise AnchorLost(f'null cleanup anchor count {len(nodes)}, expected three')
         for node in sorted(nodes, key=lambda n: n.lineno, reverse=True):
             source = rewrite(source, node, 'pass  # OUT-01 mutation: retain null key')
         return source
@@ -197,7 +204,14 @@ def execute(output):
         original = path.read_bytes()
         digest = hashlib.sha256(original).hexdigest()
         try:
-            changed = mutate(number, original.decode('utf-8').replace('\r\n', '\n'))
+            try:
+                changed = mutate(number, original.decode('utf-8').replace('\r\n', '\n'))
+            except AnchorLost as exc:
+                ledger['results'].append(dict(knife='K-OUT-01-' + number, mutation=description,
+                    status='ANCHOR_LOST', returncode=None, behavioural=False,
+                    environmental=[], reason=str(exc), restored_sha256=digest))
+                print('K-OUT-01-' + number + ': ANCHOR_LOST', flush=True)
+                continue
             compile(changed, filename, 'exec')
             path.write_text(changed, encoding='utf-8', newline='\n')
             rc, report = run_tests(folder, 'K-OUT-01-' + number)
