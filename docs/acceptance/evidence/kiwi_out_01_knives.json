@@ -1,0 +1,263 @@
+{
+  "ticket": "OUT-01",
+  "head": "a983c8d82633b2b181402ee19747b940cbd2adb2",
+  "source_blobs": {
+    "main.py": "855a75c50b54f82e3ee28658a57c7c4c6c0e8626",
+    "anthropic_adapter.py": "eb38853bc1830f9d67e71d381ed6f215d2f5a5a9",
+    "scripts/test_kiwi_out_01.py": "d90caa7b47894069f39ada85729117e0c25fe05a",
+    "scripts/kiwi_out_01_knives.py": "51680a8d765a334e7f9a186fa6f49424ab4fd2f2",
+    ".github/workflows/ci.yml": "9f27b53ae63ea9375fec7845690486c847ee4e27"
+  },
+  "preflight_returncode": 0,
+  "expected_arm_count": 358,
+  "expected_assertion_count": 1849,
+  "preflight_counts": {
+    "PASS": 358,
+    "FAIL": 0,
+    "ERROR": 0
+  },
+  "results": [
+    {
+      "knife": "K-OUT-01-01",
+      "mutation": "drop mct limit, retain tuple and stop",
+      "status": "RED",
+      "returncode": 1,
+      "behavioural": true,
+      "environmental": [],
+      "targets": {
+        "03": true,
+        "04": true,
+        "05": true
+      },
+      "identity_sets_equal": true,
+      "counts": {
+        "PASS": 334,
+        "FAIL": 24,
+        "ERROR": 0
+      },
+      "assertion_counts": {
+        "PASS": 1790,
+        "FAIL": 59,
+        "ERROR": 0
+      },
+      "restored_sha256": "5f3ff3cf3f4daeade42ddad086bd06b0865cd193ac3f0b6292cf151908787f59"
+    },
+    {
+      "knife": "K-OUT-01-02",
+      "mutation": "mct wins over max_tokens",
+      "status": "RED",
+      "returncode": 1,
+      "behavioural": true,
+      "environmental": [],
+      "targets": {
+        "00": true,
+        "02": true
+      },
+      "identity_sets_equal": true,
+      "counts": {
+        "PASS": 349,
+        "FAIL": 9,
+        "ERROR": 0
+      },
+      "assertion_counts": {
+        "PASS": 1838,
+        "FAIL": 11,
+        "ERROR": 0
+      },
+      "restored_sha256": "5f3ff3cf3f4daeade42ddad086bd06b0865cd193ac3f0b6292cf151908787f59"
+    },
+    {
+      "knife": "K-OUT-01-03a",
+      "mutation": "omit tool-loop OpenAI stop",
+      "status": "RED",
+      "returncode": 1,
+      "behavioural": true,
+      "environmental": [],
+      "targets": {
+        "04": true
+      },
+      "identity_sets_equal": true,
+      "counts": {
+        "PASS": 354,
+        "FAIL": 4,
+        "ERROR": 0
+      },
+      "assertion_counts": {
+        "PASS": 1845,
+        "FAIL": 4,
+        "ERROR": 0
+      },
+      "restored_sha256": "5f3ff3cf3f4daeade42ddad086bd06b0865cd193ac3f0b6292cf151908787f59"
+    },
+    {
+      "knife": "K-OUT-01-03b",
+      "mutation": "omit Anthropic stop_sequences",
+      "status": "RED",
+      "returncode": 1,
+      "behavioural": true,
+      "environmental": [],
+      "targets": {
+        "03": true,
+        "05": true
+      },
+      "identity_sets_equal": true,
+      "counts": {
+        "PASS": 350,
+        "FAIL": 8,
+        "ERROR": 0
+      },
+      "assertion_counts": {
+        "PASS": 1841,
+        "FAIL": 8,
+        "ERROR": 0
+      },
+      "restored_sha256": "0f213f80bf2c4e8d186185f4ec83f8606518d0d887ab7bb740c835eaf6dff8c1"
+    },
+    {
+      "knife": "K-OUT-01-04",
+      "mutation": "raw exception expression in parameter return",
+      "status": "RED",
+      "returncode": 1,
+      "behavioural": true,
+      "environmental": [],
+      "targets": {
+        "09": true
+      },
+      "identity_sets_equal": true,
+      "counts": {
+        "PASS": 356,
+        "FAIL": 2,
+        "ERROR": 0
+      },
+      "assertion_counts": {
+        "PASS": 1847,
+        "FAIL": 2,
+        "ERROR": 0
+      },
+      "restored_sha256": "5f3ff3cf3f4daeade42ddad086bd06b0865cd193ac3f0b6292cf151908787f59"
+    },
+    {
+      "knife": "K-OUT-01-05",
+      "mutation": "hard-code tool-loop output key max_tokens",
+      "status": "RED",
+      "returncode": 1,
+      "behavioural": true,
+      "environmental": [],
+      "targets": {
+        "04": true
+      },
+      "identity_sets_equal": true,
+      "counts": {
+        "PASS": 354,
+        "FAIL": 4,
+        "ERROR": 0
+      },
+      "assertion_counts": {
+        "PASS": 1845,
+        "FAIL": 4,
+        "ERROR": 0
+      },
+      "restored_sha256": "5f3ff3cf3f4daeade42ddad086bd06b0865cd193ac3f0b6292cf151908787f59"
+    },
+    {
+      "knife": "K-OUT-01-06",
+      "mutation": "restore truthiness for skip_system_prompt",
+      "status": "RED",
+      "returncode": 1,
+      "behavioural": true,
+      "environmental": [],
+      "targets": {
+        "08": true
+      },
+      "identity_sets_equal": true,
+      "counts": {
+        "PASS": 334,
+        "FAIL": 24,
+        "ERROR": 0
+      },
+      "assertion_counts": {
+        "PASS": 1757,
+        "FAIL": 92,
+        "ERROR": 0
+      },
+      "restored_sha256": "5f3ff3cf3f4daeade42ddad086bd06b0865cd193ac3f0b6292cf151908787f59"
+    },
+    {
+      "knife": "K-OUT-01-07",
+      "mutation": "change default 8192 to 4096",
+      "status": "RED",
+      "returncode": 1,
+      "behavioural": true,
+      "environmental": [],
+      "targets": {
+        "03": true,
+        "05": true,
+        "06": true
+      },
+      "identity_sets_equal": true,
+      "counts": {
+        "PASS": 349,
+        "FAIL": 9,
+        "ERROR": 0
+      },
+      "assertion_counts": {
+        "PASS": 1840,
+        "FAIL": 9,
+        "ERROR": 0
+      },
+      "restored_sha256": "0f213f80bf2c4e8d186185f4ec83f8606518d0d887ab7bb740c835eaf6dff8c1"
+    },
+    {
+      "knife": "K-OUT-01-08",
+      "mutation": "emit alias event before validation",
+      "status": "RED",
+      "returncode": 1,
+      "behavioural": true,
+      "environmental": [],
+      "targets": {
+        "07": true
+      },
+      "identity_sets_equal": true,
+      "counts": {
+        "PASS": 176,
+        "FAIL": 182,
+        "ERROR": 0
+      },
+      "assertion_counts": {
+        "PASS": 1667,
+        "FAIL": 182,
+        "ERROR": 0
+      },
+      "restored_sha256": "5f3ff3cf3f4daeade42ddad086bd06b0865cd193ac3f0b6292cf151908787f59"
+    },
+    {
+      "knife": "K-OUT-01-09",
+      "mutation": "retain null input keys",
+      "status": "RED",
+      "returncode": 1,
+      "behavioural": true,
+      "environmental": [],
+      "targets": {
+        "00": true,
+        "02": true
+      },
+      "identity_sets_equal": true,
+      "counts": {
+        "PASS": 353,
+        "FAIL": 5,
+        "ERROR": 0
+      },
+      "assertion_counts": {
+        "PASS": 1844,
+        "FAIL": 5,
+        "ERROR": 0
+      },
+      "restored_sha256": "5f3ff3cf3f4daeade42ddad086bd06b0865cd193ac3f0b6292cf151908787f59"
+    }
+  ],
+  "restored_returncode": 0,
+  "restored_identity_sets_equal": true,
+  "arm_identities_sha256": "62121531cddf961d1329a9bbd1f389ed9a011951ed19967836538c1ddded0573",
+  "assertion_identities_sha256": "d7a82f5e0ac2ab5191d66480b49239ce49ebdb2436cb4eaa6f7646d67bf84633",
+  "status": "PASS"
+}

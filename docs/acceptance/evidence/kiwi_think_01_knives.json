@@ -1,8 +1,8 @@
 {
   "ticket": "KIWI-THINK-01",
-  "head": "0c43b2621e034c40acb4a795366463e65bd4300c",
+  "head": "a983c8d82633b2b181402ee19747b940cbd2adb2",
   "source_blobs": {
-    "main.py": "3336aa0829cfb9c5674354ccdebc29ee581d23a5",
+    "main.py": "855a75c50b54f82e3ee28658a57c7c4c6c0e8626",
     "config.py": "529b494a1c402a9ba8efb02d8ac8df8245f6bdbb",
     "admin-panel/js/config-schema.js": "1c5bb1b2be5c8bf02abd23491473647e02a2e498",
     "scripts/test_kiwi_think_01.py": "e80f0b49f63116d29ee538bf3d0569fcc47a9ac8",
@@ -54,11 +54,11 @@
       "status": "RED",
       "reason": [
         "'reasoning_effort' unexpectedly found in ['reasoning_effort', 'prompt_cache_enabled', 'mcp_mode', 'reminder_tools_enabled', 'tool_drawer_enabled'] : explicit must not read panel",
-        "'reasoning' unexpectedly found in {'model': 'THINK-model-8b93-sentinel', 'messages': [{'role': 'system', 'content': 'fixture\\n\\n<!-- CACHE_B1 -->\\n\\n<!-- CACHE_B2 -->'}, {'role': 'user', 'content': '[以下为系统自动注入的实时上下文，并非用户发送]\\n【当前时间】2026-09-23 23:09 星期三\\n[实时上下文结束，以下是用户消息]\\n\\nTHINK-user-4a67-sentinel'}], 'temperature': 0.7, 'max_tokens': 32768, 'stream': False, 'reasoning': {'enabled': True, 'effort': 'high'}, 'session_id': 'think-fixture'}",
+        "'reasoning' unexpectedly found in {'model': 'THINK-model-8b93-sentinel', 'messages': [{'role': 'system', 'content': 'fixture\\n\\n<!-- CACHE_B1 -->\\n\\n<!-- CACHE_B2 -->'}, {'role': 'user', 'content': '[以下为系统自动注入的实时上下文，并非用户发送]\\n【当前时间】2026-10-03 15:53 星期六\\n[实时上下文结束，以下是用户消息]\\n\\nTHINK-user-4a67-sentinel'}], 'temperature': 0.7, 'max_tokens': 32768, 'stream': False, 'reasoning': {'enabled': True, 'effort': 'high'}, 'session_id': 'think-fixture'}",
         "'reasoning_effort' unexpectedly found in ['reasoning_effort', 'prompt_cache_enabled', 'mcp_mode', 'reminder_tools_enabled', 'tool_drawer_enabled'] : explicit must not read panel",
-        "'thinking' unexpectedly found in {'model': 'THINK-model-8b93-sentinel', 'messages': [{'role': 'user', 'content': '[以下为系统自动注入的实时上下文，并非用户发送]\\n【当前时间】2026-09-23 23:09 星期三\\n[实时上下文结束，以下是用户消息]\\n\\nTHINK-user-4a67-sentinel'}], 'max_tokens': 32768, 'system': [{'type': 'text', 'text': 'fixture\\n\\n<!-- CACHE_B1 -->\\n\\n<!-- CACHE_B2 -->'}], 'temperature': 1, 'thinking': {'type': 'enabled', 'budget_tokens': 20000}}",
+        "'thinking' unexpectedly found in {'model': 'THINK-model-8b93-sentinel', 'messages': [{'role': 'user', 'content': '[以下为系统自动注入的实时上下文，并非用户发送]\\n【当前时间】2026-10-03 15:53 星期六\\n[实时上下文结束，以下是用户消息]\\n\\nTHINK-user-4a67-sentinel'}], 'max_tokens': 32768, 'system': [{'type': 'text', 'text': 'fixture\\n\\n<!-- CACHE_B1 -->\\n\\n<!-- CACHE_B2 -->'}], 'temperature': 1, 'thinking': {'type': 'enabled', 'budget_tokens': 20000}}",
         "'reasoning_effort' unexpectedly found in ['reasoning_effort', 'prompt_cache_enabled', 'mcp_mode', 'reminder_tools_enabled', 'tool_drawer_enabled'] : explicit must not read panel",
-        "'reasoning_effort' unexpectedly found in {'model': 'THINK-model-8b93-sentinel', 'messages': [{'role': 'system', 'content': 'fixture\\n\\n<!-- CACHE_B1 -->\\n\\n<!-- CACHE_B2 -->'}, {'role': 'user', 'content': '[以下为系统自动注入的实时上下文，并非用户发送]\\n【当前时间】2026-09-23 23:09 星期三\\n[实时上下文结束，以下是用户消息]\\n\\nTHINK-user-4a67-sentinel'}], 'temperature': 0.7, 'max_tokens': 32768, 'stream': False, 'reasoning_effort': 'high'}"
+        "'reasoning_effort' unexpectedly found in {'model': 'THINK-model-8b93-sentinel', 'messages': [{'role': 'system', 'content': 'fixture\\n\\n<!-- CACHE_B1 -->\\n\\n<!-- CACHE_B2 -->'}, {'role': 'user', 'content': '[以下为系统自动注入的实时上下文，并非用户发送]\\n【当前时间】2026-10-03 15:53 星期六\\n[实时上下文结束，以下是用户消息]\\n\\nTHINK-user-4a67-sentinel'}], 'temperature': 0.7, 'max_tokens': 32768, 'stream': False, 'reasoning_effort': 'high'}"
       ],
       "exit_code": 1
     },
@@ -82,10 +82,10 @@
       ],
       "status": "RED",
       "reason": [
-        "'reasoning' unexpectedly found in {'model': 'THINK-model-8b93-sentinel', 'messages': [{'role': 'system', 'content': 'fixture\\n\\n<!-- CACHE_B1 -->\\n\\n<!-- CACHE_B2 -->'}, {'role': 'user', 'content': '[以下为系统自动注入的实时上下文，并非用户发送]\\n【当前时间】2026-09-23 23:09 星期三\\n[实时上下文结束，以下是用户消息]\\n\\nTHINK-user-4a67-sentinel'}], 'temperature': 0.7, 'max_tokens': 32768, 'stream': False, 'reasoning': {'enabled': True}, 'session_id': 'think-fixture'}",
-        "'reasoning' unexpectedly found in {'model': 'THINK-model-8b93-sentinel', 'messages': [{'role': 'system', 'content': 'fixture\\n\\n<!-- CACHE_B1 -->\\n\\n<!-- CACHE_B2 -->'}, {'role': 'user', 'content': '[以下为系统自动注入的实时上下文，并非用户发送]\\n【当前时间】2026-09-23 23:09 星期三\\n[实时上下文结束，以下是用户消息]\\n\\nTHINK-user-4a67-sentinel'}], 'temperature': 0.7, 'max_tokens': 32768, 'stream': False, 'reasoning': {'enabled': True}, 'session_id': 'think-fixture'}",
-        "'thinking' unexpectedly found in {'model': 'THINK-model-8b93-sentinel', 'messages': [{'role': 'user', 'content': '[以下为系统自动注入的实时上下文，并非用户发送]\\n【当前时间】2026-09-23 23:09 星期三\\n[实时上下文结束，以下是用户消息]\\n\\nTHINK-user-4a67-sentinel'}], 'max_tokens': 32768, 'system': [{'type': 'text', 'text': 'fixture\\n\\n<!-- CACHE_B1 -->\\n\\n<!-- CACHE_B2 -->'}], 'temperature': 1, 'thinking': {'type': 'enabled', 'budget_tokens': 10000}}",
-        "'thinking' unexpectedly found in {'model': 'THINK-model-8b93-sentinel', 'messages': [{'role': 'user', 'content': '[以下为系统自动注入的实时上下文，并非用户发送]\\n【当前时间】2026-09-23 23:09 星期三\\n[实时上下文结束，以下是用户消息]\\n\\nTHINK-user-4a67-sentinel'}], 'max_tokens': 32768, 'system': [{'type': 'text', 'text': 'fixture\\n\\n<!-- CACHE_B1 -->\\n\\n<!-- CACHE_B2 -->'}], 'temperature': 1, 'thinking': {'type': 'enabled', 'budget_tokens': 10000}}",
+        "'reasoning' unexpectedly found in {'model': 'THINK-model-8b93-sentinel', 'messages': [{'role': 'system', 'content': 'fixture\\n\\n<!-- CACHE_B1 -->\\n\\n<!-- CACHE_B2 -->'}, {'role': 'user', 'content': '[以下为系统自动注入的实时上下文，并非用户发送]\\n【当前时间】2026-10-03 15:53 星期六\\n[实时上下文结束，以下是用户消息]\\n\\nTHINK-user-4a67-sentinel'}], 'temperature': 0.7, 'max_tokens': 32768, 'stream': False, 'reasoning': {'enabled': True}, 'session_id': 'think-fixture'}",
+        "'reasoning' unexpectedly found in {'model': 'THINK-model-8b93-sentinel', 'messages': [{'role': 'system', 'content': 'fixture\\n\\n<!-- CACHE_B1 -->\\n\\n<!-- CACHE_B2 -->'}, {'role': 'user', 'content': '[以下为系统自动注入的实时上下文，并非用户发送]\\n【当前时间】2026-10-03 15:53 星期六\\n[实时上下文结束，以下是用户消息]\\n\\nTHINK-user-4a67-sentinel'}], 'temperature': 0.7, 'max_tokens': 32768, 'stream': False, 'reasoning': {'enabled': True}, 'session_id': 'think-fixture'}",
+        "'thinking' unexpectedly found in {'model': 'THINK-model-8b93-sentinel', 'messages': [{'role': 'user', 'content': '[以下为系统自动注入的实时上下文，并非用户发送]\\n【当前时间】2026-10-03 15:53 星期六\\n[实时上下文结束，以下是用户消息]\\n\\nTHINK-user-4a67-sentinel'}], 'max_tokens': 32768, 'system': [{'type': 'text', 'text': 'fixture\\n\\n<!-- CACHE_B1 -->\\n\\n<!-- CACHE_B2 -->'}], 'temperature': 1, 'thinking': {'type': 'enabled', 'budget_tokens': 10000}}",
+        "'thinking' unexpectedly found in {'model': 'THINK-model-8b93-sentinel', 'messages': [{'role': 'user', 'content': '[以下为系统自动注入的实时上下文，并非用户发送]\\n【当前时间】2026-10-03 15:53 星期六\\n[实时上下文结束，以下是用户消息]\\n\\nTHINK-user-4a67-sentinel'}], 'max_tokens': 32768, 'system': [{'type': 'text', 'text': 'fixture\\n\\n<!-- CACHE_B1 -->\\n\\n<!-- CACHE_B2 -->'}], 'temperature': 1, 'thinking': {'type': 'enabled', 'budget_tokens': 10000}}",
         "Lists differ: ['event=reasoning_effort_resolved source=panel effort=ultra'] != ['event=reasoning_effort_resolved source=default effort=off']",
         "Lists differ: ['event=reasoning_effort_resolved source=panel effort='] != ['event=reasoning_effort_resolved source=default effort=off']"
       ],
