@@ -9,6 +9,7 @@
 
 ## 一、设计取舍（不视为 bug）
 
+- **ADAPT-01：其它 OpenAI 字段仍不透传。** `presence_penalty` / `frequency_penalty` / `seed` / `response_format` / `logit_bias` / `n` / `user` 在 Anthropic 出站与工具循环仍会丢弃，留待 ADAPT-01。OUT-01 仅处理显式输出上限与 `stop`，具体上游模型的支持范围仍须按其协议确认。
 - **纯 `.env` 部署只支持 OpenAI 格式。** Anthropic 原生必须经管理面板配置供应商
   （README 已说明）。因此以下「硬编码 OpenAI / Bearer」是符合该约束的，不修：
   - `/v1/models` 的环境变量兜底分支（`main.py` `list_models`）用 `Authorization: Bearer`。

@@ -1894,6 +1894,52 @@ def _reasoning_400(message, param):
     }})
 
 
+class _ParamError(Exception):
+    """入口参数校验失败：message 为固定文案（不含用户原值），param 为字段名。"""
+    def __init__(self, message, param):
+        super().__init__(message); self.message = message; self.param = param
+
+def _param_400(message, param):   # 与 _reasoning_400 同形状
+    return JSONResponse(status_code=400, content={"error": {"message": message, "type": "invalid_request_error", "param": param, "code": "invalid_value"}})
+
+def _positive_int(v):
+    return v is not None and not isinstance(v, bool) and isinstance(v, int) and v > 0
+
+def _parse_output_controls(body: dict):
+    """返回 (out_limit, stop_seqs)。顺序：①先校验全部字段（任一非法即抛，body 零改、零日志）；②再改 body；③再记事件。
+    null ＝ 未提供（删键）。两键都合法时 max_tokens 优先、删 mct。低优先级字段非法仍拒绝。"""
+    # ① 校验
+    mt_present  = "max_tokens" in body and body["max_tokens"] is not None
+    mct_present = "max_completion_tokens" in body and body["max_completion_tokens"] is not None
+    if mt_present and not _positive_int(body["max_tokens"]):
+        raise _ParamError("max_tokens 须为正整数", "max_tokens")
+    if mct_present and not _positive_int(body["max_completion_tokens"]):
+        raise _ParamError("max_completion_tokens 须为正整数", "max_completion_tokens")
+    stop_seqs = None
+    if "stop" in body and body["stop"] is not None:
+        st = body["stop"]
+        if isinstance(st, str) and st:
+            stop_seqs = [st]
+        elif isinstance(st, list) and 1 <= len(st) <= 4 and all(isinstance(x, str) and x for x in st):
+            stop_seqs = list(st)
+        else:
+            raise _ParamError("stop 须为非空字符串或 1～4 个非空字符串的数组", "stop")
+    # ② 改 body：null 键删掉；并存删 mct
+    if "max_tokens" in body and body["max_tokens"] is None: body.pop("max_tokens")
+    if "max_completion_tokens" in body and body["max_completion_tokens"] is None: body.pop("max_completion_tokens")
+    if "stop" in body and body["stop"] is None: body.pop("stop")
+    out_limit = None
+    if mt_present:
+        out_limit = {"value": body["max_tokens"], "source": "max_tokens"}
+        if mct_present:
+            body.pop("max_completion_tokens")
+            print("event=max_completion_tokens_ignored reason=max_tokens_present")      # ③ 事件只在全部校验通过后
+    elif mct_present:
+        out_limit = {"value": body["max_completion_tokens"], "source": "max_completion_tokens"}
+        print("event=max_completion_tokens_aliased")
+    return out_limit, stop_seqs
+
+
 REASONING_EFFORT_DEFAULT = "off"
 
 
@@ -2104,6 +2150,10 @@ async def chat_completions(request: Request):
                 reasoning_effort, reasoning_source_hint = parsed, hint
     reasoning_effort, reasoning_source = await _resolve_reasoning_effort(reasoning_effort, source_hint=reasoning_source_hint)
     print(f"event=reasoning_effort_resolved source={reasoning_source} effort={reasoning_effort}")
+    try:
+        out_limit, stop_seqs = _parse_output_controls(body)   # 两字段都校验完才改 body / 记事件
+    except _ParamError as e:
+        return _param_400(e.message, e.param)                 # 固定文案走属性，不 str(e)——ERR-01 扫描器零命中（§〇）
     messages = body.get("messages", [])
     
     # ---------- 提取用户最新消息 ----------
@@ -2122,7 +2172,7 @@ async def chat_completions(request: Request):
     
     # ---------- 构建 system prompt ----------
     # 内部请求（如压缩上下文）可跳过人设注入
-    skip_prompt = body.pop('skip_system_prompt', False)
+    skip_prompt = body.pop('skip_system_prompt', False) is True
     
     # 读取前端传来的模板变量上下文
     template_ctx = {
@@ -2797,7 +2847,8 @@ async def chat_completions(request: Request):
                 model=model,
                 temperature=body.get("temperature", 0.7),
                 top_p=body.get("top_p"),
-                max_tokens=body.get("max_tokens"),
+                out_limit=out_limit,
+                stop_seqs=stop_seqs,
                 tool_events=tool_events,
                 session_id=session_id,
                 user_message=user_message,
@@ -2823,7 +2874,7 @@ async def chat_completions(request: Request):
     if is_stream:
         return StreamingResponse(
             _with_ev_session(
-                stream_and_capture(headers, body, session_id, user_message, model, tool_events, api_url=chat_api_url, project_id=project_id, prompt_meta=prompt_meta, api_format=api_format, api_key=chat_api_key, is_regenerate=is_regenerate, mem_enabled=mem_enabled, record_events=record_events, extract_enabled=extract_enabled, ledger_ctx=ledger_ctx),
+                stream_and_capture(headers, body, session_id, user_message, model, tool_events, api_url=chat_api_url, project_id=project_id, prompt_meta=prompt_meta, api_format=api_format, api_key=chat_api_key, is_regenerate=is_regenerate, mem_enabled=mem_enabled, record_events=record_events, extract_enabled=extract_enabled, ledger_ctx=ledger_ctx, out_limit=out_limit, stop_seqs=stop_seqs),
                 session_id, session_generated,
             ),
             media_type="text/event-stream",
@@ -2832,7 +2883,7 @@ async def chat_completions(request: Request):
         )
     else:
         # 非流式：Anthropic 格式需要转换请求和响应
-        send_body = to_anthropic_request(body) if api_format == "anthropic" else body
+        send_body = to_anthropic_request(body, out_limit=out_limit, stop_seqs=stop_seqs) if api_format == "anthropic" else body
         async with httpx.AsyncClient(follow_redirects=False, timeout=300) as client:
             try:
                 response = await client.post(chat_api_url, headers=headers, json=send_body)
@@ -3065,13 +3116,16 @@ async def _execute_gateway_tool(tool_name: str, arguments: dict, tool_info: dict
     return f"未知的内置工具: {tool_name}", extra
 
 
-async def _stream_with_tools(messages, tools, tool_map, model, temperature, tool_events, session_id, user_message, mem_enabled, api_url=None, api_key=None, project_id=None, prompt_meta=None, api_format="openai", is_regenerate: bool = False, reasoning_effort: str = None, skip_prompt: bool = False, top_p=None, max_tokens=None, record_events: bool = None, extract_enabled: bool = None, ledger_ctx: dict = None):
+async def _stream_with_tools(messages, tools, tool_map, model, temperature, tool_events, session_id, user_message, mem_enabled, api_url=None, api_key=None, project_id=None, prompt_meta=None, api_format="openai", is_regenerate: bool = False, reasoning_effort: str = None, skip_prompt: bool = False, top_p=None, max_tokens=None, record_events: bool = None, extract_enabled: bool = None, ledger_ctx: dict = None, out_limit=None, stop_seqs=None):
     """
     工具 + 流式模式：tool call 轮次用非流式（需要完整看 tool_calls），
     最终回复直接输出已获得的内容（模拟流式），不再重复请求 LLM。
     工具执行采用并发策略：同服务器复用连接，跨服务器并行。
     """
     import httpx as _httpx
+
+    if out_limit is None and max_tokens is not None:
+        out_limit = {"value": max_tokens, "source": "max_tokens"}
 
     _usage_total = None  # W2-03：D1 聚合——把每个工具轮的 usage 累加后落账本
     _request_meta_context = tool_map.get("_drawer_request_tools", {})
@@ -3129,15 +3183,17 @@ async def _stream_with_tools(messages, tools, tool_map, model, temperature, tool
         # 条目九：透传采样参数（None 时不带该字段，交给上游默认）；top_p=0.0 合法，故用 is not None
         if top_p is not None:
             body["top_p"] = top_p
-        if max_tokens is not None:
-            body["max_tokens"] = max_tokens
+        if out_limit is not None:
+            body[out_limit["source"]] = out_limit["value"]
+        if stop_seqs:
+            body["stop"] = stop_seqs
         # 与转发路径同一套规则：尊重用户思考强度，并对各类供应商分流
         # （OpenRouter/Anthropic 用 reasoning 字段；其它 OpenAI 兼容供应商透传合法 effort）。
         _apply_reasoning(body, _is_openrouter, _is_anthropic_fmt, reasoning_effort, skip_prompt, api_url=_api_url)
         await _apply_openrouter_sticky_routing(body, _is_openrouter, model, session_id)
 
         # Anthropic 格式转换
-        send_body = to_anthropic_request(body) if api_format == "anthropic" else body
+        send_body = to_anthropic_request(body, out_limit=out_limit, stop_seqs=stop_seqs) if api_format == "anthropic" else body
 
         print(f"🔄 Tool loop round {round_num + 1}: {len(tools)} tools, {len(current_messages)} msgs (format={api_format})")
 
@@ -3656,7 +3712,7 @@ def _session_headers(session_id: str, generated: bool) -> dict:
     return {"X-Kiwi-Session-Id": session_id} if generated else {}
 
 
-async def stream_and_capture(headers: dict, body: dict, session_id: str, user_message: str, model: str, tool_events: list = None, api_url: str = None, project_id: str = None, prompt_meta: dict = None, api_format: str = "openai", api_key: str = None, is_regenerate: bool = False, mem_enabled: bool = True, record_events: bool = None, extract_enabled: bool = None, ledger_ctx: dict = None):
+async def stream_and_capture(headers: dict, body: dict, session_id: str, user_message: str, model: str, tool_events: list = None, api_url: str = None, project_id: str = None, prompt_meta: dict = None, api_format: str = "openai", api_key: str = None, is_regenerate: bool = False, mem_enabled: bool = True, record_events: bool = None, extract_enabled: bool = None, ledger_ctx: dict = None, out_limit=None, stop_seqs=None):
     """流式响应 + 捕获完整回复 + 工具事件"""
     _api_url = validate_upstream_url(api_url or API_BASE_URL)
     _usage_total = None  # W2-03：按事件累加归一化 usage，流结束时落账本
@@ -3709,7 +3765,7 @@ async def stream_and_capture(headers: dict, body: dict, session_id: str, user_me
     try:
         # Anthropic 格式：转换请求体，使用流式适配器
         if api_format == "anthropic":
-            send_body = to_anthropic_request(body)
+            send_body = to_anthropic_request(body, out_limit=out_limit, stop_seqs=stop_seqs)
             send_body["stream"] = True
             _headers = to_anthropic_headers(api_key or API_KEY)
             _headers["Accept-Encoding"] = "identity"

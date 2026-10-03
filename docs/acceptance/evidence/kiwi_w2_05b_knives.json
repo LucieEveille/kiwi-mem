@@ -1,11 +1,11 @@
 {
   "ticket": "W2-05b",
-  "head": "0c43b2621e034c40acb4a795366463e65bd4300c",
+  "head": "a983c8d82633b2b181402ee19747b940cbd2adb2",
   "source_blobs": {
     "database.py": "b648cc1fd85b41e1d0162fd94cb58bdd3db1c3df",
     "tool_drawer.py": "dca86657bfda9be7cdea3813a9f3313806523bb9",
     "mcp_server.py": "8ee2860cea185fcc54af64ce2da2e96a508cdea4",
-    "main.py": "3336aa0829cfb9c5674354ccdebc29ee581d23a5",
+    "main.py": "855a75c50b54f82e3ee28658a57c7c4c6c0e8626",
     "daily_digest.py": "58582cba0aba882c9d4a700e5d005a5a1f8ccd14",
     "security.py": "b398ee6bd03e7c3d00ddd893dd3aaac2ed763dd8",
     "scripts/test_kiwi_safety_sync.py": "4e277615646b167cc9322513914980cb6436b137",
@@ -51,8 +51,8 @@
         "ERROR": 0
       },
       "exit_code": 1,
-      "log_sha256": "2221d732471e7f63d2f748475053f5930c7e18183da2943dad3062b22f8ab360",
-      "restored_sha256": "c606bf9a0fcb708360fd3fd4673134542af5b1406a782f1590a0bb2b5f739c7d"
+      "log_sha256": "16c99de5b1e8fda9da63963046e4f1ab891a828b0588361797367d0d0d4f5cd1",
+      "restored_sha256": "abe0b491534fc38cc574f9f3dd370d119277933b24b163ea50941f1855fdabac"
     },
     {
       "knife": "K-W5b-2",
@@ -104,8 +104,8 @@
         "ERROR": 0
       },
       "exit_code": 1,
-      "log_sha256": "090d8bdfce7b3612437cdd69601e9b072f578e607d2165b46afcb75314fc020c",
-      "restored_sha256": "1255f3c96cb649053bf557527a71026e4edbfe21e7fcbd430b1594a97658b31d"
+      "log_sha256": "dc56f9b76231307158d836e4b2e54de9b881ffa194afdb836acf95eed099ed90",
+      "restored_sha256": "39af33c5cf46aaacefea39d4b61bd40506cc87b036f50783156c7ade7ab989ae"
     },
     {
       "knife": "K-W5b-3",
@@ -130,8 +130,8 @@
         "ERROR": 0
       },
       "exit_code": 1,
-      "log_sha256": "de6f3e762b7c7b060dfc72a04ae69e70bb9549edcef93f58389ce3d1d57167fc",
-      "restored_sha256": "c606bf9a0fcb708360fd3fd4673134542af5b1406a782f1590a0bb2b5f739c7d"
+      "log_sha256": "510c92dacf06b0f256496fbb26536bc3a7b7b1191d1a4396202aa0674b063c59",
+      "restored_sha256": "abe0b491534fc38cc574f9f3dd370d119277933b24b163ea50941f1855fdabac"
     },
     {
       "knife": "K-W5b-4",
@@ -156,8 +156,8 @@
         "ERROR": 0
       },
       "exit_code": 1,
-      "log_sha256": "02e832573f5dcb47e10c5e140ffb5ccf97c088f5209ad973a875e496c2c380b6",
-      "restored_sha256": "c606bf9a0fcb708360fd3fd4673134542af5b1406a782f1590a0bb2b5f739c7d"
+      "log_sha256": "6ee344cf5cb0503ee880450883581169ba8010dd68901bbcf10e44df78178b2b",
+      "restored_sha256": "abe0b491534fc38cc574f9f3dd370d119277933b24b163ea50941f1855fdabac"
     },
     {
       "knife": "K-W5b-5",
@@ -182,8 +182,8 @@
         "ERROR": 0
       },
       "exit_code": 1,
-      "log_sha256": "f4bf1e7ae6bffa0e668044d00a6558af8d2e7fa618777fcac0671f51d234931d",
-      "restored_sha256": "c606bf9a0fcb708360fd3fd4673134542af5b1406a782f1590a0bb2b5f739c7d"
+      "log_sha256": "65d37303219c1667feae4f3cfc4ce7563e00756501d7c295fa57d2c33a8867e6",
+      "restored_sha256": "abe0b491534fc38cc574f9f3dd370d119277933b24b163ea50941f1855fdabac"
     },
     {
       "knife": "K-W5b-6",
@@ -289,8 +289,8 @@
         "ERROR": 0
       },
       "exit_code": 1,
-      "log_sha256": "f8d77819d1acad1d13824e29d8f34aabea9da7e1e4cf3336fd85f5def18e91bb",
-      "restored_sha256": "c606bf9a0fcb708360fd3fd4673134542af5b1406a782f1590a0bb2b5f739c7d"
+      "log_sha256": "489e2d83d4ad5ccb697fef14e095d8723b968d903f1b833a9f62027f264b97ba",
+      "restored_sha256": "abe0b491534fc38cc574f9f3dd370d119277933b24b163ea50941f1855fdabac"
     },
     {
       "knife": "K-W5b-7",
@@ -360,8 +360,8 @@
         "ERROR": 0
       },
       "exit_code": 1,
-      "log_sha256": "ba138f67c49d4ac1bfe33cbc729208a31738f3861ab9dbd73fd459f66b34057a",
-      "restored_sha256": "c606bf9a0fcb708360fd3fd4673134542af5b1406a782f1590a0bb2b5f739c7d"
+      "log_sha256": "7c8c9989a00de88bcd33e68e6c6d45fb4d20d052bec928e5a0ac823d3ebeda0b",
+      "restored_sha256": "abe0b491534fc38cc574f9f3dd370d119277933b24b163ea50941f1855fdabac"
     },
     {
       "knife": "K-W5b-8",
@@ -422,8 +422,8 @@
         "ERROR": 0
       },
       "exit_code": 1,
-      "log_sha256": "f1b9638001a874027305921468b0921c1561ba694b1f4839fa37c3287b609e2d",
-      "restored_sha256": "c606bf9a0fcb708360fd3fd4673134542af5b1406a782f1590a0bb2b5f739c7d"
+      "log_sha256": "612d3cf40755b04dfa67a2c104bac8d9abc97430497cfe25c5212d6f86f78e5d",
+      "restored_sha256": "abe0b491534fc38cc574f9f3dd370d119277933b24b163ea50941f1855fdabac"
     },
     {
       "knife": "K-W5b-9",
@@ -484,8 +484,8 @@
         "ERROR": 0
       },
       "exit_code": 1,
-      "log_sha256": "bf3306b63d5cf52e4f084573f85709a32e5d335011ea98a5cd161fd595be780c",
-      "restored_sha256": "c606bf9a0fcb708360fd3fd4673134542af5b1406a782f1590a0bb2b5f739c7d"
+      "log_sha256": "267bb9679216b61652f5d7d8683595a47b27898cf799807cab68ab3f193dc149",
+      "restored_sha256": "abe0b491534fc38cc574f9f3dd370d119277933b24b163ea50941f1855fdabac"
     },
     {
       "knife": "K-W5b-10",
@@ -519,8 +519,8 @@
         "ERROR": 0
       },
       "exit_code": 1,
-      "log_sha256": "8572355786c4921a10b10e82d92d36f7fcad58df38dca6eece647b2e7d50ff8d",
-      "restored_sha256": "1255f3c96cb649053bf557527a71026e4edbfe21e7fcbd430b1594a97658b31d"
+      "log_sha256": "73696f7909b698c9f13c50cdc8c8229b634c6177153b848f0885d2bfb4721de9",
+      "restored_sha256": "39af33c5cf46aaacefea39d4b61bd40506cc87b036f50783156c7ade7ab989ae"
     },
     {
       "knife": "K-W5b-11",
@@ -545,8 +545,8 @@
         "ERROR": 0
       },
       "exit_code": 1,
-      "log_sha256": "d9e004a4aadd7940367380a154df3994ab09c763be7ad2d83dbd911d8cb0e6b1",
-      "restored_sha256": "1255f3c96cb649053bf557527a71026e4edbfe21e7fcbd430b1594a97658b31d"
+      "log_sha256": "51a35a7aacc46fc8066c6656325ef7e4f8d71e8a297450cd437c14169621e717",
+      "restored_sha256": "39af33c5cf46aaacefea39d4b61bd40506cc87b036f50783156c7ade7ab989ae"
     },
     {
       "knife": "K-W5b-12",
@@ -580,8 +580,8 @@
         "ERROR": 0
       },
       "exit_code": 1,
-      "log_sha256": "b99c5ff6050d884d0bb70ad9324b81855d9c0873ce9f7bfa6caad4603fa9139c",
-      "restored_sha256": "c606bf9a0fcb708360fd3fd4673134542af5b1406a782f1590a0bb2b5f739c7d"
+      "log_sha256": "c705d622abe0d1aa871378f4636af36019256ef09d258b23011b845d81170a52",
+      "restored_sha256": "abe0b491534fc38cc574f9f3dd370d119277933b24b163ea50941f1855fdabac"
     },
     {
       "knife": "K-W5b-13",
@@ -615,8 +615,8 @@
         "ERROR": 0
       },
       "exit_code": 1,
-      "log_sha256": "64e435db68fbff86c30a6f6989ae12c123db906f7782fa14e1b81ada7757ad49",
-      "restored_sha256": "c606bf9a0fcb708360fd3fd4673134542af5b1406a782f1590a0bb2b5f739c7d"
+      "log_sha256": "7a62ec7867784c125073c7312afda99240e8fc186c6ebb2146049283738fa880",
+      "restored_sha256": "abe0b491534fc38cc574f9f3dd370d119277933b24b163ea50941f1855fdabac"
     }
   ]
 }

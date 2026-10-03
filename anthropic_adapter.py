@@ -27,7 +27,7 @@ _THINKING_MIN_MAX_TOKENS = 1024
 # 请求转换：OpenAI → Anthropic
 # ============================================================
 
-def to_anthropic_request(openai_body: dict) -> dict:
+def to_anthropic_request(openai_body: dict, out_limit=None, stop_seqs=None) -> dict:
     """将 OpenAI chat/completions 请求体转换为 Anthropic Messages API 格式"""
     messages = list(openai_body.get("messages", []))
 
@@ -52,8 +52,11 @@ def to_anthropic_request(openai_body: dict) -> dict:
     body = {
         "model": _strip_model_prefix(openai_body.get("model", "")),
         "messages": anthropic_messages,
-        "max_tokens": openai_body.get("max_tokens") or 8192,
+        "max_tokens": (out_limit["value"] if out_limit else None) or openai_body.get("max_tokens") or 8192,
     }
+
+    if stop_seqs:
+        body["stop_sequences"] = stop_seqs
 
     if system_blocks:
         body["system"] = system_blocks

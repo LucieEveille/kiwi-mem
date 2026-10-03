@@ -156,6 +156,21 @@ jobs:
           python scripts/kiwi_think_02_knives.py --output /tmp/kiwi_think_02_knives.json
           cat /tmp/kiwi_think_02_knives.json
 
+      - name: OUT-01 完整历史刀账（SEC-01a / W2-05b）
+        run: |
+          python scripts/kiwi_sec_01a_knives.py --run --output /tmp/kiwi_sec_01a_knives.json
+          python scripts/kiwi_w2_05b_knives.py --output /tmp/kiwi_w2_05b_knives.json
+
+      - name: OUT-01 显式输出上限与 stop 守卫
+        if: ${{ !cancelled() && steps.prep-dependencies.outcome == 'success' }}
+        env:
+          KIWI_OUT_01_REPORT: /tmp/kiwi_out_01_guards.json
+        run: python scripts/test_kiwi_out_01.py
+
+      - name: OUT-01 变异证据（全绿前置，否则不施刀）
+        if: ${{ !cancelled() && steps.prep-dependencies.outcome == 'success' }}
+        run: python scripts/kiwi_out_01_knives.py --output /tmp/kiwi_out_01_knives.json
+
       - name: 保存 BUILD 验证证据
         if: always()
         uses: actions/upload-artifact@v4
@@ -174,3 +189,8 @@ jobs:
             /tmp/kiwi_lock_01_knives.json
 
             /tmp/kiwi_think_02_knives.json
+            /tmp/kiwi_sec_01a_knives.json
+            /tmp/kiwi_w2_05b_knives.json
+            /tmp/kiwi_out_01_guards.json
+            /tmp/kiwi_out_01_knives.json
+            /tmp/kiwi_out_01_knives-runs/
