@@ -1,12 +1,12 @@
 {
   "ticket": "OUT-01",
-  "head": "a983c8d82633b2b181402ee19747b940cbd2adb2",
+  "head": "a00c189443cc9917e90cef07281fd211055437b7",
   "source_blobs": {
-    "main.py": "855a75c50b54f82e3ee28658a57c7c4c6c0e8626",
+    "main.py": "f338228c9da1cb4ab8931299d968eea634fcff8a",
     "anthropic_adapter.py": "eb38853bc1830f9d67e71d381ed6f215d2f5a5a9",
     "scripts/test_kiwi_out_01.py": "d90caa7b47894069f39ada85729117e0c25fe05a",
     "scripts/kiwi_out_01_knives.py": "51680a8d765a334e7f9a186fa6f49424ab4fd2f2",
-    ".github/workflows/ci.yml": "9f27b53ae63ea9375fec7845690486c847ee4e27"
+    ".github/workflows/ci.yml": "12e981293a96443f519e61aeb4b9a66dc79a385c"
   },
   "preflight_returncode": 0,
   "expected_arm_count": 358,
@@ -40,7 +40,7 @@
         "FAIL": 59,
         "ERROR": 0
       },
-      "restored_sha256": "5f3ff3cf3f4daeade42ddad086bd06b0865cd193ac3f0b6292cf151908787f59"
+      "restored_sha256": "515a2d10b178cd73a1eef44c5414da06b04e977f8fe399e240ef9490f0f09ad9"
     },
     {
       "knife": "K-OUT-01-02",
@@ -64,7 +64,7 @@
         "FAIL": 11,
         "ERROR": 0
       },
-      "restored_sha256": "5f3ff3cf3f4daeade42ddad086bd06b0865cd193ac3f0b6292cf151908787f59"
+      "restored_sha256": "515a2d10b178cd73a1eef44c5414da06b04e977f8fe399e240ef9490f0f09ad9"
     },
     {
       "knife": "K-OUT-01-03a",
@@ -87,7 +87,7 @@
         "FAIL": 4,
         "ERROR": 0
       },
-      "restored_sha256": "5f3ff3cf3f4daeade42ddad086bd06b0865cd193ac3f0b6292cf151908787f59"
+      "restored_sha256": "515a2d10b178cd73a1eef44c5414da06b04e977f8fe399e240ef9490f0f09ad9"
     },
     {
       "knife": "K-OUT-01-03b",
@@ -134,7 +134,7 @@
         "FAIL": 2,
         "ERROR": 0
       },
-      "restored_sha256": "5f3ff3cf3f4daeade42ddad086bd06b0865cd193ac3f0b6292cf151908787f59"
+      "restored_sha256": "515a2d10b178cd73a1eef44c5414da06b04e977f8fe399e240ef9490f0f09ad9"
     },
     {
       "knife": "K-OUT-01-05",
@@ -157,7 +157,7 @@
         "FAIL": 4,
         "ERROR": 0
       },
-      "restored_sha256": "5f3ff3cf3f4daeade42ddad086bd06b0865cd193ac3f0b6292cf151908787f59"
+      "restored_sha256": "515a2d10b178cd73a1eef44c5414da06b04e977f8fe399e240ef9490f0f09ad9"
     },
     {
       "knife": "K-OUT-01-06",
@@ -180,7 +180,7 @@
         "FAIL": 92,
         "ERROR": 0
       },
-      "restored_sha256": "5f3ff3cf3f4daeade42ddad086bd06b0865cd193ac3f0b6292cf151908787f59"
+      "restored_sha256": "515a2d10b178cd73a1eef44c5414da06b04e977f8fe399e240ef9490f0f09ad9"
     },
     {
       "knife": "K-OUT-01-07",
@@ -228,7 +228,7 @@
         "FAIL": 182,
         "ERROR": 0
       },
-      "restored_sha256": "5f3ff3cf3f4daeade42ddad086bd06b0865cd193ac3f0b6292cf151908787f59"
+      "restored_sha256": "515a2d10b178cd73a1eef44c5414da06b04e977f8fe399e240ef9490f0f09ad9"
     },
     {
       "knife": "K-OUT-01-09",
@@ -252,7 +252,7 @@
         "FAIL": 5,
         "ERROR": 0
       },
-      "restored_sha256": "5f3ff3cf3f4daeade42ddad086bd06b0865cd193ac3f0b6292cf151908787f59"
+      "restored_sha256": "515a2d10b178cd73a1eef44c5414da06b04e977f8fe399e240ef9490f0f09ad9"
     }
   ],
   "restored_returncode": 0,

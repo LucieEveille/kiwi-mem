@@ -1,0 +1,1057 @@
+{
+  "ticket": "COMPAT-02-A",
+  "scope": "pinned provider behavior; synthetic captured streams; no real client/model",
+  "results": [
+    {
+      "id": "P-v0-plain",
+      "sdk": "2.0.62",
+      "ok": true,
+      "errors": [],
+      "checks": {
+        "private_occurrences": true,
+        "fetch_once": true,
+        "no_error_parts": true,
+        "text_equal": true,
+        "finish_once": true,
+        "finish_stop": true
+      },
+      "text": "hello",
+      "finish": [
+        {
+          "unified": "stop",
+          "raw": "stop"
+        }
+      ],
+      "metadata": [
+        {
+          "id": true,
+          "modelId": true,
+          "timestamp": true
+        }
+      ],
+      "capture_sha256": "9f4554074885cb94b1cfd73c8378dbeaa6411089118ba567b254111320e876ac"
+    },
+    {
+      "id": "P-v0-memory",
+      "sdk": "2.0.62",
+      "ok": true,
+      "errors": [],
+      "checks": {
+        "private_occurrences": true,
+        "fetch_once": true,
+        "no_error_parts": true,
+        "text_equal": true,
+        "finish_once": true,
+        "finish_stop": true
+      },
+      "text": "hello",
+      "finish": [
+        {
+          "unified": "stop",
+          "raw": "stop"
+        }
+      ],
+      "metadata": [
+        {
+          "id": true,
+          "modelId": true,
+          "timestamp": true
+        }
+      ],
+      "capture_sha256": "7f1be2864ee465cb119147bb36a68ac36aa23e53fa2c6a3472442795c7436954"
+    },
+    {
+      "id": "P-v0-dream",
+      "sdk": "2.0.62",
+      "ok": true,
+      "errors": [],
+      "checks": {
+        "private_occurrences": true,
+        "fetch_once": true,
+        "no_error_parts": true,
+        "text_equal": true,
+        "finish_once": true,
+        "finish_stop": true
+      },
+      "text": "hello<!--dream:trigger-->",
+      "finish": [
+        {
+          "unified": "stop",
+          "raw": "stop"
+        }
+      ],
+      "metadata": [
+        {
+          "id": true,
+          "modelId": true,
+          "timestamp": true
+        }
+      ],
+      "capture_sha256": "f92d10c25111da16b03bf7c00cb6801619c647db3d4b787c83d571982a1e0b67"
+    },
+    {
+      "id": "P-v0-tool",
+      "sdk": "2.0.62",
+      "ok": true,
+      "errors": [],
+      "checks": {
+        "private_occurrences": true,
+        "fetch_once": true,
+        "no_error_parts": true,
+        "text_equal": true,
+        "finish_once": true,
+        "finish_stop": true
+      },
+      "text": "hello",
+      "finish": [
+        {
+          "unified": "stop",
+          "raw": "stop"
+        }
+      ],
+      "metadata": [
+        {
+          "id": false,
+          "modelId": false,
+          "timestamp": false
+        }
+      ],
+      "capture_sha256": "6287554fc60b7f674545a5b472c42dd8a7c596b1364f9d44339e6f7b10c58e25"
+    },
+    {
+      "id": "P-v0-handoff",
+      "sdk": "2.0.62",
+      "ok": true,
+      "errors": [],
+      "checks": {
+        "private_occurrences": true,
+        "fetch_once": true,
+        "no_error_parts": true,
+        "text_equal": true,
+        "finish_once": true,
+        "finish_stop": true
+      },
+      "text": "hello",
+      "finish": [
+        {
+          "unified": "stop",
+          "raw": "stop"
+        }
+      ],
+      "metadata": [
+        {
+          "id": false,
+          "modelId": false,
+          "timestamp": false
+        }
+      ],
+      "capture_sha256": "7f78425b80428f53886f6dd1f7f20030c1bdef3f1dc77b8947846752d17cc008"
+    },
+    {
+      "id": "P-v0-all",
+      "sdk": "2.0.62",
+      "ok": true,
+      "errors": [],
+      "checks": {
+        "private_occurrences": true,
+        "fetch_once": true,
+        "no_error_parts": true,
+        "text_equal": true,
+        "finish_once": true,
+        "finish_stop": true
+      },
+      "text": "hello<!--dream:trigger-->",
+      "finish": [
+        {
+          "unified": "stop",
+          "raw": "stop"
+        }
+      ],
+      "metadata": [
+        {
+          "id": false,
+          "modelId": false,
+          "timestamp": false
+        }
+      ],
+      "capture_sha256": "1a1c7518253d477ad423f9f41144a825d22529a6cfbac00998a07933de4dfc9e"
+    },
+    {
+      "id": "P-v1-plain",
+      "sdk": "2.0.62",
+      "ok": true,
+      "errors": [],
+      "checks": {
+        "private_occurrences": true,
+        "fetch_once": true,
+        "no_error_parts": true,
+        "text_equal": true,
+        "finish_once": true,
+        "finish_stop": true
+      },
+      "text": "hello",
+      "finish": [
+        {
+          "unified": "stop",
+          "raw": "stop"
+        }
+      ],
+      "metadata": [
+        {
+          "id": false,
+          "modelId": false,
+          "timestamp": false
+        }
+      ],
+      "capture_sha256": "c1efea34f209274dd1b52dbda8dca8e85fba023287dee23a8b1305bfc3ebd5e8"
+    },
+    {
+      "id": "P-v1-memory",
+      "sdk": "2.0.62",
+      "ok": true,
+      "errors": [],
+      "checks": {
+        "private_occurrences": true,
+        "fetch_once": true,
+        "no_error_parts": true,
+        "text_equal": true,
+        "finish_once": true,
+        "finish_stop": true
+      },
+      "text": "hello",
+      "finish": [
+        {
+          "unified": "stop",
+          "raw": "stop"
+        }
+      ],
+      "metadata": [
+        {
+          "id": false,
+          "modelId": false,
+          "timestamp": false
+        }
+      ],
+      "capture_sha256": "248c0b9e12edc4e06d5ef90027fb1ad4437e634451bc725f76303a007f6e8649"
+    },
+    {
+      "id": "P-v1-dream",
+      "sdk": "2.0.62",
+      "ok": true,
+      "errors": [],
+      "checks": {
+        "private_occurrences": true,
+        "fetch_once": true,
+        "no_error_parts": true,
+        "text_equal": true,
+        "finish_once": true,
+        "finish_stop": true
+      },
+      "text": "hello<!--dream:trigger-->",
+      "finish": [
+        {
+          "unified": "stop",
+          "raw": "stop"
+        }
+      ],
+      "metadata": [
+        {
+          "id": false,
+          "modelId": false,
+          "timestamp": false
+        }
+      ],
+      "capture_sha256": "62081036beaa1577c0180f89420d02d5799faa62eb64ca21ef90a60237c36b8a"
+    },
+    {
+      "id": "P-v1-tool",
+      "sdk": "2.0.62",
+      "ok": true,
+      "errors": [],
+      "checks": {
+        "private_occurrences": true,
+        "fetch_once": true,
+        "no_error_parts": true,
+        "text_equal": true,
+        "finish_once": true,
+        "finish_stop": true
+      },
+      "text": "hello",
+      "finish": [
+        {
+          "unified": "stop",
+          "raw": "stop"
+        }
+      ],
+      "metadata": [
+        {
+          "id": false,
+          "modelId": false,
+          "timestamp": false
+        }
+      ],
+      "capture_sha256": "2ef46537610334e838a0ced55f2ef9aeeca8380167073676f1d115d588a74bd9"
+    },
+    {
+      "id": "P-v1-handoff",
+      "sdk": "2.0.62",
+      "ok": true,
+      "errors": [],
+      "checks": {
+        "private_occurrences": true,
+        "fetch_once": true,
+        "no_error_parts": true,
+        "text_equal": true,
+        "finish_once": true,
+        "finish_stop": true
+      },
+      "text": "hello",
+      "finish": [
+        {
+          "unified": "stop",
+          "raw": "stop"
+        }
+      ],
+      "metadata": [
+        {
+          "id": false,
+          "modelId": false,
+          "timestamp": false
+        }
+      ],
+      "capture_sha256": "624a6ca5a62181d5a893fa491d315877127da31d30d30cf63a7c654d283b0007"
+    },
+    {
+      "id": "P-v1-all",
+      "sdk": "2.0.62",
+      "ok": true,
+      "errors": [],
+      "checks": {
+        "private_occurrences": true,
+        "fetch_once": true,
+        "no_error_parts": true,
+        "text_equal": true,
+        "finish_once": true,
+        "finish_stop": true
+      },
+      "text": "hello<!--dream:trigger-->",
+      "finish": [
+        {
+          "unified": "stop",
+          "raw": "stop"
+        }
+      ],
+      "metadata": [
+        {
+          "id": false,
+          "modelId": false,
+          "timestamp": false
+        }
+      ],
+      "capture_sha256": "ab44de1641d1375bdd7e0092e70307c56c698e433704fbac55f5c4b1051fa2fe"
+    },
+    {
+      "id": "T-v0-memory",
+      "sdk": "2.0.62",
+      "ok": true,
+      "errors": [],
+      "checks": {
+        "private_occurrences": true,
+        "fetch_once": true,
+        "no_error_parts": true,
+        "text_equal": true,
+        "finish_once": true,
+        "finish_stop": true
+      },
+      "text": "hello",
+      "finish": [
+        {
+          "unified": "stop",
+          "raw": "stop"
+        }
+      ],
+      "metadata": [
+        {
+          "id": false,
+          "modelId": false,
+          "timestamp": false
+        }
+      ],
+      "capture_sha256": "90f85efbeffaf9089887a7650a66c42539bf1c5be7917b5fdbe77bbb27448f9f"
+    },
+    {
+      "id": "T-v0-dream",
+      "sdk": "2.0.62",
+      "ok": true,
+      "errors": [],
+      "checks": {
+        "private_occurrences": true,
+        "fetch_once": true,
+        "no_error_parts": true,
+        "text_equal": true,
+        "finish_once": true,
+        "finish_stop": true
+      },
+      "text": "hello<!--dream:trigger-->",
+      "finish": [
+        {
+          "unified": "stop",
+          "raw": "stop"
+        }
+      ],
+      "metadata": [
+        {
+          "id": false,
+          "modelId": false,
+          "timestamp": false
+        }
+      ],
+      "capture_sha256": "b7560e08ad178a56f646bd86b361c5e250dc28f4ac546e6ac02c19b2b5faf57a"
+    },
+    {
+      "id": "T-v0-all",
+      "sdk": "2.0.62",
+      "ok": true,
+      "errors": [],
+      "checks": {
+        "private_occurrences": true,
+        "fetch_once": true,
+        "no_error_parts": true,
+        "text_equal": true,
+        "finish_once": true,
+        "finish_stop": true
+      },
+      "text": "hello<!--dream:trigger-->",
+      "finish": [
+        {
+          "unified": "stop",
+          "raw": "stop"
+        }
+      ],
+      "metadata": [
+        {
+          "id": false,
+          "modelId": false,
+          "timestamp": false
+        }
+      ],
+      "capture_sha256": "d4daaf2f194624a18ab34f08f008c3c6e7580f1727a7243debd40775442ba7a5"
+    },
+    {
+      "id": "T-v1-memory",
+      "sdk": "2.0.62",
+      "ok": true,
+      "errors": [],
+      "checks": {
+        "private_occurrences": true,
+        "fetch_once": true,
+        "no_error_parts": true,
+        "text_equal": true,
+        "finish_once": true,
+        "finish_stop": true
+      },
+      "text": "hello",
+      "finish": [
+        {
+          "unified": "stop",
+          "raw": "stop"
+        }
+      ],
+      "metadata": [
+        {
+          "id": false,
+          "modelId": false,
+          "timestamp": false
+        }
+      ],
+      "capture_sha256": "8e9eab63dc196e4be597666f8dcad02eb9925244b8544ba5189ada4772b4c61f"
+    },
+    {
+      "id": "T-v1-dream",
+      "sdk": "2.0.62",
+      "ok": true,
+      "errors": [],
+      "checks": {
+        "private_occurrences": true,
+        "fetch_once": true,
+        "no_error_parts": true,
+        "text_equal": true,
+        "finish_once": true,
+        "finish_stop": true
+      },
+      "text": "hello<!--dream:trigger-->",
+      "finish": [
+        {
+          "unified": "stop",
+          "raw": "stop"
+        }
+      ],
+      "metadata": [
+        {
+          "id": false,
+          "modelId": false,
+          "timestamp": false
+        }
+      ],
+      "capture_sha256": "e79b916d2fd80bfcffb7f8870c3ae655edb85664915a1a7d592720db274863ad"
+    },
+    {
+      "id": "T-v1-all",
+      "sdk": "2.0.62",
+      "ok": true,
+      "errors": [],
+      "checks": {
+        "private_occurrences": true,
+        "fetch_once": true,
+        "no_error_parts": true,
+        "text_equal": true,
+        "finish_once": true,
+        "finish_stop": true
+      },
+      "text": "hello<!--dream:trigger-->",
+      "finish": [
+        {
+          "unified": "stop",
+          "raw": "stop"
+        }
+      ],
+      "metadata": [
+        {
+          "id": false,
+          "modelId": false,
+          "timestamp": false
+        }
+      ],
+      "capture_sha256": "193a80188f9f8dcb1d3f1f6ec54fc35b3c388a174dbe79bf031b9137b18939ce"
+    },
+    {
+      "id": "P-v0-plain",
+      "sdk": "2.0.72",
+      "ok": true,
+      "errors": [],
+      "checks": {
+        "private_occurrences": true,
+        "fetch_once": true,
+        "no_error_parts": true,
+        "text_equal": true,
+        "finish_once": true,
+        "finish_stop": true
+      },
+      "text": "hello",
+      "finish": [
+        {
+          "unified": "stop",
+          "raw": "stop"
+        }
+      ],
+      "metadata": [
+        {
+          "id": true,
+          "modelId": true,
+          "timestamp": true
+        }
+      ],
+      "capture_sha256": "9f4554074885cb94b1cfd73c8378dbeaa6411089118ba567b254111320e876ac"
+    },
+    {
+      "id": "P-v0-memory",
+      "sdk": "2.0.72",
+      "ok": true,
+      "errors": [],
+      "checks": {
+        "private_occurrences": true,
+        "fetch_once": true,
+        "no_error_parts": true,
+        "text_equal": true,
+        "finish_once": true,
+        "finish_stop": true
+      },
+      "text": "hello",
+      "finish": [
+        {
+          "unified": "stop",
+          "raw": "stop"
+        }
+      ],
+      "metadata": [
+        {
+          "id": true,
+          "modelId": true,
+          "timestamp": true
+        }
+      ],
+      "capture_sha256": "7f1be2864ee465cb119147bb36a68ac36aa23e53fa2c6a3472442795c7436954"
+    },
+    {
+      "id": "P-v0-dream",
+      "sdk": "2.0.72",
+      "ok": true,
+      "errors": [],
+      "checks": {
+        "private_occurrences": true,
+        "fetch_once": true,
+        "no_error_parts": true,
+        "text_equal": true,
+        "finish_once": true,
+        "finish_stop": true
+      },
+      "text": "hello<!--dream:trigger-->",
+      "finish": [
+        {
+          "unified": "stop",
+          "raw": "stop"
+        }
+      ],
+      "metadata": [
+        {
+          "id": true,
+          "modelId": true,
+          "timestamp": true
+        }
+      ],
+      "capture_sha256": "f92d10c25111da16b03bf7c00cb6801619c647db3d4b787c83d571982a1e0b67"
+    },
+    {
+      "id": "P-v0-tool",
+      "sdk": "2.0.72",
+      "ok": true,
+      "errors": [],
+      "checks": {
+        "private_occurrences": true,
+        "fetch_once": true,
+        "no_error_parts": true,
+        "text_equal": true,
+        "finish_once": true,
+        "finish_stop": true
+      },
+      "text": "hello",
+      "finish": [
+        {
+          "unified": "stop",
+          "raw": "stop"
+        }
+      ],
+      "metadata": [
+        {
+          "id": false,
+          "modelId": false,
+          "timestamp": false
+        }
+      ],
+      "capture_sha256": "6287554fc60b7f674545a5b472c42dd8a7c596b1364f9d44339e6f7b10c58e25"
+    },
+    {
+      "id": "P-v0-handoff",
+      "sdk": "2.0.72",
+      "ok": true,
+      "errors": [],
+      "checks": {
+        "private_occurrences": true,
+        "fetch_once": true,
+        "no_error_parts": true,
+        "text_equal": true,
+        "finish_once": true,
+        "finish_stop": true
+      },
+      "text": "hello",
+      "finish": [
+        {
+          "unified": "stop",
+          "raw": "stop"
+        }
+      ],
+      "metadata": [
+        {
+          "id": false,
+          "modelId": false,
+          "timestamp": false
+        }
+      ],
+      "capture_sha256": "7f78425b80428f53886f6dd1f7f20030c1bdef3f1dc77b8947846752d17cc008"
+    },
+    {
+      "id": "P-v0-all",
+      "sdk": "2.0.72",
+      "ok": true,
+      "errors": [],
+      "checks": {
+        "private_occurrences": true,
+        "fetch_once": true,
+        "no_error_parts": true,
+        "text_equal": true,
+        "finish_once": true,
+        "finish_stop": true
+      },
+      "text": "hello<!--dream:trigger-->",
+      "finish": [
+        {
+          "unified": "stop",
+          "raw": "stop"
+        }
+      ],
+      "metadata": [
+        {
+          "id": false,
+          "modelId": false,
+          "timestamp": false
+        }
+      ],
+      "capture_sha256": "1a1c7518253d477ad423f9f41144a825d22529a6cfbac00998a07933de4dfc9e"
+    },
+    {
+      "id": "P-v1-plain",
+      "sdk": "2.0.72",
+      "ok": true,
+      "errors": [],
+      "checks": {
+        "private_occurrences": true,
+        "fetch_once": true,
+        "no_error_parts": true,
+        "text_equal": true,
+        "finish_once": true,
+        "finish_stop": true
+      },
+      "text": "hello",
+      "finish": [
+        {
+          "unified": "stop",
+          "raw": "stop"
+        }
+      ],
+      "metadata": [
+        {
+          "id": false,
+          "modelId": false,
+          "timestamp": false
+        }
+      ],
+      "capture_sha256": "c1efea34f209274dd1b52dbda8dca8e85fba023287dee23a8b1305bfc3ebd5e8"
+    },
+    {
+      "id": "P-v1-memory",
+      "sdk": "2.0.72",
+      "ok": true,
+      "errors": [],
+      "checks": {
+        "private_occurrences": true,
+        "fetch_once": true,
+        "no_error_parts": true,
+        "text_equal": true,
+        "finish_once": true,
+        "finish_stop": true
+      },
+      "text": "hello",
+      "finish": [
+        {
+          "unified": "stop",
+          "raw": "stop"
+        }
+      ],
+      "metadata": [
+        {
+          "id": false,
+          "modelId": false,
+          "timestamp": false
+        }
+      ],
+      "capture_sha256": "248c0b9e12edc4e06d5ef90027fb1ad4437e634451bc725f76303a007f6e8649"
+    },
+    {
+      "id": "P-v1-dream",
+      "sdk": "2.0.72",
+      "ok": true,
+      "errors": [],
+      "checks": {
+        "private_occurrences": true,
+        "fetch_once": true,
+        "no_error_parts": true,
+        "text_equal": true,
+        "finish_once": true,
+        "finish_stop": true
+      },
+      "text": "hello<!--dream:trigger-->",
+      "finish": [
+        {
+          "unified": "stop",
+          "raw": "stop"
+        }
+      ],
+      "metadata": [
+        {
+          "id": false,
+          "modelId": false,
+          "timestamp": false
+        }
+      ],
+      "capture_sha256": "62081036beaa1577c0180f89420d02d5799faa62eb64ca21ef90a60237c36b8a"
+    },
+    {
+      "id": "P-v1-tool",
+      "sdk": "2.0.72",
+      "ok": true,
+      "errors": [],
+      "checks": {
+        "private_occurrences": true,
+        "fetch_once": true,
+        "no_error_parts": true,
+        "text_equal": true,
+        "finish_once": true,
+        "finish_stop": true
+      },
+      "text": "hello",
+      "finish": [
+        {
+          "unified": "stop",
+          "raw": "stop"
+        }
+      ],
+      "metadata": [
+        {
+          "id": false,
+          "modelId": false,
+          "timestamp": false
+        }
+      ],
+      "capture_sha256": "2ef46537610334e838a0ced55f2ef9aeeca8380167073676f1d115d588a74bd9"
+    },
+    {
+      "id": "P-v1-handoff",
+      "sdk": "2.0.72",
+      "ok": true,
+      "errors": [],
+      "checks": {
+        "private_occurrences": true,
+        "fetch_once": true,
+        "no_error_parts": true,
+        "text_equal": true,
+        "finish_once": true,
+        "finish_stop": true
+      },
+      "text": "hello",
+      "finish": [
+        {
+          "unified": "stop",
+          "raw": "stop"
+        }
+      ],
+      "metadata": [
+        {
+          "id": false,
+          "modelId": false,
+          "timestamp": false
+        }
+      ],
+      "capture_sha256": "624a6ca5a62181d5a893fa491d315877127da31d30d30cf63a7c654d283b0007"
+    },
+    {
+      "id": "P-v1-all",
+      "sdk": "2.0.72",
+      "ok": true,
+      "errors": [],
+      "checks": {
+        "private_occurrences": true,
+        "fetch_once": true,
+        "no_error_parts": true,
+        "text_equal": true,
+        "finish_once": true,
+        "finish_stop": true
+      },
+      "text": "hello<!--dream:trigger-->",
+      "finish": [
+        {
+          "unified": "stop",
+          "raw": "stop"
+        }
+      ],
+      "metadata": [
+        {
+          "id": false,
+          "modelId": false,
+          "timestamp": false
+        }
+      ],
+      "capture_sha256": "ab44de1641d1375bdd7e0092e70307c56c698e433704fbac55f5c4b1051fa2fe"
+    },
+    {
+      "id": "T-v0-memory",
+      "sdk": "2.0.72",
+      "ok": true,
+      "errors": [],
+      "checks": {
+        "private_occurrences": true,
+        "fetch_once": true,
+        "no_error_parts": true,
+        "text_equal": true,
+        "finish_once": true,
+        "finish_stop": true
+      },
+      "text": "hello",
+      "finish": [
+        {
+          "unified": "stop",
+          "raw": "stop"
+        }
+      ],
+      "metadata": [
+        {
+          "id": false,
+          "modelId": false,
+          "timestamp": false
+        }
+      ],
+      "capture_sha256": "90f85efbeffaf9089887a7650a66c42539bf1c5be7917b5fdbe77bbb27448f9f"
+    },
+    {
+      "id": "T-v0-dream",
+      "sdk": "2.0.72",
+      "ok": true,
+      "errors": [],
+      "checks": {
+        "private_occurrences": true,
+        "fetch_once": true,
+        "no_error_parts": true,
+        "text_equal": true,
+        "finish_once": true,
+        "finish_stop": true
+      },
+      "text": "hello<!--dream:trigger-->",
+      "finish": [
+        {
+          "unified": "stop",
+          "raw": "stop"
+        }
+      ],
+      "metadata": [
+        {
+          "id": false,
+          "modelId": false,
+          "timestamp": false
+        }
+      ],
+      "capture_sha256": "b7560e08ad178a56f646bd86b361c5e250dc28f4ac546e6ac02c19b2b5faf57a"
+    },
+    {
+      "id": "T-v0-all",
+      "sdk": "2.0.72",
+      "ok": true,
+      "errors": [],
+      "checks": {
+        "private_occurrences": true,
+        "fetch_once": true,
+        "no_error_parts": true,
+        "text_equal": true,
+        "finish_once": true,
+        "finish_stop": true
+      },
+      "text": "hello<!--dream:trigger-->",
+      "finish": [
+        {
+          "unified": "stop",
+          "raw": "stop"
+        }
+      ],
+      "metadata": [
+        {
+          "id": false,
+          "modelId": false,
+          "timestamp": false
+        }
+      ],
+      "capture_sha256": "d4daaf2f194624a18ab34f08f008c3c6e7580f1727a7243debd40775442ba7a5"
+    },
+    {
+      "id": "T-v1-memory",
+      "sdk": "2.0.72",
+      "ok": true,
+      "errors": [],
+      "checks": {
+        "private_occurrences": true,
+        "fetch_once": true,
+        "no_error_parts": true,
+        "text_equal": true,
+        "finish_once": true,
+        "finish_stop": true
+      },
+      "text": "hello",
+      "finish": [
+        {
+          "unified": "stop",
+          "raw": "stop"
+        }
+      ],
+      "metadata": [
+        {
+          "id": false,
+          "modelId": false,
+          "timestamp": false
+        }
+      ],
+      "capture_sha256": "8e9eab63dc196e4be597666f8dcad02eb9925244b8544ba5189ada4772b4c61f"
+    },
+    {
+      "id": "T-v1-dream",
+      "sdk": "2.0.72",
+      "ok": true,
+      "errors": [],
+      "checks": {
+        "private_occurrences": true,
+        "fetch_once": true,
+        "no_error_parts": true,
+        "text_equal": true,
+        "finish_once": true,
+        "finish_stop": true
+      },
+      "text": "hello<!--dream:trigger-->",
+      "finish": [
+        {
+          "unified": "stop",
+          "raw": "stop"
+        }
+      ],
+      "metadata": [
+        {
+          "id": false,
+          "modelId": false,
+          "timestamp": false
+        }
+      ],
+      "capture_sha256": "e79b916d2fd80bfcffb7f8870c3ae655edb85664915a1a7d592720db274863ad"
+    },
+    {
+      "id": "T-v1-all",
+      "sdk": "2.0.72",
+      "ok": true,
+      "errors": [],
+      "checks": {
+        "private_occurrences": true,
+        "fetch_once": true,
+        "no_error_parts": true,
+        "text_equal": true,
+        "finish_once": true,
+        "finish_stop": true
+      },
+      "text": "hello<!--dream:trigger-->",
+      "finish": [
+        {
+          "unified": "stop",
+          "raw": "stop"
+        }
+      ],
+      "metadata": [
+        {
+          "id": false,
+          "modelId": false,
+          "timestamp": false
+        }
+      ],
+      "capture_sha256": "193a80188f9f8dcb1d3f1f6ec54fc35b3c388a174dbe79bf031b9137b18939ce"
+    }
+  ],
+  "manifest_sha256": "49b02490b19e870259ac7caadc3696928033e30d7c915a1f6683924efeab72a0",
+  "lock_sha256": "48ab244a4061d09f1475407fd7046f7929fa78e6e27d81b36217f5bc5f7ed957",
+  "counts": {
+    "PASS": 36,
+    "FAIL": 0
+  },
+  "status": "PASS"
+}

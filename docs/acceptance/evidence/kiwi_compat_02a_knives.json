@@ -1,0 +1,174 @@
+{
+  "ticket": "COMPAT-02-A",
+  "head": "a00c189443cc9917e90cef07281fd211055437b7",
+  "source_blobs": {
+    "main.py": "f338228c9da1cb4ab8931299d968eea634fcff8a",
+    "security.py": "b398ee6bd03e7c3d00ddd893dd3aaac2ed763dd8",
+    "anthropic_adapter.py": "eb38853bc1830f9d67e71d381ed6f215d2f5a5a9",
+    "scripts/test_kiwi_out_01.py": "d90caa7b47894069f39ada85729117e0c25fe05a",
+    "scripts/test_kiwi_think_02.py": "d77541f579130f54de774d1ccb5e5c68e80264d2",
+    "scripts/test_kiwi_compat_02a.py": "8e5c39f94c5eeacd35b9329a487b32662542ec76",
+    "scripts/kiwi_compat_02a_knives.py": "cc2ab44f4a8d946878f0ecd0bb91d31e4a3eba83",
+    ".github/workflows/ci.yml": "12e981293a96443f519e61aeb4b9a66dc79a385c"
+  },
+  "preflight_returncode": 0,
+  "expected_arm_count": 264,
+  "expected_assertion_count": 639,
+  "preflight_counts": {
+    "PASS": 264,
+    "FAIL": 0,
+    "ERROR": 0
+  },
+  "results": [
+    {
+      "knife": "K-C2A-01",
+      "mutation": "remove ordinary-forward memory choices",
+      "status": "RED",
+      "returncode": 1,
+      "behavioural": true,
+      "environmental": [],
+      "targets": {
+        "00": true,
+        "01": true,
+        "02": true
+      },
+      "identity_sets_equal": true,
+      "counts": {
+        "PASS": 254,
+        "FAIL": 10,
+        "ERROR": 0
+      },
+      "assertion_counts": {
+        "PASS": 629,
+        "FAIL": 10,
+        "ERROR": 0
+      },
+      "restored_sha256": "515a2d10b178cd73a1eef44c5414da06b04e977f8fe399e240ef9490f0f09ad9"
+    },
+    {
+      "knife": "K-C2A-02",
+      "mutation": "tool memory choices null",
+      "status": "RED",
+      "returncode": 1,
+      "behavioural": true,
+      "environmental": [],
+      "targets": {
+        "00": true,
+        "01": true,
+        "02": true
+      },
+      "identity_sets_equal": true,
+      "counts": {
+        "PASS": 254,
+        "FAIL": 10,
+        "ERROR": 0
+      },
+      "assertion_counts": {
+        "PASS": 629,
+        "FAIL": 10,
+        "ERROR": 0
+      },
+      "restored_sha256": "515a2d10b178cd73a1eef44c5414da06b04e977f8fe399e240ef9490f0f09ad9"
+    },
+    {
+      "knife": "K-C2A-03",
+      "mutation": "remove session and both handoff choices",
+      "status": "RED",
+      "returncode": 1,
+      "behavioural": true,
+      "environmental": [],
+      "targets": {
+        "00": true,
+        "01": true,
+        "02": true
+      },
+      "identity_sets_equal": true,
+      "counts": {
+        "PASS": 230,
+        "FAIL": 34,
+        "ERROR": 0
+      },
+      "assertion_counts": {
+        "PASS": 605,
+        "FAIL": 34,
+        "ERROR": 0
+      },
+      "restored_sha256": "515a2d10b178cd73a1eef44c5414da06b04e977f8fe399e240ef9490f0f09ad9"
+    },
+    {
+      "knife": "K-C2A-04",
+      "mutation": "add choices to frozen error payload",
+      "status": "RED",
+      "returncode": 1,
+      "behavioural": true,
+      "environmental": [],
+      "targets": {
+        "03": true
+      },
+      "identity_sets_equal": true,
+      "counts": {
+        "PASS": 257,
+        "FAIL": 7,
+        "ERROR": 0
+      },
+      "assertion_counts": {
+        "PASS": 632,
+        "FAIL": 7,
+        "ERROR": 0
+      },
+      "restored_sha256": "5c91cfe4cad9c4d870468be204b5bb545779397e213cce27f60061a8a5563be3"
+    },
+    {
+      "knife": "K-C2A-05",
+      "mutation": "rewrite upstream length finish to stop",
+      "status": "RED",
+      "returncode": 1,
+      "behavioural": true,
+      "environmental": [],
+      "targets": {
+        "05": true,
+        "06": true
+      },
+      "identity_sets_equal": true,
+      "counts": {
+        "PASS": 258,
+        "FAIL": 6,
+        "ERROR": 0
+      },
+      "assertion_counts": {
+        "PASS": 628,
+        "FAIL": 11,
+        "ERROR": 0
+      },
+      "restored_sha256": "515a2d10b178cd73a1eef44c5414da06b04e977f8fe399e240ef9490f0f09ad9"
+    },
+    {
+      "knife": "K-C2A-06",
+      "mutation": "reverse per-round tool event key order",
+      "status": "RED",
+      "returncode": 1,
+      "behavioural": true,
+      "environmental": [],
+      "targets": {
+        "01": true
+      },
+      "identity_sets_equal": true,
+      "counts": {
+        "PASS": 256,
+        "FAIL": 8,
+        "ERROR": 0
+      },
+      "assertion_counts": {
+        "PASS": 631,
+        "FAIL": 8,
+        "ERROR": 0
+      },
+      "restored_sha256": "515a2d10b178cd73a1eef44c5414da06b04e977f8fe399e240ef9490f0f09ad9"
+    }
+  ],
+  "restored_returncode": 0,
+  "restored_identity_sets_equal": true,
+  "arm_identities_sha256": "18e3c6e69051c899fb702c7659b903c8320e8d5f882695909a570526bdf0517a",
+  "assertion_identities_sha256": "e3a68616bc8116372491baee4d7651adc407e45cb0546829d6f835f3ce8c887e",
+  "status": "PASS"
+}

@@ -1,11 +1,11 @@
 {
   "ticket": "KIWI-SEC-01a",
-  "head": "a983c8d82633b2b181402ee19747b940cbd2adb2",
+  "head": "a00c189443cc9917e90cef07281fd211055437b7",
   "source_blobs": {
     "anthropic_adapter.py": "eb38853bc1830f9d67e71d381ed6f215d2f5a5a9",
     "config.py": "529b494a1c402a9ba8efb02d8ac8df8245f6bdbb",
     "dream.py": "8c890788c15c46de65f246ca9a7db455a7288802",
-    "main.py": "855a75c50b54f82e3ee28658a57c7c4c6c0e8626",
+    "main.py": "f338228c9da1cb4ab8931299d968eea634fcff8a",
     "scripts/kiwi_sec_01a_knives.py": "e1a9f46606fca7de31b5f6e380a63a9a574a2ff0",
     "scripts/test_kiwi_sec_01a.py": "cb889b988cd6b2ed09060b73265b8e042eb2c3c5",
     "security.py": "b398ee6bd03e7c3d00ddd893dd3aaac2ed763dd8"
@@ -108,7 +108,7 @@
       "knife": "K-SEC-16",
       "test": "test_post_start_exception_and_embedded_error_frame",
       "result": "RED",
-      "reason": "AssertionError: 'timeout' not found in 'data: {\"ev_session\": {\"id\": \"fixture\", \"generated\": true}}\\n\\ndata: {\"choices\":[]}\\n\\ndata: {\"choices\":[{\"delta\":{\"content\":\"failed\"}}]}\\n\\ndata: [DONE]\\n\\n'"
+      "reason": "AssertionError: 'timeout' not found in 'data: {\"ev_session\": {\"id\": \"fixture\", \"generated\": true}, \"choices\": []}\\n\\ndata: {\"choices\":[]}\\n\\ndata: {\"choices\":[{\"delta\":{\"content\":\"failed\"}}]}\\n\\ndata: [DONE]\\n\\n'"
     },
     {
       "knife": "K-SEC-17",
