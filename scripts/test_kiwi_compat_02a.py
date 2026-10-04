@@ -674,12 +674,14 @@ class CompatGuards(unittest.IsolatedAsyncioTestCase):
                     self.equal(ident, 'canonical-upstream-bytes', raw, upstream_sse(s).encode())
                 self.equal(ident, 'adapter-baseline-bytes', sha(raw), GOLDEN[ident]['full_sha256'])
                 reasons = [c.get('finish_reason') for e in decoded(raw) if isinstance(e, dict)
-                           for c in e.get('choices', []) if c.get('finish_reason')]
+                           for c in (e.get('choices') if isinstance(e.get('choices'), list) else [])
+                           if c.get('finish_reason')]
                 self.equal(ident, 'finish-preserved', reasons, [finish])
         for s in SPECS:
             if s['path'] == 'T':
                 reasons = [c.get('finish_reason') for e in decoded(CAPTURES[s['id']]['raw']) if isinstance(e, dict)
-                           for c in e.get('choices', []) if c.get('finish_reason')]
+                           for c in (e.get('choices') if isinstance(e.get('choices'), list) else [])
+                           if c.get('finish_reason')]
                 self.equal(s['id'], 'existing-tool-finish-stop', reasons, ['stop'])
 
     def test_T_C2A_06_golden(self):
