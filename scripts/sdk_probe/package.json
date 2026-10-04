@@ -1,0 +1,9 @@
+{
+  "name": "kiwi-compat-02a-sdk-probe",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "oc62": "npm:@ai-sdk/openai-compatible@2.0.62",
+    "oc72": "npm:@ai-sdk/openai-compatible@2.0.72"
+  }
+}
