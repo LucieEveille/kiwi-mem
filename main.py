@@ -3149,11 +3149,11 @@ async def _stream_with_tools(messages, tools, tool_map, model, temperature, tool
 
     # 先发送衔接提示（如果有无缝切窗）
     if prompt_meta and prompt_meta.get("handoff"):
-        yield f"data: {json.dumps({'ev_handoff': prompt_meta['handoff']}, ensure_ascii=False)}\n\n"
+        yield f"data: {json.dumps({'ev_handoff': prompt_meta['handoff'], 'choices': []}, ensure_ascii=False)}\n\n"
 
     # 先发送已有的 tool_events（比如强制搜索结果）
     for evt in (tool_events or []):
-        yield f"data: {json.dumps({'ev_tool': evt}, ensure_ascii=False)}\n\n"
+        yield f"data: {json.dumps({'ev_tool': evt, 'choices': []}, ensure_ascii=False)}\n\n"
 
     if _is_anthropic_fmt:
         headers = to_anthropic_headers(_api_key)
@@ -3318,11 +3318,11 @@ async def _stream_with_tools(messages, tools, tool_map, model, temperature, tool
                     print(f"⚠️ 收尾记忆 task 出错（不影响流收尾）: {e}")
                     mem_result = None
                 if _should_push_memory_event(mem_result):
-                    yield f"data: {json.dumps({'ev_memory': mem_result}, ensure_ascii=False)}\n\n"
+                    yield f"data: {json.dumps({'ev_memory': mem_result, 'choices': []}, ensure_ascii=False)}\n\n"
             # Dream 事件必须在 [DONE] 之前
             if dream_triggered:
                 print(f"🌙 检测到 Dream 标记，通知前端启动 Dream（后端已排兜底）...")
-                yield f"data: {json.dumps({'ev_dream': {'triggered': True}}, ensure_ascii=False)}\n\n"
+                yield f"data: {json.dumps({'ev_dream': {'triggered': True}, 'choices': []}, ensure_ascii=False)}\n\n"
             # [DONE] 作为流的最后一个事件
             yield "data: [DONE]\n\n"
             return
@@ -3500,7 +3500,7 @@ async def _stream_with_tools(messages, tools, tool_map, model, temperature, tool
             sr = tool_extras.get(p["id"], {})
             if sr:
                 evt.update(sr)
-            yield f"data: {json.dumps({'ev_tool': evt}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'ev_tool': evt, 'choices': []}, ensure_ascii=False)}\n\n"
 
             current_messages.append({
                 "role": "tool",
@@ -3517,7 +3517,7 @@ async def _simulate_stream(text: str, model: str, tool_events: list = None):
     """将完整文本模拟为 SSE 流式输出（tool call 完成后使用）"""
     # 先发送工具事件
     for evt in (tool_events or []):
-        yield f"data: {json.dumps({'ev_tool': evt}, ensure_ascii=False)}\n\n"
+        yield f"data: {json.dumps({'ev_tool': evt, 'choices': []}, ensure_ascii=False)}\n\n"
     
     chunk_size = 20
     for i in range(0, len(text), chunk_size):
@@ -3690,7 +3690,7 @@ def _ev_session_frame(session_id: str) -> bytes:
     语义＝「重试时继续使用的会话身份」，不表示模型调用成功：响应头先于生成器发出，
     上游失败时收不回，语义上也不该收回。
     """
-    payload = json.dumps({"ev_session": {"id": session_id, "generated": True}}, ensure_ascii=False)
+    payload = json.dumps({"ev_session": {"id": session_id, "generated": True}, "choices": []}, ensure_ascii=False)
     return f"data: {payload}\n\n".encode("utf-8")
 
 
@@ -3719,11 +3719,11 @@ async def stream_and_capture(headers: dict, body: dict, session_id: str, user_me
 
     # 先发送衔接提示（如果有无缝切窗）
     if prompt_meta and prompt_meta.get("handoff"):
-        yield f"data: {json.dumps({'ev_handoff': prompt_meta['handoff']}, ensure_ascii=False)}\n\n".encode("utf-8")
+        yield f"data: {json.dumps({'ev_handoff': prompt_meta['handoff'], 'choices': []}, ensure_ascii=False)}\n\n".encode("utf-8")
 
     # 先发送工具事件
     for evt in (tool_events or []):
-        yield f"data: {json.dumps({'ev_tool': evt}, ensure_ascii=False)}\n\n".encode("utf-8")
+        yield f"data: {json.dumps({'ev_tool': evt, 'choices': []}, ensure_ascii=False)}\n\n".encode("utf-8")
 
     full_response = []
     _logged_first_delta = False
@@ -3878,12 +3878,12 @@ async def stream_and_capture(headers: dict, body: dict, session_id: str, user_me
             print(f"⚠️ 收尾记忆 task 出错（不影响流收尾）: {e}")
             mem_result = None
         if _should_push_memory_event(mem_result):
-            yield f"data: {json.dumps({'ev_memory': mem_result}, ensure_ascii=False)}\n\n".encode("utf-8")
+            yield f"data: {json.dumps({'ev_memory': mem_result, 'choices': []}, ensure_ascii=False)}\n\n".encode("utf-8")
 
     # Dream 触发：在 [DONE] 之前推送，前端据此启动 Dream 并展示进度（既有"陪看"体验不动）
     if dream_triggered:
         print(f"🌙 检测到 Dream 标记，通知前端启动 Dream（后端已排兜底）...")
-        yield f"data: {json.dumps({'ev_dream': {'triggered': True}}, ensure_ascii=False)}\n\n".encode("utf-8")
+        yield f"data: {json.dumps({'ev_dream': {'triggered': True}, 'choices': []}, ensure_ascii=False)}\n\n".encode("utf-8")
 
     # [DONE] 作为流的最后一个事件（上游/适配器的 [DONE] 已在上面被抑制）
     yield b"data: [DONE]\n\n"
