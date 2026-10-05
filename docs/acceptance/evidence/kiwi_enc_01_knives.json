@@ -1,0 +1,140 @@
+{
+  "ticket": "ENC-01",
+  "head": "efd1d7de31f14318e0924335f10d71e990027f25",
+  "source_blobs": {
+    "main.py": "23c3f7dc8b53ebb566c2fd57b7288fba2a378851",
+    "security.py": "b398ee6bd03e7c3d00ddd893dd3aaac2ed763dd8",
+    "anthropic_adapter.py": "9971f885a2cecbd6a1040b3cc371d8a6d85d14a7",
+    "scripts/test_kiwi_out_01.py": "d90caa7b47894069f39ada85729117e0c25fe05a",
+    "scripts/test_kiwi_think_02.py": "d77541f579130f54de774d1ccb5e5c68e80264d2",
+    "scripts/test_kiwi_enc_01.py": "c901a43b7ab2238a2cc01e079a4b1f2f9ea44501",
+    "scripts/kiwi_enc_01_knives.py": "1859ff5a2313b0e79a4fc1aa6d95146b1aa8572d",
+    ".github/workflows/ci.yml": "79f30823eadd6304234af541044bd36ec332de8c"
+  },
+  "preflight_returncode": 0,
+  "expected_arm_count": 67,
+  "expected_assertion_count": 412,
+  "preflight_counts": {
+    "PASS": 67,
+    "FAIL": 0,
+    "ERROR": 0
+  },
+  "results": [
+    {
+      "knife": "K-ENC-01",
+      "mutation": "revert OpenAI chunk decoding",
+      "status": "RED",
+      "returncode": 1,
+      "behavioural": true,
+      "environmental": [],
+      "targets": {
+        "01/P-O/": true,
+        "04/P-O": true
+      },
+      "identity_sets_equal": true,
+      "counts": {
+        "PASS": 58,
+        "FAIL": 9,
+        "ERROR": 0
+      },
+      "assertion_counts": {
+        "PASS": 394,
+        "FAIL": 18,
+        "ERROR": 0
+      },
+      "restored_sha256": {
+        "main.py": "57e24f7453470185973e46e22958d60442c02708a17e7def8f3a5f2b97c4ae35"
+      }
+    },
+    {
+      "knife": "K-ENC-02",
+      "mutation": "revert Anthropic chunk decoding",
+      "status": "RED",
+      "returncode": 1,
+      "behavioural": true,
+      "environmental": [],
+      "targets": {
+        "02/A-direct/": true,
+        "03/P-A/": true,
+        "04/A-direct": true,
+        "04/P-A": true
+      },
+      "identity_sets_equal": true,
+      "counts": {
+        "PASS": 49,
+        "FAIL": 18,
+        "ERROR": 0
+      },
+      "assertion_counts": {
+        "PASS": 385,
+        "FAIL": 27,
+        "ERROR": 0
+      },
+      "restored_sha256": {
+        "anthropic_adapter.py": "6443665e232321ce8bad9f0e4c5db03fed2e547d20d7e3dede58c8e98abf0cdb"
+      }
+    },
+    {
+      "knife": "K-ENC-03",
+      "mutation": "module-shared incremental decoders",
+      "status": "RED",
+      "returncode": 1,
+      "behavioural": true,
+      "environmental": [],
+      "targets": {
+        "07/P-O/A": true,
+        "07/P-O/B": true,
+        "07/A-direct/A": true,
+        "07/A-direct/B": true
+      },
+      "identity_sets_equal": true,
+      "counts": {
+        "PASS": 63,
+        "FAIL": 4,
+        "ERROR": 0
+      },
+      "assertion_counts": {
+        "PASS": 408,
+        "FAIL": 4,
+        "ERROR": 0
+      },
+      "restored_sha256": {
+        "main.py": "57e24f7453470185973e46e22958d60442c02708a17e7def8f3a5f2b97c4ae35",
+        "anthropic_adapter.py": "6443665e232321ce8bad9f0e4c5db03fed2e547d20d7e3dede58c8e98abf0cdb"
+      }
+    },
+    {
+      "knife": "K-ENC-04",
+      "mutation": "strict instead of ignore",
+      "status": "RED",
+      "returncode": 1,
+      "behavioural": true,
+      "environmental": [],
+      "targets": {
+        "06/P-O/invalid-byte": true,
+        "06/A-direct/invalid-byte": true,
+        "06/P-A/invalid-byte": true
+      },
+      "identity_sets_equal": true,
+      "counts": {
+        "PASS": 61,
+        "FAIL": 6,
+        "ERROR": 0
+      },
+      "assertion_counts": {
+        "PASS": 398,
+        "FAIL": 14,
+        "ERROR": 0
+      },
+      "restored_sha256": {
+        "main.py": "57e24f7453470185973e46e22958d60442c02708a17e7def8f3a5f2b97c4ae35",
+        "anthropic_adapter.py": "6443665e232321ce8bad9f0e4c5db03fed2e547d20d7e3dede58c8e98abf0cdb"
+      }
+    }
+  ],
+  "restored_returncode": 0,
+  "restored_identity_sets_equal": true,
+  "arm_identities_sha256": "f2c3498fc01638775d8109247af32c3eb5bd1f6e12784fd62328ac9216a4c126",
+  "assertion_identities_sha256": "81edcb52f2010cbb683c1fb2414c39e508b028b7d5b9502c3457fd5fe4703ff5",
+  "status": "PASS"
+}
