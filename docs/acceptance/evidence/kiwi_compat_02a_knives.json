@@ -1,15 +1,15 @@
 {
   "ticket": "COMPAT-02-A",
-  "head": "a00c189443cc9917e90cef07281fd211055437b7",
+  "head": "efd1d7de31f14318e0924335f10d71e990027f25",
   "source_blobs": {
-    "main.py": "f338228c9da1cb4ab8931299d968eea634fcff8a",
+    "main.py": "23c3f7dc8b53ebb566c2fd57b7288fba2a378851",
     "security.py": "b398ee6bd03e7c3d00ddd893dd3aaac2ed763dd8",
-    "anthropic_adapter.py": "eb38853bc1830f9d67e71d381ed6f215d2f5a5a9",
+    "anthropic_adapter.py": "9971f885a2cecbd6a1040b3cc371d8a6d85d14a7",
     "scripts/test_kiwi_out_01.py": "d90caa7b47894069f39ada85729117e0c25fe05a",
     "scripts/test_kiwi_think_02.py": "d77541f579130f54de774d1ccb5e5c68e80264d2",
     "scripts/test_kiwi_compat_02a.py": "8e5c39f94c5eeacd35b9329a487b32662542ec76",
     "scripts/kiwi_compat_02a_knives.py": "cc2ab44f4a8d946878f0ecd0bb91d31e4a3eba83",
-    ".github/workflows/ci.yml": "12e981293a96443f519e61aeb4b9a66dc79a385c"
+    ".github/workflows/ci.yml": "79f30823eadd6304234af541044bd36ec332de8c"
   },
   "preflight_returncode": 0,
   "expected_arm_count": 264,
@@ -43,7 +43,7 @@
         "FAIL": 10,
         "ERROR": 0
       },
-      "restored_sha256": "515a2d10b178cd73a1eef44c5414da06b04e977f8fe399e240ef9490f0f09ad9"
+      "restored_sha256": "57e24f7453470185973e46e22958d60442c02708a17e7def8f3a5f2b97c4ae35"
     },
     {
       "knife": "K-C2A-02",
@@ -68,7 +68,7 @@
         "FAIL": 10,
         "ERROR": 0
       },
-      "restored_sha256": "515a2d10b178cd73a1eef44c5414da06b04e977f8fe399e240ef9490f0f09ad9"
+      "restored_sha256": "57e24f7453470185973e46e22958d60442c02708a17e7def8f3a5f2b97c4ae35"
     },
     {
       "knife": "K-C2A-03",
@@ -93,7 +93,7 @@
         "FAIL": 34,
         "ERROR": 0
       },
-      "restored_sha256": "515a2d10b178cd73a1eef44c5414da06b04e977f8fe399e240ef9490f0f09ad9"
+      "restored_sha256": "57e24f7453470185973e46e22958d60442c02708a17e7def8f3a5f2b97c4ae35"
     },
     {
       "knife": "K-C2A-04",
@@ -140,7 +140,7 @@
         "FAIL": 11,
         "ERROR": 0
       },
-      "restored_sha256": "515a2d10b178cd73a1eef44c5414da06b04e977f8fe399e240ef9490f0f09ad9"
+      "restored_sha256": "57e24f7453470185973e46e22958d60442c02708a17e7def8f3a5f2b97c4ae35"
     },
     {
       "knife": "K-C2A-06",
@@ -163,7 +163,7 @@
         "FAIL": 8,
         "ERROR": 0
       },
-      "restored_sha256": "515a2d10b178cd73a1eef44c5414da06b04e977f8fe399e240ef9490f0f09ad9"
+      "restored_sha256": "57e24f7453470185973e46e22958d60442c02708a17e7def8f3a5f2b97c4ae35"
     }
   ],
   "restored_returncode": 0,

@@ -14,6 +14,7 @@ Kiwi-Mem — 带记忆系统的 LLM 转发网关
 
 import os
 import json
+import codecs
 import hashlib
 import uuid
 import asyncio
@@ -3804,6 +3805,7 @@ async def stream_and_capture(headers: dict, body: dict, session_id: str, user_me
         else:
             # OpenAI 格式：直接转发
             buffer = ""
+            decoder = codecs.getincrementaldecoder("utf-8")(errors="ignore")
             stream_headers = {
                 key: value
                 for key, value in (headers or {}).items()
@@ -3821,7 +3823,7 @@ async def stream_and_capture(headers: dict, body: dict, session_id: str, user_me
                     # 按 SSE 事件（\n\n）缓冲转发，并抑制上游 [DONE]——由本函数末尾统一发，保证它是流的最后一个事件。
                     # 以「整事件」为单位转发（而非裸字节），既能干净拦掉 [DONE]，又不破坏事件分帧。
                     async for chunk in response.aiter_bytes(chunk_size=256):
-                        buffer += chunk.decode("utf-8", errors="ignore").replace("\r\n", "\n")
+                        buffer += decoder.decode(chunk).replace("\r\n", "\n")
                         while "\n\n" in buffer:
                             event, buffer = buffer.split("\n\n", 1)
                             event = event.strip()
@@ -3845,6 +3847,7 @@ async def stream_and_capture(headers: dict, body: dict, session_id: str, user_me
                                     _logged_first_delta = True
 
                             yield (event + "\n\n").encode("utf-8")
+                    buffer += decoder.decode(b"", final=True).replace("\r\n", "\n")
                     _tail = buffer.strip()
                     if _tail and _tail != "data: [DONE]":
                         require_sse_event(_tail)

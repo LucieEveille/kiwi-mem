@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased — 2.0.0 integration / KIWI-ENC-01
+
+- 流式转发改用增量 UTF-8 解码，跨 256 字节读块边界的多字节字符不再丢失（OpenAI 普通转发与 Anthropic 适配器两处）；非法字节仍忽略。
+- Streaming forwarding now uses incremental UTF-8 decoding in ordinary OpenAI forwarding and the Anthropic adapter, preserving multibyte characters split across 256-byte read boundaries; invalid bytes are still ignored.
+
 ## Unreleased — 2.0.0 integration / KIWI-COMPAT-02-A
 
 - 五种私有事件帧统一追加空 `choices: []`，保留事件语义与顺序，使严格的 OpenAI chunk 解析器不再报错；私有帧居首时 AI SDK 系响应元数据为空的边界见 [客户端兼容性](docs/client-compatibility.md)。

@@ -13,6 +13,7 @@ Anthropic format: POST /v1/messages
 """
 
 import json
+import codecs
 import re
 import uuid
 from typing import AsyncGenerator
@@ -369,6 +370,7 @@ async def anthropic_stream_to_openai(response, model: str = "") -> AsyncGenerato
     _bytes = 0
 
     # 迭代异常只发稳定错误帧和结束标记，诊断不进入助手正文。
+    decoder = codecs.getincrementaldecoder("utf-8")(errors="ignore")
     chunk_iter = response.aiter_bytes(chunk_size=256)
     while True:
         try:
@@ -382,7 +384,7 @@ async def anthropic_stream_to_openai(response, model: str = "") -> AsyncGenerato
                 yield b"data: [DONE]\n\n"
             return
         _bytes += len(chunk)
-        buffer += chunk.decode("utf-8", errors="ignore")
+        buffer += decoder.decode(chunk)
 
         while "\n" in buffer:
             line, buffer = buffer.split("\n", 1)
@@ -497,6 +499,7 @@ async def anthropic_stream_to_openai(response, model: str = "") -> AsyncGenerato
                 yield b"data: [DONE]\n\n"
                 return
 
+    buffer += decoder.decode(b"", final=True)
     # 兜底：上游正常结束或被截断却没发 message_stop / error 时，补一个 [DONE] 收尾，
     # 否则下游（OpenAI SSE 消费方）会一直等不到结束标记。
     if not done_sent:
