@@ -9,6 +9,9 @@
 
 ## 一、设计取舍（不视为 bug）
 
+- **COMPAT-02-A：既有收尾与错误帧边界。** 工具循环收尾固定 `finish_reason: stop`，对外 `usage` 只计最后一轮，留待 2.0.x；错误帧的 `error` 为字符串，AI SDK 系以 schema 错误呈现，ERR-01 合同冻结，`error_code` 为判据。
+- **私有帧居首时 AI SDK 响应元数据为空且不回填。** `response-metadata` 的 `id / model / created` 为空，正文与结束不受影响；`ev_session` 居首是身份合同、私有帧恰两键是本票合同，两者都不为此改（露露 2026-10-04 裁）。
+
 - **ADAPT-01：其它 OpenAI 字段仍不透传。** `presence_penalty` / `frequency_penalty` / `seed` / `response_format` / `logit_bias` / `n` / `user` 在 Anthropic 出站与工具循环仍会丢弃，留待 ADAPT-01。OUT-01 仅处理显式输出上限与 `stop`，具体上游模型的支持范围仍须按其协议确认。
 - **纯 `.env` 部署只支持 OpenAI 格式。** Anthropic 原生必须经管理面板配置供应商
   （README 已说明）。因此以下「硬编码 OpenAI / Bearer」是符合该约束的，不修：

@@ -171,6 +171,23 @@ jobs:
         if: ${{ !cancelled() && steps.prep-dependencies.outcome == 'success' }}
         run: python scripts/kiwi_out_01_knives.py --output /tmp/kiwi_out_01_knives.json
 
+      - name: COMPAT-02-A 私有帧守卫与真实流捕获
+        if: ${{ !cancelled() && steps.prep-dependencies.outcome == 'success' }}
+        env:
+          KIWI_COMPAT_02A_REPORT: /tmp/kiwi_compat_02a_guards.json
+          KIWI_COMPAT_02A_CAPTURE_DIR: /tmp/kiwi_compat_02a_streams
+        run: python scripts/test_kiwi_compat_02a.py
+
+      - name: COMPAT-02-A pinned SDK 消费端回放
+        if: ${{ !cancelled() }}
+        run: |
+          npm ci --prefix scripts/sdk_probe --ignore-scripts --no-audit --no-fund
+          node scripts/sdk_probe/probe.mjs /tmp/kiwi_compat_02a_streams --output /tmp/kiwi_compat_02a_sdk.json
+
+      - name: COMPAT-02-A Python 变异证据（全绿前置）
+        if: ${{ !cancelled() && steps.prep-dependencies.outcome == 'success' }}
+        run: python scripts/kiwi_compat_02a_knives.py --output /tmp/kiwi_compat_02a_knives.json
+
       - name: 保存 BUILD 验证证据
         if: always()
         uses: actions/upload-artifact@v4
@@ -194,3 +211,8 @@ jobs:
             /tmp/kiwi_out_01_guards.json
             /tmp/kiwi_out_01_knives.json
             /tmp/kiwi_out_01_knives-runs/
+            /tmp/kiwi_compat_02a_guards.json
+            /tmp/kiwi_compat_02a_sdk.json
+            /tmp/kiwi_compat_02a_knives.json
+            /tmp/kiwi_compat_02a_streams/
+            /tmp/kiwi_compat_02a_knives-runs/

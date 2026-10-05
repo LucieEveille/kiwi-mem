@@ -1,0 +1,567 @@
+{
+  "scope": "Historical six synthetic scenarios x three captured dependency environments; diagnostic only, not the acceptance matrix or full client runtime.",
+  "source_sha256": "c31ea9204ac3f9ad26942bb3fe0e82315c003ccc4cb07d199d747f71cb36a43d",
+  "sanitization": "Removed errorMessage because schema errors contain rejected frame values; retained error type and finish reason.",
+  "environments": {
+    "sdk-lock-chatbox": {
+      "provider": "2.0.62",
+      "provider_utils": "4.0.40",
+      "zod": "4.3.6",
+      "notes": "Chatbox fetch wrapper snapshot"
+    },
+    "sdk-lock-cherry434": {
+      "provider": "2.0.72",
+      "provider_utils": "4.0.50",
+      "zod": "4.3.4",
+      "notes": "Dependency override and patched distribution snapshot"
+    },
+    "sdk-lock-cherry443": {
+      "provider": "2.0.72",
+      "provider_utils": "4.0.50",
+      "zod": "4.4.3",
+      "notes": "Dependency override and patched distribution snapshot"
+    }
+  },
+  "rows": [
+    {
+      "pkg": "sdk-lock-chatbox",
+      "name": "baseline",
+      "parts": [
+        {
+          "type": "stream-start"
+        },
+        {
+          "type": "response-metadata"
+        },
+        {
+          "type": "text-start"
+        },
+        {
+          "type": "text-delta"
+        },
+        {
+          "type": "text-end"
+        },
+        {
+          "type": "finish",
+          "finishReason": {
+            "unified": "stop",
+            "raw": "stop"
+          }
+        }
+      ]
+    },
+    {
+      "pkg": "sdk-lock-chatbox",
+      "name": "ev_memory",
+      "parts": [
+        {
+          "type": "stream-start"
+        },
+        {
+          "type": "response-metadata"
+        },
+        {
+          "type": "text-start"
+        },
+        {
+          "type": "text-delta"
+        },
+        {
+          "type": "error",
+          "errorName": "AI_TypeValidationError"
+        },
+        {
+          "type": "text-end"
+        },
+        {
+          "type": "finish",
+          "finishReason": {
+            "unified": "error"
+          }
+        }
+      ]
+    },
+    {
+      "pkg": "sdk-lock-chatbox",
+      "name": "ev_memory_empty_choices",
+      "parts": [
+        {
+          "type": "stream-start"
+        },
+        {
+          "type": "response-metadata"
+        },
+        {
+          "type": "text-start"
+        },
+        {
+          "type": "text-delta"
+        },
+        {
+          "type": "text-end"
+        },
+        {
+          "type": "finish",
+          "finishReason": {
+            "unified": "stop",
+            "raw": "stop"
+          }
+        }
+      ]
+    },
+    {
+      "pkg": "sdk-lock-chatbox",
+      "name": "ev_session",
+      "parts": [
+        {
+          "type": "stream-start"
+        },
+        {
+          "type": "error",
+          "errorName": "AI_TypeValidationError"
+        },
+        {
+          "type": "response-metadata"
+        },
+        {
+          "type": "text-start"
+        },
+        {
+          "type": "text-delta"
+        },
+        {
+          "type": "text-end"
+        },
+        {
+          "type": "finish",
+          "finishReason": {
+            "unified": "stop",
+            "raw": "stop"
+          }
+        }
+      ]
+    },
+    {
+      "pkg": "sdk-lock-chatbox",
+      "name": "error_string",
+      "parts": [
+        {
+          "type": "stream-start"
+        },
+        {
+          "type": "response-metadata"
+        },
+        {
+          "type": "text-start"
+        },
+        {
+          "type": "text-delta"
+        },
+        {
+          "type": "error",
+          "errorName": "AI_TypeValidationError"
+        },
+        {
+          "type": "text-end"
+        },
+        {
+          "type": "finish",
+          "finishReason": {
+            "unified": "error"
+          }
+        }
+      ]
+    },
+    {
+      "pkg": "sdk-lock-chatbox",
+      "name": "error_object",
+      "parts": [
+        {
+          "type": "stream-start"
+        },
+        {
+          "type": "response-metadata"
+        },
+        {
+          "type": "text-start"
+        },
+        {
+          "type": "text-delta"
+        },
+        {
+          "type": "error"
+        },
+        {
+          "type": "text-end"
+        },
+        {
+          "type": "finish",
+          "finishReason": {
+            "unified": "error"
+          }
+        }
+      ]
+    },
+    {
+      "pkg": "sdk-lock-cherry434",
+      "name": "baseline",
+      "parts": [
+        {
+          "type": "stream-start"
+        },
+        {
+          "type": "response-metadata"
+        },
+        {
+          "type": "text-start"
+        },
+        {
+          "type": "text-delta"
+        },
+        {
+          "type": "text-end"
+        },
+        {
+          "type": "finish",
+          "finishReason": {
+            "unified": "stop",
+            "raw": "stop"
+          }
+        }
+      ]
+    },
+    {
+      "pkg": "sdk-lock-cherry434",
+      "name": "ev_memory",
+      "parts": [
+        {
+          "type": "stream-start"
+        },
+        {
+          "type": "response-metadata"
+        },
+        {
+          "type": "text-start"
+        },
+        {
+          "type": "text-delta"
+        },
+        {
+          "type": "error",
+          "errorName": "AI_TypeValidationError"
+        },
+        {
+          "type": "text-end"
+        },
+        {
+          "type": "finish",
+          "finishReason": {
+            "unified": "error"
+          }
+        }
+      ]
+    },
+    {
+      "pkg": "sdk-lock-cherry434",
+      "name": "ev_memory_empty_choices",
+      "parts": [
+        {
+          "type": "stream-start"
+        },
+        {
+          "type": "response-metadata"
+        },
+        {
+          "type": "text-start"
+        },
+        {
+          "type": "text-delta"
+        },
+        {
+          "type": "text-end"
+        },
+        {
+          "type": "finish",
+          "finishReason": {
+            "unified": "stop",
+            "raw": "stop"
+          }
+        }
+      ]
+    },
+    {
+      "pkg": "sdk-lock-cherry434",
+      "name": "ev_session",
+      "parts": [
+        {
+          "type": "stream-start"
+        },
+        {
+          "type": "error",
+          "errorName": "AI_TypeValidationError"
+        },
+        {
+          "type": "response-metadata"
+        },
+        {
+          "type": "text-start"
+        },
+        {
+          "type": "text-delta"
+        },
+        {
+          "type": "text-end"
+        },
+        {
+          "type": "finish",
+          "finishReason": {
+            "unified": "stop",
+            "raw": "stop"
+          }
+        }
+      ]
+    },
+    {
+      "pkg": "sdk-lock-cherry434",
+      "name": "error_string",
+      "parts": [
+        {
+          "type": "stream-start"
+        },
+        {
+          "type": "response-metadata"
+        },
+        {
+          "type": "text-start"
+        },
+        {
+          "type": "text-delta"
+        },
+        {
+          "type": "error",
+          "errorName": "AI_TypeValidationError"
+        },
+        {
+          "type": "text-end"
+        },
+        {
+          "type": "finish",
+          "finishReason": {
+            "unified": "error"
+          }
+        }
+      ]
+    },
+    {
+      "pkg": "sdk-lock-cherry434",
+      "name": "error_object",
+      "parts": [
+        {
+          "type": "stream-start"
+        },
+        {
+          "type": "response-metadata"
+        },
+        {
+          "type": "text-start"
+        },
+        {
+          "type": "text-delta"
+        },
+        {
+          "type": "error"
+        },
+        {
+          "type": "text-end"
+        },
+        {
+          "type": "finish",
+          "finishReason": {
+            "unified": "error"
+          }
+        }
+      ]
+    },
+    {
+      "pkg": "sdk-lock-cherry443",
+      "name": "baseline",
+      "parts": [
+        {
+          "type": "stream-start"
+        },
+        {
+          "type": "response-metadata"
+        },
+        {
+          "type": "text-start"
+        },
+        {
+          "type": "text-delta"
+        },
+        {
+          "type": "text-end"
+        },
+        {
+          "type": "finish",
+          "finishReason": {
+            "unified": "stop",
+            "raw": "stop"
+          }
+        }
+      ]
+    },
+    {
+      "pkg": "sdk-lock-cherry443",
+      "name": "ev_memory",
+      "parts": [
+        {
+          "type": "stream-start"
+        },
+        {
+          "type": "response-metadata"
+        },
+        {
+          "type": "text-start"
+        },
+        {
+          "type": "text-delta"
+        },
+        {
+          "type": "error",
+          "errorName": "AI_TypeValidationError"
+        },
+        {
+          "type": "text-end"
+        },
+        {
+          "type": "finish",
+          "finishReason": {
+            "unified": "error"
+          }
+        }
+      ]
+    },
+    {
+      "pkg": "sdk-lock-cherry443",
+      "name": "ev_memory_empty_choices",
+      "parts": [
+        {
+          "type": "stream-start"
+        },
+        {
+          "type": "response-metadata"
+        },
+        {
+          "type": "text-start"
+        },
+        {
+          "type": "text-delta"
+        },
+        {
+          "type": "text-end"
+        },
+        {
+          "type": "finish",
+          "finishReason": {
+            "unified": "stop",
+            "raw": "stop"
+          }
+        }
+      ]
+    },
+    {
+      "pkg": "sdk-lock-cherry443",
+      "name": "ev_session",
+      "parts": [
+        {
+          "type": "stream-start"
+        },
+        {
+          "type": "error",
+          "errorName": "AI_TypeValidationError"
+        },
+        {
+          "type": "response-metadata"
+        },
+        {
+          "type": "text-start"
+        },
+        {
+          "type": "text-delta"
+        },
+        {
+          "type": "text-end"
+        },
+        {
+          "type": "finish",
+          "finishReason": {
+            "unified": "stop",
+            "raw": "stop"
+          }
+        }
+      ]
+    },
+    {
+      "pkg": "sdk-lock-cherry443",
+      "name": "error_string",
+      "parts": [
+        {
+          "type": "stream-start"
+        },
+        {
+          "type": "response-metadata"
+        },
+        {
+          "type": "text-start"
+        },
+        {
+          "type": "text-delta"
+        },
+        {
+          "type": "error",
+          "errorName": "AI_TypeValidationError"
+        },
+        {
+          "type": "text-end"
+        },
+        {
+          "type": "finish",
+          "finishReason": {
+            "unified": "error"
+          }
+        }
+      ]
+    },
+    {
+      "pkg": "sdk-lock-cherry443",
+      "name": "error_object",
+      "parts": [
+        {
+          "type": "stream-start"
+        },
+        {
+          "type": "response-metadata"
+        },
+        {
+          "type": "text-start"
+        },
+        {
+          "type": "text-delta"
+        },
+        {
+          "type": "error"
+        },
+        {
+          "type": "text-end"
+        },
+        {
+          "type": "finish",
+          "finishReason": {
+            "unified": "error"
+          }
+        }
+      ]
+    }
+  ]
+}

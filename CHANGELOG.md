@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased — 2.0.0 integration / KIWI-COMPAT-02-A
+
+- 五种私有事件帧统一追加空 `choices: []`，保留事件语义与顺序，使严格的 OpenAI chunk 解析器不再报错；私有帧居首时 AI SDK 系响应元数据为空的边界见 [客户端兼容性](docs/client-compatibility.md)。
+- All five private event types now carry empty `choices: []`, preserving event semantics and order while avoiding strict OpenAI chunk validation errors; the AI SDK response-metadata limitation when a private event comes first is documented in [client compatibility](docs/client-compatibility.md).
+
 ## Unreleased — 2.0.0 integration / KIWI-OUT-01
 
 - 显式输出上限与 stop 接入普通转发及工具循环的 OpenAI / Anthropic 出站；入口统一校验、移除 null，并存上限以 max_tokens 优先。OpenAI 保留来源键名；Anthropic 转为 max_tokens / stop_sequences，工具循环逐轮携带。详见 [客户端兼容性](docs/client-compatibility.md)。
