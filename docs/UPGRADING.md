@@ -4,6 +4,14 @@
 
 Zeabur Auto Deploy 不经过 update.sh；长期未更新的用户可能从 1.6.2 直接跳过准备版。两类用户请在升级 2.0 前自行完成下列登记。观察数据只记录是否见过远程域名与最近时间，不存地址；未观察到访问不能证明无人使用。
 
+## 会话头身份与后台任务 / Session headers and background tasks
+
+2.0 新增站点开关 `session_header_identity_enabled` 与 `task_signal_enabled`，两者默认开启，均不进入客户端设置同步。前者按 body → 三种客户端会话头 → 原回退识别会话；后者只按有效 `X-Kiwi-Task` 信号旁路记忆、落账与网关工具，保留协议参数处理。遇到兼容问题，可在管理面板「兼容与回退」分别关闭，即时恢复对应的旧行为。
+
+升级前检查任务路由：固定非空任务头只用于任务专用条目，共用条目会让正常聊天也不落账。RikkaHub 等辅助请求可能携带原会话头，稳定身份不能自动区分任务。Open WebUI 动态 TASK 模板也覆盖 MoA 合并答案；无法加头或分流的任务仍按普通聊天落账。逐家配置与限制见 [客户端兼容性](client-compatibility.md#后台任务信号--background-task-signal)。
+
+2.0 enables the site-level `session_header_identity_enabled` and `task_signal_enabled` switches by default; neither participates in client settings sync. Disable either independently under Compatibility and fallback to restore that behavior's previous path. Review task routing before upgrading: fixed nonempty task headers require dedicated entries, shared session headers do not identify tasks, and Open WebUI's dynamic TASK also marks MoA merged answers. Unmarked tasks without an alternative route remain ordinary recorded chats. See the client compatibility guide for configuration boundaries.
+
 ## 提前登记 MCP 访问地址
 
 2.0 计划只接受登记的 MCP 访问地址。本机与 IP 直连无需域名登记（IP 自动放行仍须通过 BUILD-01 对抗验证）；这里的零配置只适用于不发送 Origin 的工具客户端。浏览器类客户端仍须登记 Origin，Host 登记不代替 Origin 登记，也不代替认证。
