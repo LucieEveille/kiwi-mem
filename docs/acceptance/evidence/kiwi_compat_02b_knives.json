@@ -1,0 +1,788 @@
+{
+  "ticket": "COMPAT-02-B",
+  "base": "a1b01a4b50f27d27bd165a4b359b4497c97e303d",
+  "head": "7b42602bf600462afa20f2819960439a3dd6632e",
+  "source_blobs": {
+    "main.py": "6fd88409fc3efa7bbd5bc4783090946627f94eb5",
+    "database.py": "2e9c8589d32379cfcf803727f74329ada45d13cd",
+    "config.py": "7ecbdaaa1972ee51cb87bbbf1dc797fcb517a9d7",
+    "anthropic_adapter.py": "9971f885a2cecbd6a1040b3cc371d8a6d85d14a7",
+    "security.py": "b398ee6bd03e7c3d00ddd893dd3aaac2ed763dd8",
+    "scripts/test_kiwi_compat_02b.py": "8133fc4d5a05ea703e62845f2ac1bb483bdc3d94",
+    "scripts/kiwi_compat_02b_knives.py": "1a48c2d1452b4ebc820f92be4a220f67d49a9dee",
+    ".github/workflows/ci.yml": "ef572d5c985ff45d81e2b29699f0dbc4a218cd53"
+  },
+  "knives": [
+    {
+      "id": "K-01",
+      "file": "main.py",
+      "scope": "_request_session_identity",
+      "locator": "hdr source JoinedStr",
+      "M": [
+        "T-01/cid/hdr_shape",
+        "T-01/cid/source_segment",
+        "T-01/cross/same_value_diff_header_diff_session",
+        "T-01/owc/hdr_shape",
+        "T-01/owc/source_segment",
+        "T-01/sid/hdr_shape",
+        "T-01/sid/source_segment"
+      ],
+      "explicit_A": [],
+      "A_tags": [
+        "hdr-id"
+      ],
+      "tag_group": null,
+      "returncode": 1,
+      "behavioural": true,
+      "environmental": [],
+      "actual_FAIL": [
+        "T-01/cid/hdr_shape",
+        "T-01/cid/source_segment",
+        "T-01/cross/same_value_diff_header_diff_session",
+        "T-01/owc/hdr_shape",
+        "T-01/owc/source_segment",
+        "T-01/sid/hdr_shape",
+        "T-01/sid/source_segment",
+        "T-02/priority/cid_over_sid_owc",
+        "T-02/priority/sid_over_owc",
+        "T-03/201chars/bad_cid_falls_to_sid",
+        "T-03/blank/bad_cid_falls_to_sid",
+        "T-03/empty/bad_cid_falls_to_sid",
+        "T-03/newline/bad_cid_falls_to_sid",
+        "T-03/nul/bad_cid_falls_to_sid",
+        "T-03/repeat/dup_cid_first_valid",
+        "T-04/header/header_identity_is_hdr",
+        "T-11/row1/hdr_identity",
+        "T-11/row5/hdr_identity"
+      ],
+      "A": [
+        "T-01/cid/hdr_shape",
+        "T-01/cid/source_segment",
+        "T-01/cross/same_value_diff_header_diff_session",
+        "T-01/owc/hdr_shape",
+        "T-01/owc/source_segment",
+        "T-01/sid/hdr_shape",
+        "T-01/sid/source_segment",
+        "T-02/priority/body_wins",
+        "T-02/priority/cid_over_sid_owc",
+        "T-02/priority/sid_over_owc",
+        "T-03/201chars/bad_cid_falls_to_sid",
+        "T-03/blank/bad_cid_falls_to_sid",
+        "T-03/empty/bad_cid_falls_to_sid",
+        "T-03/newline/bad_cid_falls_to_sid",
+        "T-03/nul/bad_cid_falls_to_sid",
+        "T-03/repeat/dup_cid_first_valid",
+        "T-04/header/header_identity_is_hdr",
+        "T-11/row1/hdr_identity",
+        "T-11/row5/hdr_identity"
+      ],
+      "anchors": [
+        {
+          "line": 2128,
+          "column": 15,
+          "original": "f\"hdr-{src}-{hashlib.sha256(value.encode('utf-8')).hexdigest()[:24]}\"",
+          "replacement": "f\"hdr-{hashlib.sha256(value.encode('utf-8')).hexdigest()[:24]}\""
+        }
+      ],
+      "status": "RED",
+      "identity_sets_equal": true,
+      "missing_M": [],
+      "outside_M_A": []
+    },
+    {
+      "id": "K-02",
+      "file": "main.py",
+      "scope": "_resolve_header_identity",
+      "locator": "three-header priority literal",
+      "M": [
+        "T-02/priority/cid_over_sid_owc",
+        "T-02/priority/sid_over_owc"
+      ],
+      "explicit_A": [],
+      "A_tags": [],
+      "tag_group": null,
+      "returncode": 1,
+      "behavioural": true,
+      "environmental": [],
+      "actual_FAIL": [
+        "T-02/priority/cid_over_sid_owc",
+        "T-02/priority/sid_over_owc"
+      ],
+      "A": [],
+      "anchors": [
+        {
+          "line": 2103,
+          "column": 21,
+          "original": "(('cid', 'X-Conversation-Id'), ('sid', 'X-Session-ID'), ('owc', 'X-OpenWebUI-Chat-Id'))",
+          "replacement": "(('owc', 'X-OpenWebUI-Chat-Id'), ('sid', 'X-Session-ID'), ('cid', 'X-Conversation-Id'))"
+        }
+      ],
+      "status": "RED",
+      "identity_sets_equal": true,
+      "missing_M": [],
+      "outside_M_A": []
+    },
+    {
+      "id": "K-03a",
+      "file": "main.py",
+      "scope": "_resolve_header_identity",
+      "locator": "length upper bound 200 Compare",
+      "M": [
+        "T-03/201chars/bad_cid_falls_to_sid"
+      ],
+      "explicit_A": [],
+      "A_tags": [],
+      "tag_group": null,
+      "returncode": 1,
+      "behavioural": true,
+      "environmental": [],
+      "actual_FAIL": [
+        "T-03/201chars/bad_cid_falls_to_sid"
+      ],
+      "A": [],
+      "anchors": [
+        {
+          "line": 2108,
+          "column": 15,
+          "original": "1 <= len(value) <= 200",
+          "replacement": "1 <= len(value)"
+        }
+      ],
+      "status": "RED",
+      "identity_sets_equal": true,
+      "missing_M": [],
+      "outside_M_A": []
+    },
+    {
+      "id": "K-03b",
+      "file": "main.py",
+      "scope": "_resolve_header_identity",
+      "locator": "isprintable Call",
+      "M": [
+        "T-03/newline/bad_cid_falls_to_sid",
+        "T-03/nul/bad_cid_falls_to_sid"
+      ],
+      "explicit_A": [],
+      "A_tags": [],
+      "tag_group": null,
+      "returncode": 1,
+      "behavioural": true,
+      "environmental": [],
+      "actual_FAIL": [
+        "T-03/newline/bad_cid_falls_to_sid",
+        "T-03/nul/bad_cid_falls_to_sid"
+      ],
+      "A": [],
+      "anchors": [
+        {
+          "line": 2108,
+          "column": 42,
+          "original": "value.isprintable()",
+          "replacement": "True"
+        }
+      ],
+      "status": "RED",
+      "identity_sets_equal": true,
+      "missing_M": [],
+      "outside_M_A": []
+    },
+    {
+      "id": "K-04",
+      "file": "database.py",
+      "scope": "_resolve_scope_tx",
+      "locator": "identity_source == header Compare",
+      "M": [
+        "T-04/header/header_scope_global",
+        "T-04/header/header_zero_metadata_fetch"
+      ],
+      "explicit_A": [
+        "T-04/live/header_payload_live",
+        "T-04/unverified/header_payload_unverified"
+      ],
+      "A_tags": [
+        "hdr-id"
+      ],
+      "tag_group": "T-04",
+      "returncode": 1,
+      "behavioural": true,
+      "environmental": [],
+      "actual_FAIL": [
+        "T-04/header/header_scope_global",
+        "T-04/header/header_zero_metadata_fetch",
+        "T-04/live/header_payload_live",
+        "T-04/unverified/header_payload_unverified"
+      ],
+      "A": [
+        "T-04/header/header_identity_is_hdr",
+        "T-04/live/header_payload_live",
+        "T-04/unverified/header_payload_unverified"
+      ],
+      "anchors": [
+        {
+          "line": 1541,
+          "column": 7,
+          "original": "identity_source == 'header'",
+          "replacement": "False"
+        }
+      ],
+      "status": "RED",
+      "identity_sets_equal": true,
+      "missing_M": [],
+      "outside_M_A": []
+    },
+    {
+      "id": "K-05",
+      "file": "main.py",
+      "scope": "chat_completions",
+      "locator": "record_events = not memory_bypass Assign",
+      "M": [
+        "T-06/N/ledger_zero_rows",
+        "T-06/N/non_stream_zero_process_memories",
+        "T-06/P/ledger_zero_rows",
+        "T-06/T/ledger_zero_rows"
+      ],
+      "explicit_A": [],
+      "A_tags": [
+        "task-ledger"
+      ],
+      "tag_group": null,
+      "returncode": 1,
+      "behavioural": true,
+      "environmental": [],
+      "actual_FAIL": [
+        "T-06/N/ledger_zero_rows",
+        "T-06/N/non_stream_zero_process_memories",
+        "T-06/P/ledger_zero_rows",
+        "T-06/T/ledger_zero_rows",
+        "T-08/repeat/dup_first_valid_is_task",
+        "T-11/row2/task_bypass",
+        "T-11/row3/task_bypass"
+      ],
+      "A": [
+        "T-06/N/ledger_zero_rows",
+        "T-06/N/non_stream_zero_process_memories",
+        "T-06/P/ledger_zero_rows",
+        "T-06/T/ledger_zero_rows",
+        "T-08/repeat/dup_first_valid_is_task",
+        "T-11/row2/task_bypass",
+        "T-11/row3/task_bypass"
+      ],
+      "anchors": [
+        {
+          "line": 2392,
+          "column": 20,
+          "original": "not memory_bypass",
+          "replacement": "not skip_prompt"
+        }
+      ],
+      "status": "RED",
+      "identity_sets_equal": true,
+      "missing_M": [],
+      "outside_M_A": []
+    },
+    {
+      "id": "K-06",
+      "file": "main.py",
+      "scope": "chat_completions",
+      "locator": "task_request If, first body statement assigns openai_tools=[]",
+      "M": [
+        "T-06/N/collectors_zero_calls",
+        "T-06/P/collectors_zero_calls",
+        "T-06/T/collectors_zero_calls",
+        "T-06/traditional/collectors_zero_calls",
+        "T-07/e/task_never_enters_tool_loop"
+      ],
+      "explicit_A": [],
+      "A_tags": [
+        "tool-collect",
+        "search",
+        "private-frames"
+      ],
+      "tag_group": null,
+      "returncode": 1,
+      "behavioural": true,
+      "environmental": [],
+      "actual_FAIL": [
+        "T-06/N/collectors_zero_calls",
+        "T-06/P/collectors_zero_calls",
+        "T-06/T/collectors_zero_calls",
+        "T-06/T/tools_passthrough_only",
+        "T-06/traditional/collectors_zero_calls",
+        "T-07/e/task_never_enters_tool_loop"
+      ],
+      "A": [
+        "T-06/N/collectors_zero_calls",
+        "T-06/N/web_search_true_zero_search",
+        "T-06/P/collectors_zero_calls",
+        "T-06/P/web_search_true_zero_search",
+        "T-06/P/zero_ev_tool",
+        "T-06/P/zero_kiwi_private_frames",
+        "T-06/T/collectors_zero_calls",
+        "T-06/T/tools_passthrough_only",
+        "T-06/T/web_search_true_zero_search",
+        "T-06/T/zero_ev_tool",
+        "T-06/T/zero_kiwi_private_frames",
+        "T-06/traditional/collectors_zero_calls",
+        "T-07/e/task_never_enters_tool_loop"
+      ],
+      "anchors": [
+        {
+          "line": 2639,
+          "column": 7,
+          "original": "task_request",
+          "replacement": "False"
+        }
+      ],
+      "status": "RED",
+      "identity_sets_equal": true,
+      "missing_M": [],
+      "outside_M_A": []
+    },
+    {
+      "id": "K-07a",
+      "file": "main.py",
+      "scope": "chat_completions",
+      "locator": "nonstream task Dream IfExp",
+      "M": [
+        "T-07/a/non_stream_zero_launch"
+      ],
+      "explicit_A": [],
+      "A_tags": [],
+      "tag_group": null,
+      "returncode": 1,
+      "behavioural": true,
+      "environmental": [],
+      "actual_FAIL": [
+        "T-07/a/non_stream_zero_launch"
+      ],
+      "A": [],
+      "anchors": [
+        {
+          "line": 2956,
+          "column": 34,
+          "original": "False if task_request else detect_dream_trigger(assistant_msg)",
+          "replacement": "detect_dream_trigger(assistant_msg)"
+        }
+      ],
+      "status": "RED",
+      "identity_sets_equal": true,
+      "missing_M": [],
+      "outside_M_A": []
+    },
+    {
+      "id": "K-07b",
+      "file": "main.py",
+      "scope": "_stream_with_tools",
+      "locator": "tool task Dream IfExp",
+      "M": [
+        "T-07/c/tools_direct_zero_fallback"
+      ],
+      "explicit_A": [],
+      "A_tags": [],
+      "tag_group": null,
+      "returncode": 1,
+      "behavioural": true,
+      "environmental": [],
+      "actual_FAIL": [
+        "T-07/c/tools_direct_zero_fallback"
+      ],
+      "A": [],
+      "anchors": [
+        {
+          "line": 3305,
+          "column": 30,
+          "original": "False if task_request else detect_dream_trigger(assistant_msg)",
+          "replacement": "detect_dream_trigger(assistant_msg)"
+        }
+      ],
+      "status": "RED",
+      "identity_sets_equal": true,
+      "missing_M": [],
+      "outside_M_A": []
+    },
+    {
+      "id": "K-07c",
+      "file": "main.py",
+      "scope": "stream_and_capture._spawn_dream_fallback_if_needed",
+      "locator": "fallback task Dream IfExp",
+      "M": [
+        "T-07/d/stream_disconnect_zero_fallback"
+      ],
+      "explicit_A": [
+        "T-07/b/stream_finish_zero_fallback"
+      ],
+      "A_tags": [],
+      "tag_group": null,
+      "returncode": 1,
+      "behavioural": true,
+      "environmental": [],
+      "actual_FAIL": [
+        "T-07/b/stream_finish_zero_fallback",
+        "T-07/d/stream_disconnect_zero_fallback"
+      ],
+      "A": [
+        "T-07/b/stream_finish_zero_fallback"
+      ],
+      "anchors": [
+        {
+          "line": 3810,
+          "column": 11,
+          "original": "False if task_request else detect_dream_trigger(''.join(full_response))",
+          "replacement": "detect_dream_trigger(''.join(full_response))"
+        }
+      ],
+      "status": "RED",
+      "identity_sets_equal": true,
+      "missing_M": [],
+      "outside_M_A": []
+    },
+    {
+      "id": "K-07d",
+      "file": "main.py",
+      "scope": "stream_and_capture",
+      "locator": "normal-finish task Dream IfExp, excluding nested functions",
+      "M": [
+        "T-07/b/stream_finish_zero_ev_dream"
+      ],
+      "explicit_A": [],
+      "A_tags": [],
+      "tag_group": null,
+      "returncode": 1,
+      "behavioural": true,
+      "environmental": [],
+      "actual_FAIL": [
+        "T-07/b/stream_finish_zero_ev_dream"
+      ],
+      "A": [],
+      "anchors": [
+        {
+          "line": 3919,
+          "column": 22,
+          "original": "False if task_request else detect_dream_trigger(assistant_msg)",
+          "replacement": "detect_dream_trigger(assistant_msg)"
+        }
+      ],
+      "status": "RED",
+      "identity_sets_equal": true,
+      "missing_M": [],
+      "outside_M_A": []
+    },
+    {
+      "id": "K-08",
+      "file": "main.py",
+      "scope": "_resolve_task_signal",
+      "locator": "nonempty predicate",
+      "M": [
+        "T-08/blank/blank_is_normal",
+        "T-08/empty/empty_is_normal"
+      ],
+      "explicit_A": [],
+      "A_tags": [],
+      "tag_group": null,
+      "returncode": 1,
+      "behavioural": true,
+      "environmental": [],
+      "actual_FAIL": [
+        "T-08/blank/blank_is_normal",
+        "T-08/empty/empty_is_normal"
+      ],
+      "A": [],
+      "anchors": [
+        {
+          "line": 2117,
+          "column": 11,
+          "original": "1 <= len(value) <= 64",
+          "replacement": "len(value) <= 64"
+        }
+      ],
+      "status": "RED",
+      "identity_sets_equal": true,
+      "missing_M": [],
+      "outside_M_A": []
+    },
+    {
+      "id": "K-09",
+      "file": "main.py",
+      "scope": "chat_completions",
+      "locator": "two print Calls: task_request and session_from_header, each unique",
+      "M": [
+        "T-12/cid/logs_no_header_values",
+        "T-12/owc/logs_no_header_values",
+        "T-12/sid/logs_no_header_values",
+        "T-12/task/logs_no_header_values"
+      ],
+      "explicit_A": [],
+      "A_tags": [],
+      "tag_group": null,
+      "returncode": 1,
+      "behavioural": true,
+      "environmental": [],
+      "actual_FAIL": [
+        "T-12/cid/logs_no_header_values",
+        "T-12/owc/logs_no_header_values",
+        "T-12/sid/logs_no_header_values",
+        "T-12/task/logs_no_header_values"
+      ],
+      "A": [],
+      "anchors": [
+        {
+          "line": 2184,
+          "column": 14,
+          "original": "'event=task_request source=header increment=1'",
+          "replacement": "('event=task_request source=header increment=1') + \" value=\" + request.headers.get(\"X-Kiwi-Task\", \"\")"
+        },
+        {
+          "line": 2298,
+          "column": 18,
+          "original": "f'event=session_from_header source={header_identity[0]} increment=1'",
+          "replacement": "(f'event=session_from_header source={header_identity[0]} increment=1') + \" value=\" + next((request.headers.get(h, \"\") for h in (\"X-Conversation-Id\", \"X-Session-ID\", \"X-OpenWebUI-Chat-Id\") if request.headers.get(h)), \"\")"
+        }
+      ],
+      "status": "RED",
+      "identity_sets_equal": true,
+      "missing_M": [],
+      "outside_M_A": []
+    },
+    {
+      "id": "K-10a",
+      "file": "main.py",
+      "scope": "chat_completions",
+      "locator": "session_header_identity_enabled config Await",
+      "M": [
+        "T-11/row4/header_ignored"
+      ],
+      "explicit_A": [],
+      "A_tags": [
+        "row6"
+      ],
+      "tag_group": null,
+      "returncode": 1,
+      "behavioural": true,
+      "environmental": [],
+      "actual_FAIL": [
+        "T-11/row4/header_ignored",
+        "T-11/row6/baseline_unchanged[identity]"
+      ],
+      "A": [
+        "T-11/row6/baseline_unchanged[identity]",
+        "T-11/row6/baseline_unchanged[ledger]",
+        "T-11/row6/baseline_unchanged[task]"
+      ],
+      "anchors": [
+        {
+          "line": 2234,
+          "column": 28,
+          "original": "await get_config_bool('session_header_identity_enabled', fallback=True)",
+          "replacement": "True"
+        }
+      ],
+      "status": "RED",
+      "identity_sets_equal": true,
+      "missing_M": [],
+      "outside_M_A": []
+    },
+    {
+      "id": "K-10b",
+      "file": "main.py",
+      "scope": "chat_completions",
+      "locator": "task_signal_enabled config Await",
+      "M": [
+        "T-11/row5/hdr_identity",
+        "T-11/row5/records_normally"
+      ],
+      "explicit_A": [],
+      "A_tags": [
+        "row6"
+      ],
+      "tag_group": null,
+      "returncode": 1,
+      "behavioural": true,
+      "environmental": [],
+      "actual_FAIL": [
+        "T-11/row5/hdr_identity",
+        "T-11/row5/records_normally",
+        "T-11/row6/baseline_unchanged[identity]",
+        "T-11/row6/baseline_unchanged[ledger]",
+        "T-11/row6/baseline_unchanged[task]"
+      ],
+      "A": [
+        "T-11/row6/baseline_unchanged[identity]",
+        "T-11/row6/baseline_unchanged[ledger]",
+        "T-11/row6/baseline_unchanged[task]"
+      ],
+      "anchors": [
+        {
+          "line": 2182,
+          "column": 20,
+          "original": "await get_config_bool('task_signal_enabled', fallback=True)",
+          "replacement": "True"
+        }
+      ],
+      "status": "RED",
+      "identity_sets_equal": true,
+      "missing_M": [],
+      "outside_M_A": []
+    },
+    {
+      "id": "K-11",
+      "file": "main.py",
+      "scope": "chat_completions",
+      "locator": "record_events = not memory_bypass Assign",
+      "M": [
+        "T-10/history/single_user_with_history_records"
+      ],
+      "explicit_A": [],
+      "A_tags": [
+        "single-user-ledger"
+      ],
+      "tag_group": null,
+      "returncode": 1,
+      "behavioural": true,
+      "environmental": [],
+      "actual_FAIL": [
+        "T-00/cid/real_ledger_rows",
+        "T-00/owc/real_ledger_rows",
+        "T-00/sid/real_ledger_rows",
+        "T-08/65chars/65chars_is_normal",
+        "T-08/blank/blank_is_normal",
+        "T-08/control/control_is_normal",
+        "T-08/empty/empty_is_normal",
+        "T-10/history/single_user_with_history_records",
+        "T-11/row4/records_normally",
+        "T-11/row5/records_normally",
+        "T-11/row6/baseline_unchanged[ledger]",
+        "T-12/chat/chat_ledger_golden",
+        "T-12/frames/c2a_frames_choices[ev_memory]"
+      ],
+      "A": [
+        "T-00/cid/real_ledger_rows",
+        "T-00/owc/real_ledger_rows",
+        "T-00/sid/real_ledger_rows",
+        "T-08/65chars/65chars_is_normal",
+        "T-08/blank/blank_is_normal",
+        "T-08/control/control_is_normal",
+        "T-08/empty/empty_is_normal",
+        "T-10/history/single_user_with_history_records",
+        "T-11/row4/records_normally",
+        "T-11/row5/records_normally",
+        "T-11/row6/baseline_unchanged[ledger]",
+        "T-12/chat/chat_ledger_golden",
+        "T-12/frames/c2a_frames_choices[ev_memory]"
+      ],
+      "anchors": [
+        {
+          "line": 2392,
+          "column": 20,
+          "original": "not memory_bypass",
+          "replacement": "not memory_bypass and _count_real_user_messages(messages) > 1"
+        }
+      ],
+      "status": "RED",
+      "identity_sets_equal": true,
+      "missing_M": [],
+      "outside_M_A": []
+    },
+    {
+      "id": "K-12",
+      "file": "main.py",
+      "scope": "chat_completions",
+      "locator": "not task_request If around client system template replacement",
+      "M": [
+        "T-06/N/no_kiwi_system[client_template]",
+        "T-06/P/no_kiwi_system[client_template]",
+        "T-06/T/no_kiwi_system[client_template]"
+      ],
+      "explicit_A": [],
+      "A_tags": [],
+      "tag_group": null,
+      "returncode": 1,
+      "behavioural": true,
+      "environmental": [],
+      "actual_FAIL": [
+        "T-06/N/no_kiwi_system[client_template]",
+        "T-06/P/no_kiwi_system[client_template]",
+        "T-06/T/no_kiwi_system[client_template]"
+      ],
+      "A": [],
+      "anchors": [
+        {
+          "line": 2534,
+          "column": 7,
+          "original": "not task_request",
+          "replacement": "True"
+        }
+      ],
+      "status": "RED",
+      "identity_sets_equal": true,
+      "missing_M": [],
+      "outside_M_A": []
+    },
+    {
+      "id": "K-13",
+      "file": "main.py",
+      "scope": "chat_completions",
+      "locator": "force-search BoolOp with not task_request",
+      "M": [
+        "T-06/N/web_search_true_zero_search",
+        "T-06/P/web_search_true_zero_search",
+        "T-06/P/zero_ev_tool",
+        "T-06/T/web_search_true_zero_search",
+        "T-06/T/zero_ev_tool"
+      ],
+      "explicit_A": [],
+      "A_tags": [
+        "private-frames"
+      ],
+      "tag_group": null,
+      "returncode": 1,
+      "behavioural": true,
+      "environmental": [],
+      "actual_FAIL": [
+        "T-06/N/web_search_true_zero_search",
+        "T-06/P/web_search_true_zero_search",
+        "T-06/P/zero_ev_tool",
+        "T-06/T/web_search_true_zero_search",
+        "T-06/T/zero_ev_tool"
+      ],
+      "A": [
+        "T-06/P/zero_kiwi_private_frames",
+        "T-06/T/zero_kiwi_private_frames"
+      ],
+      "anchors": [
+        {
+          "line": 2553,
+          "column": 7,
+          "original": "do_search_force and user_message and (not task_request)",
+          "replacement": "do_search_force and user_message"
+        }
+      ],
+      "status": "RED",
+      "identity_sets_equal": true,
+      "missing_M": [],
+      "outside_M_A": []
+    }
+  ],
+  "preflight": {
+    "returncode": 0,
+    "complete": true,
+    "green": true,
+    "counts": {
+      "PASS": 50,
+      "FAIL": 0,
+      "ERROR": 0
+    },
+    "assertion_counts": {
+      "PASS": 114,
+      "FAIL": 0,
+      "ERROR": 0
+    }
+  },
+  "restored_returncode": 0,
+  "restored_identity_sets_equal": true,
+  "temporary_sources_restored": true,
+  "status": "PASS",
+  "counts": {
+    "RED": 18
+  },
+  "checkout_clean_after": true
+}

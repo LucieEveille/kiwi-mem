@@ -1,16 +1,16 @@
 {
   "ticket": "LOCK-01",
-  "head": "efd1d7de31f14318e0924335f10d71e990027f25",
+  "head": "7b42602bf600462afa20f2819960439a3dd6632e",
   "source_blobs": {
-    "database.py": "b648cc1fd85b41e1d0162fd94cb58bdd3db1c3df",
+    "database.py": "2e9c8589d32379cfcf803727f74329ada45d13cd",
     "tool_drawer.py": "dca86657bfda9be7cdea3813a9f3313806523bb9",
     "mcp_server.py": "8ee2860cea185fcc54af64ce2da2e96a508cdea4",
-    "main.py": "23c3f7dc8b53ebb566c2fd57b7288fba2a378851",
+    "main.py": "6fd88409fc3efa7bbd5bc4783090946627f94eb5",
     "daily_digest.py": "58582cba0aba882c9d4a700e5d005a5a1f8ccd14",
     "security.py": "b398ee6bd03e7c3d00ddd893dd3aaac2ed763dd8",
     "scripts/test_kiwi_safety_sync.py": "4e277615646b167cc9322513914980cb6436b137",
     "dream.py": "8c890788c15c46de65f246ca9a7db455a7288802",
-    "config.py": "529b494a1c402a9ba8efb02d8ac8df8245f6bdbb",
+    "config.py": "7ecbdaaa1972ee51cb87bbbf1dc797fcb517a9d7",
     "scripts/kiwi_lock_01_knives.py": "81195681b15956bb52401c3413166dd36e963ee8"
   },
   "kind": "disposable PostgreSQL 16; frozen Stage A guards; mocked embeddings/model/HTTP",
@@ -51,8 +51,8 @@
         "ERROR": 0
       },
       "exit_code": 1,
-      "log_sha256": "17d985e7e28bfcf7e620b78a876bce4dbf6d900b92a6c5d7ecaca1ba2e61e086",
-      "restored_sha256": "39af33c5cf46aaacefea39d4b61bd40506cc87b036f50783156c7ade7ab989ae"
+      "log_sha256": "194e28eea4c2a46cd5c25f744b6980bb145146d96427460e9e4a9d7a59672bb2",
+      "restored_sha256": "ae911956fbe33a80338e02614f622f3d3c0cf51545399ced0478102dfa02bb34"
     },
     {
       "knife": "K-LOCK-2",
@@ -76,8 +76,8 @@
         "ERROR": 0
       },
       "exit_code": 1,
-      "log_sha256": "8b2aaafc818dcfd462b6a250b569e9a3e3cfd52a025f5c162c20f765b0ea7ab9",
-      "restored_sha256": "39af33c5cf46aaacefea39d4b61bd40506cc87b036f50783156c7ade7ab989ae"
+      "log_sha256": "b5b2df2d1441dc2ad972526117db42130faa41d86abfa50d0bca2d4377d8d352",
+      "restored_sha256": "ae911956fbe33a80338e02614f622f3d3c0cf51545399ced0478102dfa02bb34"
     },
     {
       "knife": "K-LOCK-3",
@@ -101,8 +101,8 @@
         "ERROR": 0
       },
       "exit_code": 1,
-      "log_sha256": "aa5155f7211a7ff6a00a38abd4b941717e76da1365da37199fdd31468dad5ae4",
-      "restored_sha256": "39af33c5cf46aaacefea39d4b61bd40506cc87b036f50783156c7ade7ab989ae"
+      "log_sha256": "276beddb0479bc741ec9bb1bee42344279e9bfc8cf7dac40315d37ccb089c9f5",
+      "restored_sha256": "ae911956fbe33a80338e02614f622f3d3c0cf51545399ced0478102dfa02bb34"
     },
     {
       "knife": "K-LOCK-4",
@@ -126,7 +126,7 @@
         "ERROR": 0
       },
       "exit_code": 1,
-      "log_sha256": "dde80c1e15808f232b25b0d88cbbf5815ed26b1b0e6446f60201538d5254c6fa",
+      "log_sha256": "f19232596d860f3808945cab8bdc0b8b53a3daa43485e471d2ba47dba14d01f8",
       "restored_sha256": "73e3f877b6aeaa8c3d4c30484d68b6a5ae4af054ca0a702df2a811f5696d3da7"
     },
     {
@@ -151,7 +151,7 @@
         "ERROR": 0
       },
       "exit_code": 1,
-      "log_sha256": "d921abab7ebbaba4092862296712156fa2d8bb7a32ef47fe740120af65f26ffb",
+      "log_sha256": "a3565a42e4755d9ee9443a88b314c0103f3f39bfce64a6d37b2ae31d609af2e6",
       "restored_sha256": "73e3f877b6aeaa8c3d4c30484d68b6a5ae4af054ca0a702df2a811f5696d3da7"
     },
     {
@@ -176,7 +176,7 @@
         "ERROR": 0
       },
       "exit_code": 1,
-      "log_sha256": "de8cd4aaf1da8e7de5cd872cca7b7f10b3fd33069f9c1bfd41e89442c8f436f5",
+      "log_sha256": "a437e7f9b8f25b361086b18a62e048bcb81b0174fd87094d81cc5103235e3dcd",
       "restored_sha256": "e3907b85aacf27dcdadb04b6f3ecc062e5204020dd3ab3078c3132ec7a7a926a"
     },
     {
@@ -201,7 +201,7 @@
         "ERROR": 0
       },
       "exit_code": 1,
-      "log_sha256": "814f28909e3797fd80df4f96fcf139f5a3eb4e0d563abc44929b925b3b1b6837",
+      "log_sha256": "cd0b552b6e3a13699ebde59bb45baa1279b2af6ed4c60f80f1488b11ce041551",
       "restored_sha256": "e3907b85aacf27dcdadb04b6f3ecc062e5204020dd3ab3078c3132ec7a7a926a"
     }
   ]

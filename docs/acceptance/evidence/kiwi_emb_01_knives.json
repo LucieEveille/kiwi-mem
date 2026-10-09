@@ -1,17 +1,17 @@
 {
   "ticket": "KIWI-EMB-01",
-  "head": "efd1d7de31f14318e0924335f10d71e990027f25",
+  "head": "7b42602bf600462afa20f2819960439a3dd6632e",
   "source_blobs": {
     "admin-panel/js/config.js": "ec274e9b9ac5afe53b7569faddf5136a74310a73",
     "admin-panel/js/embedding-panel.mjs": "a6a747ac6c91d2d6b604864a0fc5f26ad23daca4",
     "admin-panel/js/pages/providers.js": "03b84fec7310d081e89ed3d28e60f442e823d9bc",
     "daily_digest.py": "58582cba0aba882c9d4a700e5d005a5a1f8ccd14",
-    "database.py": "b648cc1fd85b41e1d0162fd94cb58bdd3db1c3df",
+    "database.py": "2e9c8589d32379cfcf803727f74329ada45d13cd",
     "dream.py": "8c890788c15c46de65f246ca9a7db455a7288802",
     "embedding_jobs.py": "44309e254387b33b0a2db5018d99a946879bba35",
     "embedding_probe.py": "02b2d98c0de06a435d72aa18bc7567cc6ebd6d89",
     "embedding_versioning.py": "57e9b048fc368921ceb102abeaf557351f53880f",
-    "main.py": "23c3f7dc8b53ebb566c2fd57b7288fba2a378851",
+    "main.py": "6fd88409fc3efa7bbd5bc4783090946627f94eb5",
     "scripts/kiwi_emb_01_knives.py": "8fa6eaaa30e84d21bbe06bdb497fe404b50d4422",
     "scripts/test_kiwi_emb_01.py": "c155b9eba5b22a2a2b2bbd539241341f55b5314b",
     "scripts/test_kiwi_emb_01_panel.mjs": "294d5d9df86552422cafc3c719099cb6a2d00a5b",
@@ -292,7 +292,7 @@
       "test": "T-EMB-16",
       "result": "RED",
       "reason": [
-        "'EMBP_HTTP_reason_sentinel_92835' unexpectedly found in 'HTTP Request: POST http://127.0.0.1:41847/embeddings \"HTTP/1.1 502 EMBP_HTTP_reason_sentinel_92835\"\\nHTTP Request: POST http://localhost/admin/embedding-probe \"HTTP/1.1 200 OK\"\\n'",
+        "'EMBP_HTTP_reason_sentinel_92835' unexpectedly found in 'HTTP Request: POST http://127.0.0.1:34563/embeddings \"HTTP/1.1 502 EMBP_HTTP_reason_sentinel_92835\"\\nHTTP Request: POST http://localhost/admin/embedding-probe \"HTTP/1.1 200 OK\"\\n'",
         "'EMBP_HTTP_reason_sentinel_92835' unexpectedly found in 'HTTP Request: GET https://fixture.invalid/x \"HTTP/1.1 502 EMBP_HTTP_reason_sentinel_92835\"\\nunrelated event preserved\\n'",
         "'EMBP_HTTP_reason_sentinel_92835' unexpectedly found in 'HTTP Request: GET https://fixture.invalid/x \"HTTP/1.1 502 EMBP_HTTP_reason_sentinel_92835\"\\nunrelated event preserved\\n'"
       ]

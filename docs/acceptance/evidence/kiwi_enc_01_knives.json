@@ -1,15 +1,15 @@
 {
   "ticket": "ENC-01",
-  "head": "efd1d7de31f14318e0924335f10d71e990027f25",
+  "head": "7b42602bf600462afa20f2819960439a3dd6632e",
   "source_blobs": {
-    "main.py": "23c3f7dc8b53ebb566c2fd57b7288fba2a378851",
+    "main.py": "6fd88409fc3efa7bbd5bc4783090946627f94eb5",
     "security.py": "b398ee6bd03e7c3d00ddd893dd3aaac2ed763dd8",
     "anthropic_adapter.py": "9971f885a2cecbd6a1040b3cc371d8a6d85d14a7",
     "scripts/test_kiwi_out_01.py": "d90caa7b47894069f39ada85729117e0c25fe05a",
     "scripts/test_kiwi_think_02.py": "d77541f579130f54de774d1ccb5e5c68e80264d2",
     "scripts/test_kiwi_enc_01.py": "c901a43b7ab2238a2cc01e079a4b1f2f9ea44501",
     "scripts/kiwi_enc_01_knives.py": "1859ff5a2313b0e79a4fc1aa6d95146b1aa8572d",
-    ".github/workflows/ci.yml": "79f30823eadd6304234af541044bd36ec332de8c"
+    ".github/workflows/ci.yml": "ef572d5c985ff45d81e2b29699f0dbc4a218cd53"
   },
   "preflight_returncode": 0,
   "expected_arm_count": 67,
@@ -43,7 +43,7 @@
         "ERROR": 0
       },
       "restored_sha256": {
-        "main.py": "57e24f7453470185973e46e22958d60442c02708a17e7def8f3a5f2b97c4ae35"
+        "main.py": "fc4370a0d07eebab82c36910cbbf6bd6954821fef209a56fc766dbd184019f00"
       }
     },
     {
@@ -99,7 +99,7 @@
         "ERROR": 0
       },
       "restored_sha256": {
-        "main.py": "57e24f7453470185973e46e22958d60442c02708a17e7def8f3a5f2b97c4ae35",
+        "main.py": "fc4370a0d07eebab82c36910cbbf6bd6954821fef209a56fc766dbd184019f00",
         "anthropic_adapter.py": "6443665e232321ce8bad9f0e4c5db03fed2e547d20d7e3dede58c8e98abf0cdb"
       }
     },
@@ -127,7 +127,7 @@
         "ERROR": 0
       },
       "restored_sha256": {
-        "main.py": "57e24f7453470185973e46e22958d60442c02708a17e7def8f3a5f2b97c4ae35",
+        "main.py": "fc4370a0d07eebab82c36910cbbf6bd6954821fef209a56fc766dbd184019f00",
         "anthropic_adapter.py": "6443665e232321ce8bad9f0e4c5db03fed2e547d20d7e3dede58c8e98abf0cdb"
       }
     }
