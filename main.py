@@ -2098,10 +2098,34 @@ async def _apply_openrouter_sticky_routing(body: dict, is_openrouter: bool, mode
         print("🔀 Provider 偏好：优先 Anthropic 直连（prompt_cache_enabled=false）")
 
 
-async def _request_session_identity(conversation_id, messages):
+def _resolve_header_identity(headers):
+    """Use the first valid value in the fixed, case-insensitive header order."""
+    for src, name in (("cid", "X-Conversation-Id"),
+                      ("sid", "X-Session-ID"),
+                      ("owc", "X-OpenWebUI-Chat-Id")):
+        for raw in headers.getlist(name):
+            value = raw.strip()
+            if 1 <= len(value) <= 200 and value.isprintable():
+                return src, value
+    return None, None
+
+
+def _resolve_task_signal(headers):
+    """A valid nonempty task header is an explicit signal, not a task-name list."""
+    for raw in headers.getlist("X-Kiwi-Task"):
+        value = raw.strip()
+        if 1 <= len(value) <= 64 and all(char.isprintable() for char in value):
+            return True
+    return False
+
+
+async def _request_session_identity(conversation_id, messages, header_identity=(None, None)):
     """Choose the stable request session before scope/prompt/provider work begins."""
     if conversation_id:
         return conversation_id, False
+    src, value = header_identity
+    if src is not None:
+        return f"hdr-{src}-{hashlib.sha256(value.encode('utf-8')).hexdigest()[:24]}", False
     if await get_config_bool("session_identity_v2_enabled", fallback=False):
         session_id = "auto-r-" + uuid.uuid4().hex
         print("event=session_generated increment=1")
@@ -2155,6 +2179,9 @@ async def chat_completions(request: Request):
         out_limit, stop_seqs = _parse_output_controls(body)   # 两字段都校验完才改 body / 记事件
     except _ParamError as e:
         return _param_400(e.message, e.param)                 # 固定文案走属性，不 str(e)——ERR-01 扫描器零命中（§〇）
+    task_request = (await get_config_bool("task_signal_enabled", fallback=True)) and _resolve_task_signal(request.headers)
+    if task_request:
+        print("event=task_request source=header increment=1")
     messages = body.get("messages", [])
     
     # ---------- 提取用户最新消息 ----------
@@ -2174,6 +2201,7 @@ async def chat_completions(request: Request):
     # ---------- 构建 system prompt ----------
     # 内部请求（如压缩上下文）可跳过人设注入
     skip_prompt = body.pop('skip_system_prompt', False) is True
+    memory_bypass = skip_prompt or task_request
     
     # 读取前端传来的模板变量上下文
     template_ctx = {
@@ -2202,6 +2230,9 @@ async def chat_completions(request: Request):
         project_id = raw_project_id
     # v6.0：前端对话 ID，用于无缝换窗时避免衔接到当前对话自身
     conversation_id = body.pop('conversation_id', None) or None
+    header_identity = (None, None)
+    if not task_request and await get_config_bool("session_header_identity_enabled", fallback=True):
+        header_identity = _resolve_header_identity(request.headers)
     is_regenerate = bool(body.pop('is_regenerate', False))
     # W2-03：客户端稳定轮次键。缺键放行（旧客户端兼容，重生成按最新轮）；
     # 显式提供却非法则一律 400，不分是否重生成——把显式错误静默转成 None
@@ -2255,13 +2286,23 @@ async def chat_completions(request: Request):
             "code": "invalid_message_identity",
         })
 
-    session_id, session_generated = await _request_session_identity(conversation_id, messages)
-    scope_values = await resolve_scope_snapshot(
-        session_id,
-        client_gave_conv_id=client_gave_conv_id,
-        project_id_present=project_id_present,
-        payload_project_id=raw_project_id,
-    )
+    if task_request:
+        session_id = "task-" + uuid.uuid4().hex[:12]
+        session_generated = False
+        identity_source = "generated"
+        scope_values = (True, None, "global", None, "scope_task_request")
+    else:
+        session_id, session_generated = await _request_session_identity(conversation_id, messages, header_identity)
+        identity_source = "body" if conversation_id else "header" if header_identity[0] is not None else "generated"
+        if identity_source == "header":
+            print(f"event=session_from_header source={header_identity[0]} increment=1")
+        scope_values = await resolve_scope_snapshot(
+            session_id,
+            client_gave_conv_id=client_gave_conv_id,
+            project_id_present=project_id_present,
+            payload_project_id=raw_project_id,
+            identity_source=identity_source,
+        )
     scope = dict(zip((
         "scope_known",
         "ledger_project_id",
@@ -2348,14 +2389,14 @@ async def chat_completions(request: Request):
     #   extract_enabled —— 记忆开且非内部请求，才计数、提取、写 memories。
     # mem_enabled 的下游语义仍是「记忆系统可用」（提示词注入等），等同 extract_enabled。
     _raw_mem_enabled = await get_memory_enabled()
-    record_events = not skip_prompt
-    extract_enabled = _raw_mem_enabled and not skip_prompt
+    record_events = not memory_bypass
+    extract_enabled = _raw_mem_enabled and not memory_bypass
     mem_enabled = extract_enabled
     prompt_meta = {}
     cache_on = False
     cache_ttl = "1h"
     cache_enabled_val = None
-    if not skip_prompt:
+    if not memory_bypass:
         # v5.6：计算用户消息数（用于无缝切窗判断是第几轮）
         user_msg_count = _count_real_user_messages(messages)
         if mem_enabled and user_message:
@@ -2490,9 +2531,10 @@ async def chat_completions(request: Request):
                 print(f"💾 Prompt 缓存跳过：{cache_skip_reason}")
     
     # 替换前端传来的 skill prompt 中的模板变量
-    for msg in messages:
-        if msg.get("role") == "system" and '{' in msg.get("content", ""):
-            msg["content"] = replace_template_variables(msg["content"], template_ctx)
+    if not task_request:
+        for msg in messages:
+            if msg.get("role") == "system" and '{' in msg.get("content", ""):
+                msg["content"] = replace_template_variables(msg["content"], template_ctx)
     
     body["messages"] = messages
     
@@ -2508,7 +2550,7 @@ async def chat_completions(request: Request):
         do_search_force = bool(web_search_mode)
         do_search_auto = False
 
-    if do_search_force and user_message:
+    if do_search_force and user_message and not task_request:
         try:
             search_engine = await get_config("search_engine") or ""
             search_api_key = await get_config("search_api_key") or ""
@@ -2594,208 +2636,212 @@ async def chat_completions(request: Request):
         print(f"🔍 [思考链参数] reasoning={body.get('reasoning')}, reasoning_effort={body.get('reasoning_effort')}, include_reasoning={body.get('include_reasoning')}")
     
     # ========== 收集工具（v6.3：抽屉模式 / 传统模式 二选一） ==========
-    openai_tools = []
-    tool_map = {}
+    if task_request:
+        openai_tools = []
+        tool_map = {}
+    else:
+        openai_tools = []
+        tool_map = {}
 
-    reminder_tools_enabled = await get_config_bool("reminder_tools_enabled", fallback=True)
-    drawer_enabled = await get_config_bool("tool_drawer_enabled", fallback=False)
+        reminder_tools_enabled = await get_config_bool("reminder_tools_enabled", fallback=True)
+        drawer_enabled = await get_config_bool("tool_drawer_enabled", fallback=False)
 
-    if drawer_enabled:
-        # ---- 抽屉模式：向量路由按需展开内部工具 + 外部 MCP 双轨 ----
-        # Lazy init：toggle 启动时为 false、运行时打开的场景下，lifespan 没跑过
-        # init_drawer，此时 CATEGORIES 为空会让 route_tools 返回 0 工具，叠加
-        # 下面的 `not drawer_enabled` 门控会让传统工具也消失。这里幂等调用兜底。
-        try:
-            from tool_drawer import init_drawer as _drawer_init
-            await _drawer_init()
-        except Exception as e:
-            print(f"⚠️ 工具抽屉 lazy init 失败: {e}")
-        drawer_tools = []
-        drawer_map = {}
-        try:
-            from tool_drawer import route_tools as _drawer_route
-            user_embedding = prompt_meta.get("user_embedding") if prompt_meta else None
-            drawer_tools, drawer_map = await _drawer_route(
-                user_message=user_message,
-                session_id=session_id,
-                user_embedding=user_embedding,
-                mem_enabled=mem_enabled,
-                search_enabled=bool(do_search_auto),
-                scope=scope,
-                mcp_mode=mcp_mode,
-                reminder_tools_enabled=reminder_tools_enabled,
-            )
-        except Exception as e:
-            print(f"❌ 工具抽屉路由失败: {e}")
-        if drawer_tools and drawer_map:
-            openai_tools.extend(drawer_tools)
-            tool_map.update(drawer_map)
-        else:
-            print("⚠️ 工具抽屉路由无可用结果，启用受门控的全量降级")
+        if drawer_enabled:
+            # ---- 抽屉模式：向量路由按需展开内部工具 + 外部 MCP 双轨 ----
+            # Lazy init：toggle 启动时为 false、运行时打开的场景下，lifespan 没跑过
+            # init_drawer，此时 CATEGORIES 为空会让 route_tools 返回 0 工具，叠加
+            # 下面的 `not drawer_enabled` 门控会让传统工具也消失。这里幂等调用兜底。
             try:
-                from tool_drawer import build_full_fallback_tools, _get_pinned_external_categories
-                pinned_external = (
-                    await _get_pinned_external_categories()
-                    if mcp_mode == "manual"
-                    else set()
-                )
-                fallback_tools, fallback_map = build_full_fallback_tools(
-                    search_enabled=bool(do_search_auto),
+                from tool_drawer import init_drawer as _drawer_init
+                await _drawer_init()
+            except Exception as e:
+                print(f"⚠️ 工具抽屉 lazy init 失败: {e}")
+            drawer_tools = []
+            drawer_map = {}
+            try:
+                from tool_drawer import route_tools as _drawer_route
+                user_embedding = prompt_meta.get("user_embedding") if prompt_meta else None
+                drawer_tools, drawer_map = await _drawer_route(
+                    user_message=user_message,
+                    session_id=session_id,
+                    user_embedding=user_embedding,
                     mem_enabled=mem_enabled,
-                    reminder_tools_enabled=reminder_tools_enabled,
-                    mcp_mode=mcp_mode,
-                    pinned_external=pinned_external,
+                    search_enabled=bool(do_search_auto),
                     scope=scope,
+                    mcp_mode=mcp_mode,
+                    reminder_tools_enabled=reminder_tools_enabled,
                 )
-                openai_tools.extend(fallback_tools)
-                tool_map.update(fallback_map)
-                print(f"🗃️  全量降级：装载了 {len(fallback_tools)} 个受门控工具")
-            except Exception as fallback_e:
-                print(f"❌ 工具抽屉全量降级失败: {fallback_e}")
-        # Request-body MCP servers are explicit third-party input and bypass mcp_mode by design.
-        if mcp_servers:
+            except Exception as e:
+                print(f"❌ 工具抽屉路由失败: {e}")
+            if drawer_tools and drawer_map:
+                openai_tools.extend(drawer_tools)
+                tool_map.update(drawer_map)
+            else:
+                print("⚠️ 工具抽屉路由无可用结果，启用受门控的全量降级")
+                try:
+                    from tool_drawer import build_full_fallback_tools, _get_pinned_external_categories
+                    pinned_external = (
+                        await _get_pinned_external_categories()
+                        if mcp_mode == "manual"
+                        else set()
+                    )
+                    fallback_tools, fallback_map = build_full_fallback_tools(
+                        search_enabled=bool(do_search_auto),
+                        mem_enabled=mem_enabled,
+                        reminder_tools_enabled=reminder_tools_enabled,
+                        mcp_mode=mcp_mode,
+                        pinned_external=pinned_external,
+                        scope=scope,
+                    )
+                    openai_tools.extend(fallback_tools)
+                    tool_map.update(fallback_map)
+                    print(f"🗃️  全量降级：装载了 {len(fallback_tools)} 个受门控工具")
+                except Exception as fallback_e:
+                    print(f"❌ 工具抽屉全量降级失败: {fallback_e}")
+            # Request-body MCP servers are explicit third-party input and bypass mcp_mode by design.
+            if mcp_servers:
+                try:
+                    mcp_tools, mcp_map = await get_tools_for_servers(mcp_servers)
+                    openai_tools.extend(mcp_tools)
+                    tool_map.update(mcp_map)
+                except Exception as e:
+                    print(f"❌ 外部 MCP 工具获取失败: {e}")
+
+        # ---- 传统模式：原有逐项注册（drawer_enabled=False 时执行）----
+        # MCP 工具
+        if not drawer_enabled and mcp_servers:
             try:
                 mcp_tools, mcp_map = await get_tools_for_servers(mcp_servers)
                 openai_tools.extend(mcp_tools)
                 tool_map.update(mcp_map)
             except Exception as e:
-                print(f"❌ 外部 MCP 工具获取失败: {e}")
+                print(f"❌ MCP 工具获取失败: {e}")
 
-    # ---- 传统模式：原有逐项注册（drawer_enabled=False 时执行）----
-    # MCP 工具
-    if not drawer_enabled and mcp_servers:
-        try:
-            mcp_tools, mcp_map = await get_tools_for_servers(mcp_servers)
-            openai_tools.extend(mcp_tools)
-            tool_map.update(mcp_map)
-        except Exception as e:
-            print(f"❌ MCP 工具获取失败: {e}")
+        # 联网搜索 auto 模式：注册为 function tool，让模型自行决定是否调用
+        if not drawer_enabled and do_search_auto:
+            search_engine = await get_config("search_engine") or ""
+            if search_engine:
+                openai_tools.append({
+                    "type": "function",
+                    "function": {
+                        "name": "_gateway_web_search",
+                        "description": "搜索互联网获取实时信息。仅在用户明确要求联网搜索、或需要最新新闻/天气/实时数据/你不确定的事实时调用。闲聊、角色扮演、创意写作等不需要调用。",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "query": {
+                                    "type": "string",
+                                    "description": "搜索关键词，用简洁的搜索引擎友好格式",
+                                }
+                            },
+                            "required": ["query"],
+                        },
+                    },
+                })
+                # 标记为网关内置工具（不走 MCP，本地执行）
+                tool_map["_gateway_web_search"] = {"type": "gateway_builtin", "handler": "web_search"}
+                print(f"🌐 联网搜索已注册为工具（auto 模式，引擎: {search_engine}）")
+            else:
+                print(f"⚠️ 联网搜索 auto 模式已请求但未配置搜索引擎")
 
-    # 联网搜索 auto 模式：注册为 function tool，让模型自行决定是否调用
-    if not drawer_enabled and do_search_auto:
-        search_engine = await get_config("search_engine") or ""
-        if search_engine:
+        # v5.8：对话搜索工具（始终可用，让模型能主动搜索过去的对话）
+        if (not drawer_enabled and mem_enabled
+                and scope["context_mode"] != "quarantined_project"):
             openai_tools.append({
                 "type": "function",
                 "function": {
-                    "name": "_gateway_web_search",
-                    "description": "搜索互联网获取实时信息。仅在用户明确要求联网搜索、或需要最新新闻/天气/实时数据/你不确定的事实时调用。闲聊、角色扮演、创意写作等不需要调用。",
+                    "name": "_gateway_search_conversations",
+                    "description": "搜索过去的对话记录。当用户提到'我们之前聊过''上次说的''之前讨论的'等回忆性表达，或者你需要查找过去对话中的具体细节时调用。输入搜索关键词，返回匹配的对话片段和上下文。",
                     "parameters": {
                         "type": "object",
                         "properties": {
                             "query": {
                                 "type": "string",
-                                "description": "搜索关键词，用简洁的搜索引擎友好格式",
-                            }
+                                "description": "搜索关键词，用简洁的内容关键词（如'用药方案''生日''项目部署'），不要用'我们讨论过'之类的元描述",
+                            },
+                            "limit": {
+                                "type": "integer",
+                                "description": "最多返回几条匹配（默认10）",
+                            },
                         },
                         "required": ["query"],
                     },
                 },
             })
-            # 标记为网关内置工具（不走 MCP，本地执行）
-            tool_map["_gateway_web_search"] = {"type": "gateway_builtin", "handler": "web_search"}
-            print(f"🌐 联网搜索已注册为工具（auto 模式，引擎: {search_engine}）")
-        else:
-            print(f"⚠️ 联网搜索 auto 模式已请求但未配置搜索引擎")
+            conversation_project = (
+                "none" if scope["context_mode"] == "global"
+                else scope["context_project_id"]
+            )
+            tool_map["_gateway_search_conversations"] = {
+                "type": "gateway_builtin",
+                "handler": "search_conversations",
+                "project_id": conversation_project,
+                "scope": scope,
+            }
+            print(f"🔍 对话搜索工具已注册")
 
-    # v5.8：对话搜索工具（始终可用，让模型能主动搜索过去的对话）
-    if (not drawer_enabled and mem_enabled
-            and scope["context_mode"] != "quarantined_project"):
-        openai_tools.append({
-            "type": "function",
-            "function": {
-                "name": "_gateway_search_conversations",
-                "description": "搜索过去的对话记录。当用户提到'我们之前聊过''上次说的''之前讨论的'等回忆性表达，或者你需要查找过去对话中的具体细节时调用。输入搜索关键词，返回匹配的对话片段和上下文。",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "query": {
-                            "type": "string",
-                            "description": "搜索关键词，用简洁的内容关键词（如'用药方案''生日''项目部署'），不要用'我们讨论过'之类的元描述",
+        # 提醒系统工具：配置级常驻，独立于记忆开关。
+        if not drawer_enabled and reminder_tools_enabled:
+            _reminder_tools = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "_gateway_create_reminder",
+                    "description": "为用户创建一条提醒。当用户说'提醒我...'、'...之后叫我...'、'每天...点提醒我...'时调用。title 用简洁的中文描述，notes 用来记录上下文信息以便提醒时参考。",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "title": {"type": "string", "description": "提醒标题，简短描述（如'吃药''给妈妈打电话'）"},
+                            "notes": {"type": "string", "description": "备注信息，提醒时作为上下文参考（如'妈妈上周说周末要搬东西'）"},
+                            "trigger_time": {"type": "string", "description": "触发时间，ISO 8601 格式（如'2026-03-31T23:00:00+08:00'）。相对时间请转换为绝对时间。"},
+                            "repeat_type": {"type": "string", "enum": ["once", "daily", "weekly", "hourly"], "description": "重复类型：once=一次性, daily=每天, weekly=每周, hourly=每N小时"},
+                            "repeat_config": {"type": "object", "description": "循环配置（hourly时传{hours:N}）"},
                         },
-                        "limit": {
-                            "type": "integer",
-                            "description": "最多返回几条匹配（默认10）",
+                        "required": ["title", "trigger_time"],
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "_gateway_list_reminders",
+                    "description": "查看用户当前的所有活跃提醒。当用户问'我设了哪些提醒'、'有什么提醒'时调用。",
+                    "parameters": {"type": "object", "properties": {}},
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "_gateway_complete_reminder",
+                    "description": "标记一条提醒为已完成。当用户表示事情已经做完（如'回来了''做完了''学完了'），且当前有相关的待触发提醒时调用。一次性提醒会被标记完成，循环提醒不受影响。",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "reminder_id": {"type": "string", "description": "要完成的提醒 ID"},
                         },
+                        "required": ["reminder_id"],
                     },
-                    "required": ["query"],
                 },
             },
-        })
-        conversation_project = (
-            "none" if scope["context_mode"] == "global"
-            else scope["context_project_id"]
-        )
-        tool_map["_gateway_search_conversations"] = {
-            "type": "gateway_builtin",
-            "handler": "search_conversations",
-            "project_id": conversation_project,
-            "scope": scope,
-        }
-        print(f"🔍 对话搜索工具已注册")
-
-    # 提醒系统工具：配置级常驻，独立于记忆开关。
-    if not drawer_enabled and reminder_tools_enabled:
-        _reminder_tools = [
-        {
-            "type": "function",
-            "function": {
-                "name": "_gateway_create_reminder",
-                "description": "为用户创建一条提醒。当用户说'提醒我...'、'...之后叫我...'、'每天...点提醒我...'时调用。title 用简洁的中文描述，notes 用来记录上下文信息以便提醒时参考。",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "title": {"type": "string", "description": "提醒标题，简短描述（如'吃药''给妈妈打电话'）"},
-                        "notes": {"type": "string", "description": "备注信息，提醒时作为上下文参考（如'妈妈上周说周末要搬东西'）"},
-                        "trigger_time": {"type": "string", "description": "触发时间，ISO 8601 格式（如'2026-03-31T23:00:00+08:00'）。相对时间请转换为绝对时间。"},
-                        "repeat_type": {"type": "string", "enum": ["once", "daily", "weekly", "hourly"], "description": "重复类型：once=一次性, daily=每天, weekly=每周, hourly=每N小时"},
-                        "repeat_config": {"type": "object", "description": "循环配置（hourly时传{hours:N}）"},
+            {
+                "type": "function",
+                "function": {
+                    "name": "_gateway_delete_reminder",
+                    "description": "删除一条提醒（包括循环提醒）。当用户说'取消那个提醒'、'以后不用提醒我...了'时调用。",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "reminder_id": {"type": "string", "description": "要删除的提醒 ID"},
+                        },
+                        "required": ["reminder_id"],
                     },
-                    "required": ["title", "trigger_time"],
                 },
             },
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "_gateway_list_reminders",
-                "description": "查看用户当前的所有活跃提醒。当用户问'我设了哪些提醒'、'有什么提醒'时调用。",
-                "parameters": {"type": "object", "properties": {}},
-            },
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "_gateway_complete_reminder",
-                "description": "标记一条提醒为已完成。当用户表示事情已经做完（如'回来了''做完了''学完了'），且当前有相关的待触发提醒时调用。一次性提醒会被标记完成，循环提醒不受影响。",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "reminder_id": {"type": "string", "description": "要完成的提醒 ID"},
-                    },
-                    "required": ["reminder_id"],
-                },
-            },
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "_gateway_delete_reminder",
-                "description": "删除一条提醒（包括循环提醒）。当用户说'取消那个提醒'、'以后不用提醒我...了'时调用。",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "reminder_id": {"type": "string", "description": "要删除的提醒 ID"},
-                    },
-                    "required": ["reminder_id"],
-                },
-            },
-        },
-    ]
-        openai_tools.extend(_reminder_tools)
-        for t in _reminder_tools:
-            tool_map[t["function"]["name"]] = {"type": "gateway_builtin", "handler": "reminder"}
-        print("⏰ 提醒工具已注册（常驻）")
+        ]
+            openai_tools.extend(_reminder_tools)
+            for t in _reminder_tools:
+                tool_map[t["function"]["name"]] = {"type": "gateway_builtin", "handler": "reminder"}
+            print("⏰ 提醒工具已注册（常驻）")
 
     tools_cache_applied = False
     if cache_on and openai_tools and is_stream:
@@ -2804,7 +2850,7 @@ async def chat_completions(request: Request):
             print("💾 Prompt 缓存：tools meta-tool 断点已设置")
 
     runtime_sections = prompt_meta.get("runtime_context_sections", []) if prompt_meta else []
-    if runtime_sections:
+    if runtime_sections and not task_request:
         if _inject_runtime_context_into_last_user(messages, runtime_sections):
             print(f"🧩 运行时上下文已注入最后一条 user 消息（{len(runtime_sections)} 段）")
         else:
@@ -2862,6 +2908,7 @@ async def chat_completions(request: Request):
                 is_regenerate=is_regenerate,
                 reasoning_effort=reasoning_effort,
                 skip_prompt=skip_prompt,
+                task_request=task_request,
                 record_events=record_events,
                 extract_enabled=extract_enabled,
                 ledger_ctx=ledger_ctx,
@@ -2875,7 +2922,7 @@ async def chat_completions(request: Request):
     if is_stream:
         return StreamingResponse(
             _with_ev_session(
-                stream_and_capture(headers, body, session_id, user_message, model, tool_events, api_url=chat_api_url, project_id=project_id, prompt_meta=prompt_meta, api_format=api_format, api_key=chat_api_key, is_regenerate=is_regenerate, mem_enabled=mem_enabled, record_events=record_events, extract_enabled=extract_enabled, ledger_ctx=ledger_ctx, out_limit=out_limit, stop_seqs=stop_seqs),
+                stream_and_capture(headers, body, session_id, user_message, model, tool_events, api_url=chat_api_url, project_id=project_id, prompt_meta=prompt_meta, api_format=api_format, api_key=chat_api_key, is_regenerate=is_regenerate, mem_enabled=mem_enabled, record_events=record_events, extract_enabled=extract_enabled, ledger_ctx=ledger_ctx, out_limit=out_limit, stop_seqs=stop_seqs, task_request=task_request),
                 session_id, session_generated,
             ),
             media_type="text/event-stream",
@@ -2906,7 +2953,7 @@ async def chat_completions(request: Request):
                     assistant_msg = resp_data["choices"][0]["message"]["content"]
                 except (KeyError, IndexError):
                     pass
-                dream_triggered = detect_dream_trigger(assistant_msg)
+                dream_triggered = False if task_request else detect_dream_trigger(assistant_msg)
                 
                 # W2-03：落账门是 record_events（关记忆也记事件），提取由 extract_enabled 控制。
                 if record_events and user_message and assistant_msg:
@@ -3117,7 +3164,7 @@ async def _execute_gateway_tool(tool_name: str, arguments: dict, tool_info: dict
     return f"未知的内置工具: {tool_name}", extra
 
 
-async def _stream_with_tools(messages, tools, tool_map, model, temperature, tool_events, session_id, user_message, mem_enabled, api_url=None, api_key=None, project_id=None, prompt_meta=None, api_format="openai", is_regenerate: bool = False, reasoning_effort: str = None, skip_prompt: bool = False, top_p=None, max_tokens=None, record_events: bool = None, extract_enabled: bool = None, ledger_ctx: dict = None, out_limit=None, stop_seqs=None):
+async def _stream_with_tools(messages, tools, tool_map, model, temperature, tool_events, session_id, user_message, mem_enabled, api_url=None, api_key=None, project_id=None, prompt_meta=None, api_format="openai", is_regenerate: bool = False, reasoning_effort: str = None, skip_prompt: bool = False, top_p=None, max_tokens=None, record_events: bool = None, extract_enabled: bool = None, ledger_ctx: dict = None, out_limit=None, stop_seqs=None, task_request: bool = False):
     """
     工具 + 流式模式：tool call 轮次用非流式（需要完整看 tool_calls），
     最终回复直接输出已获得的内容（模拟流式），不再重复请求 LLM。
@@ -3255,7 +3302,7 @@ async def _stream_with_tools(messages, tools, tool_map, model, temperature, tool
                 print(f"✅ 工具调用后最终回复：直接输出 {len(final_text)} 字符")
 
             assistant_msg = final_text
-            dream_triggered = detect_dream_trigger(assistant_msg)
+            dream_triggered = False if task_request else detect_dream_trigger(assistant_msg)
 
             # ---- 收尾补救（数据必活，与 stream_and_capture 同一套）----
             # 模拟流式（yield + sleep）与思考链 yield 都是取消点；spawn 若写在流式之后，断连时永不执行
@@ -3713,7 +3760,7 @@ def _session_headers(session_id: str, generated: bool) -> dict:
     return {"X-Kiwi-Session-Id": session_id} if generated else {}
 
 
-async def stream_and_capture(headers: dict, body: dict, session_id: str, user_message: str, model: str, tool_events: list = None, api_url: str = None, project_id: str = None, prompt_meta: dict = None, api_format: str = "openai", api_key: str = None, is_regenerate: bool = False, mem_enabled: bool = True, record_events: bool = None, extract_enabled: bool = None, ledger_ctx: dict = None, out_limit=None, stop_seqs=None):
+async def stream_and_capture(headers: dict, body: dict, session_id: str, user_message: str, model: str, tool_events: list = None, api_url: str = None, project_id: str = None, prompt_meta: dict = None, api_format: str = "openai", api_key: str = None, is_regenerate: bool = False, mem_enabled: bool = True, record_events: bool = None, extract_enabled: bool = None, ledger_ctx: dict = None, out_limit=None, stop_seqs=None, task_request: bool = False):
     """流式响应 + 捕获完整回复 + 工具事件"""
     _api_url = validate_upstream_url(api_url or API_BASE_URL)
     _usage_total = None  # W2-03：按事件累加归一化 usage，流结束时落账本
@@ -3760,7 +3807,7 @@ async def stream_and_capture(headers: dict, body: dict, session_id: str, user_me
         if dream_fb_spawned:
             return
         dream_fb_spawned = True
-        if detect_dream_trigger("".join(full_response)):
+        if False if task_request else detect_dream_trigger("".join(full_response)):
             _spawn_background_task(_dream_fallback_after_grace("auto"))
 
     try:
@@ -3869,7 +3916,7 @@ async def stream_and_capture(headers: dict, body: dict, session_id: str, user_me
     if _reasoning_chunks == 0 and '<think>' in assistant_msg:
         print(f"🔍 [流式完成] ⚠️ 思考链在正文中（<think>标签），前端需要解析")
 
-    dream_triggered = detect_dream_trigger(assistant_msg)
+    dream_triggered = False if task_request else detect_dream_trigger(assistant_msg)
 
     # 记忆行照旧实时出现在聊天里：mem_task 已在 finally 里 spawn；仍用 shield（await 被取消不连带取消 mem_task）
     if mem_task is not None:

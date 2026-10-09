@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased — 2.0.0 integration / KIWI-COMPAT-02-B
+
+- 新增三种客户端会话头身份回退与按来源的 scope 查询短路；有效 `X-Kiwi-Task` 请求旁路人设、记忆、落账、网关工具与 Dream，保留协议控制。两个站点开关默认开启、可独立回退且不参加设置同步；配置方式与 MoA 等边界见 [客户端兼容性](docs/client-compatibility.md)。
+- Added source-separated identity fallback for three client session headers and source-aware scope lookup. Valid `X-Kiwi-Task` requests bypass persona/memory, recording, gateway tools, and Dream while retaining protocol controls. Both site switches default on, can be disabled independently, and stay out of settings sync; see the compatibility guide for task-specific configuration and MoA limitations.
+
 ## Unreleased — 2.0.0 integration / KIWI-ENC-01
 
 - 流式转发改用增量 UTF-8 解码，跨 256 字节读块边界的多字节字符不再丢失（OpenAI 普通转发与 Anthropic 适配器两处）；非法字节仍忽略。

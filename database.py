@@ -1531,16 +1531,19 @@ async def snapshot_recent_conversation(limit: int = 20) -> dict:
 
 
 async def _resolve_scope_tx(conn, session_id: str, *, client_gave_conv_id: bool,
-                            project_id_present: bool, payload_project_id):
+                            project_id_present: bool, payload_project_id, identity_source: str = "body"):
     """在事务内生成本轮唯一 scope 快照的五个冻结字段。
 
     返回 ``(scope_known, ledger_project_id, context_mode,
     context_project_id, event_code)``。账本归属记录历史事实；读取授权只给仍存活的
     项目。隔离态保留全局生活底座，但绝不读取已删/未验证项目的私有残留。
     """
-    metadata = await conn.fetchrow(
-        "SELECT project_id FROM chat_conversations WHERE id = $1", session_id
-    )
+    if identity_source == "header":
+        metadata = None
+    else:
+        metadata = await conn.fetchrow(
+            "SELECT project_id FROM chat_conversations WHERE id = $1", session_id
+        )
     if metadata is not None:
         meta_pid = metadata["project_id"]
         if meta_pid:
@@ -1578,7 +1581,7 @@ async def _resolve_scope_tx(conn, session_id: str, *, client_gave_conv_id: bool,
 
 
 async def resolve_scope_snapshot(session_id: str, *, client_gave_conv_id: bool,
-                                 project_id_present: bool, payload_project_id):
+                                 project_id_present: bool, payload_project_id, identity_source: str = "body"):
     """Resolve one immutable request scope before prompt/tool/provider work begins."""
     # Pure ASGI/tool-stream regression fixtures intentionally run without PostgreSQL.
     # In that environment only the two database-independent outcomes are possible:
@@ -1598,6 +1601,7 @@ async def resolve_scope_snapshot(session_id: str, *, client_gave_conv_id: bool,
                 client_gave_conv_id=client_gave_conv_id,
                 project_id_present=project_id_present,
                 payload_project_id=payload_project_id,
+                identity_source=identity_source,
             )
 
 

@@ -109,6 +109,8 @@ export const CONFIG_META = {
   // —— 兼容与回退（W2-03）——
   memory_event_ledger_write_enabled: { label:'事件账本原子写入', type:'bool', def:'true', input:'bool', desc:'开启后一轮对话作为单个事务写入事件账本，带上项目、轮次与用量身份，任一步失败整体回滚。关闭则退回旧的两次独立写入（新字段留空）。出问题时关掉即可回退，不需要发版。' },
   session_identity_v2_enabled: { label:'会话身份 v2', type:'bool', def:'false', input:'bool', desc:'前端没传对话 ID 时如何生成会话身份。关闭＝沿用「首条消息内容哈希」，同样的开场白会被并成同一段会话。开启＝改用随机 ID 并回传给前端，会话不再串线；但尚未采纳回传 ID 的第三方客户端会每轮换会话，工具抽屉状态与 OpenRouter 黏性路由会断。前端适配完成前保持关闭。' },
+  session_header_identity_enabled: { label:'会话头身份', type:'bool', def:'true', input:'bool', desc:'识别客户端的三种会话头，按来源隔离并稳定会话。body 对话 ID 优先；关闭后恢复原来的 v2 / 首句哈希回退。不会回传头来源身份，也不自动提供项目隔离或换窗。' },
+  task_signal_enabled: { label:'后台任务信号', type:'bool', def:'true', input:'bool', desc:'识别有效的 X-Kiwi-Task 头，旁路人设、记忆、落账、网关工具与 Dream，保留协议参数处理。固定非空头只用于任务专用供应商；关闭后请求恢复普通对话处理。' },
   sync_delete_privacy_capability_enabled: { label:'同步删除隐私能力', type:'bool', def:'true', input:'bool', desc:'关闭后能力端点宣称 ready=false，客户端保持休眠；删除章、清理与迟到写保护仍然继续生效。' },
 
   // —— 联网搜索 ——
@@ -210,7 +212,7 @@ export const CONFIG_PAGES = {
     groups: [
       { title:'对话行为', desc:'网关转发对话时的行为：标题生成与思考强度。', keys:['default_title_model','prompt_title_summary','reasoning_effort'] },
       { title:'性能', keys:['prompt_cache_enabled','prompt_cache_ttl'] },
-      { title:'兼容与回退', desc:'出问题时可以立刻关掉的新行为开关，改完即时生效、无需发版。', keys:['memory_event_ledger_write_enabled','session_identity_v2_enabled','sync_delete_privacy_capability_enabled'] },
+      { title:'兼容与回退', desc:'出问题时可以立刻关掉的新行为开关，改完即时生效、无需发版。', keys:['memory_event_ledger_write_enabled','session_identity_v2_enabled','session_header_identity_enabled','task_signal_enabled','sync_delete_privacy_capability_enabled'] },
     ],
   },
 };
