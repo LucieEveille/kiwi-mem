@@ -89,7 +89,8 @@ def assertion_tags(group, path, name):
         or group == 'T-08' and name.endswith('_is_normal')
         or group == 'T-10' and name == 'single_user_with_history_records'
         or group == 'T-11' and name in ('records_normally', 'baseline_unchanged[ledger]')
-        or group == 'T-12' and name == 'chat_ledger_golden'):
+        or group == 'T-12' and name == 'chat_ledger_golden'
+        or group == 'T-12' and name == 'c2a_frames_choices[ev_memory]'):
         tags.add('single-user-ledger')
     if (group == 'T-06' and (name == 'collectors_zero_calls' or name == 'tools_passthrough_only' and path == 'T')
         or group == 'T-07' and path == 'e'):
