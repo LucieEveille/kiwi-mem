@@ -198,6 +198,16 @@ jobs:
         if: ${{ !cancelled() && steps.prep-dependencies.outcome == 'success' }}
         run: python scripts/kiwi_enc_01_knives.py --output /tmp/kiwi_enc_01_knives.json
 
+      - name: COMPAT-02-B 真库守卫
+        if: ${{ !cancelled() && steps.prep-dependencies.outcome == 'success' }}
+        env:
+          KIWI_C2B_REPORT: /tmp/kiwi_compat_02b_guards.json
+        run: python scripts/test_kiwi_compat_02b.py
+
+      - name: COMPAT-02-B 十八刀（阶段 A 记录 ANCHOR_LOST）
+        if: ${{ !cancelled() && steps.prep-dependencies.outcome == 'success' }}
+        run: python scripts/kiwi_compat_02b_knives.py --output /tmp/kiwi_compat_02b_knives.json
+
       - name: 保存 BUILD 验证证据
         if: always()
         uses: actions/upload-artifact@v4
@@ -229,3 +239,6 @@ jobs:
             /tmp/kiwi_enc_01_guards.json
             /tmp/kiwi_enc_01_knives.json
             /tmp/kiwi_enc_01_knives-runs/
+            /tmp/kiwi_compat_02b_guards.json
+            /tmp/kiwi_compat_02b_knives.json
+            /tmp/kiwi_compat_02b_knives-runs/
